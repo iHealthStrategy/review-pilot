@@ -1,0 +1,126 @@
+import type { SqlClient, SqlDialect } from "./sql-client.js";
+
+/**
+ * A single forward migration. `up` receives the dialect so a migration can
+ * diverge per backend; the current schema is dialect-portable (TEXT/INTEGER
+ * only), so the SQL is identical for both today.
+ */
+export interface Migration {
+  readonly id: string;
+  up(dialect: SqlDialect): string;
+}
+
+/**
+ * Ordered migration registry. Append new migrations; never edit applied ones.
+ * The schema mirrors the domain entities one table per entity.
+ */
+export const MIGRATIONS: readonly Migration[] = [
+  {
+    id: "0001_init",
+    up: () => `
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        default_engine TEXT NOT NULL,
+        enabled_engines TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS repos (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        platform TEXT NOT NULL,
+        full_name TEXT NOT NULL,
+        remote_url TEXT NOT NULL,
+        clone_url TEXT NOT NULL,
+        default_branch TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_repos_lookup ON repos(platform, full_name);
+      CREATE TABLE IF NOT EXISTS pull_requests (
+        id TEXT PRIMARY KEY,
+        repo_id TEXT NOT NULL REFERENCES repos(id),
+        number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        target_branch TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        author TEXT NOT NULL,
+        url TEXT NOT NULL,
+        state TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE (repo_id, number)
+      );
+      CREATE TABLE IF NOT EXISTS review_jobs (
+        id TEXT PRIMARY KEY,
+        pull_request_id TEXT NOT NULL REFERENCES pull_requests(id),
+        engine TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        progress INTEGER NOT NULL,
+        error TEXT,
+        logs TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS findings (
+        id TEXT PRIMARY KEY,
+        review_job_id TEXT NOT NULL REFERENCES review_jobs(id),
+        file_path TEXT NOT NULL,
+        line INTEGER,
+        end_line INTEGER,
+        severity TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        suggestion TEXT,
+        category TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_review_jobs_status ON review_jobs(status);
+      CREATE INDEX IF NOT EXISTS idx_findings_job ON findings(review_job_id);
+    `,
+  },
+  {
+    id: "0002_repo_insights",
+    up: () => `
+      CREATE TABLE IF NOT EXISTS repo_insights (
+        repo_id TEXT PRIMARY KEY REFERENCES repos(id),
+        summary TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
+];
+
+/**
+ * Apply all not-yet-applied migrations in order, recording each in a
+ * `_migrations` ledger table. Idempotent: re-running applies nothing.
+ */
+export async function runMigrations(client: SqlClient): Promise<string[]> {
+  await client.exec(
+    `CREATE TABLE IF NOT EXISTS _migrations (
+       id TEXT PRIMARY KEY,
+       applied_at TEXT NOT NULL
+     );`,
+  );
+  const applied = new Set(
+    (
+      await client.all<{ id: string }>("SELECT id FROM _migrations")
+    ).map((r) => r.id),
+  );
+  const ran: string[] = [];
+  for (const migration of MIGRATIONS) {
+    if (applied.has(migration.id)) continue;
+    await client.exec(migration.up(client.dialect));
+    await client.run(
+      `INSERT INTO _migrations (id, applied_at) VALUES (${
+        client.dialect === "postgres" ? "$1, $2" : "?, ?"
+      })`,
+      [migration.id, new Date().toISOString()],
+    );
+    ran.push(migration.id);
+  }
+  return ran;
+}

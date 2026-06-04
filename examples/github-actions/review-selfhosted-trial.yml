@@ -1,0 +1,51 @@
+# SUBSCRIPTION TRIAL via a SELF-HOSTED runner (small-scale, internal repos).
+#
+# Why self-hosted: a Claude *subscription* login lives on YOUR machine
+# (~/.claude). GitHub-hosted runners can't use it, but a self-hosted runner on
+# your machine can — it runs the `claude-code` CLI directly (not in a container)
+# so it picks up your `claude login`. No API key, no server, no database.
+#
+# Setup (once, on your machine):
+#   1) claude login                         # your Pro/Max subscription
+#   2) git clone <review-pilot> /opt/review-pilot && cd /opt/review-pilot
+#      npm ci && npm run build
+#   3) Add a self-hosted Actions runner to the target repo (Settings → Actions →
+#      Runners), running as the user that did `claude login`.
+#   4) Put this file in the target repo as .github/workflows/review-trial.yml
+#
+# Keep it to internal/trusted repos: a self-hosted runner executes PR code on
+# your machine.
+name: ReviewPilot (subscription trial)
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+concurrency:
+  group: reviewpilot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: [self-hosted] # your machine, where `claude login` is done
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Review with local Claude subscription
+        env:
+          REVIEW_ENGINE: claude-code # CLI honors your `claude login`
+          # ANTHROPIC_API_KEY intentionally UNSET → use the subscription.
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_ENGINE_ARGS: "-p --output-format text --dangerously-skip-permissions"
+          # Optional gate: block the PR on findings this severity or worse.
+          FAIL_ON_SEVERITY: "" # e.g. major
+          REVIEWPILOT_DIR: /opt/review-pilot # where you cloned + built it
+        run: node "$REVIEWPILOT_DIR/packages/server/dist/src/action/run-review.js"

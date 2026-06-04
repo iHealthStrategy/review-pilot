@@ -1,0 +1,24 @@
+# syntax=docker/dockerfile:1
+# Image for the one-shot GitHub Action: runs a single PR review then exits.
+# (The long-running service uses ./Dockerfile instead.)
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY packages/server/package.json packages/server/
+COPY packages/web/package.json packages/web/
+RUN npm ci
+# Review engines are loaded at runtime; install the ones the action may use.
+RUN npm install --no-save @anthropic-ai/claude-agent-sdk
+COPY . .
+RUN npm run build --workspace=packages/server
+
+FROM node:20-alpine AS runtime
+# git for diffing/inspection; the Claude Code CLI for the claude-code engine.
+RUN apk add --no-cache git && npm install -g @anthropic-ai/claude-code
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/package.json /app/package-lock.json /app/tsconfig.base.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages ./packages
+# The action entrypoint reads PR context from the Actions environment.
+ENTRYPOINT ["node", "/app/packages/server/dist/src/action/run-review.js"]

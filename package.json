@@ -1,0 +1,25 @@
+{
+  "name": "reviewpilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ReviewPilot — server-side continuous code review platform that auto-reviews GitHub/GitLab PRs using configurable AI engines (Cursor/Claude Code/Codex), with a Jenkins-like Web UI and PR comment write-back.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.18"
+  },
+  "workspaces": [
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "ci": "npm run build && npm run lint && npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.5"
+  }
+}

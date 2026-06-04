@@ -1,0 +1,50 @@
+# Copy this into a TARGET repo as .github/workflows/review.yml
+#
+# One-shot, stateless PR review: GitHub spins up an ephemeral runner per PR,
+# ReviewPilot reviews the change and writes a summary comment, then everything
+# is torn down. No server, no database, no webhook.
+#
+# Setup in the target repo: add an Actions secret ANTHROPIC_API_KEY.
+# (GITHUB_TOKEN is provided automatically.)
+name: ReviewPilot
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+# Least-privilege: read code, write PR comments, publish the status check.
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+# One review per PR at a time; newer pushes cancel older runs.
+concurrency:
+  group: reviewpilot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the agent can explore the project
+
+      # Persist the per-repo project-understanding summary across runs.
+      - uses: actions/cache@v4
+        with:
+          path: .reviewpilot/insight.txt
+          key: reviewpilot-insight-${{ github.repository }}-v1
+
+      - name: Review pull request
+        # Point this at your published action, e.g. your-org/review-pilot@v1
+        uses: your-org/review-pilot@v1
+        with:
+          engine: claude-agent
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          insight-file: .reviewpilot/insight.txt
+          # Block the PR when a finding is this severity or worse (omit to keep
+          # reviews advisory). Make "ReviewPilot" a required check in branch
+          # protection to actually enforce the gate.
+          fail-on-severity: major

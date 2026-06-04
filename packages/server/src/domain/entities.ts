@@ -1,0 +1,120 @@
+/**
+ * Core domain entities for ReviewPilot.
+ *
+ * These types are persistence-agnostic: every repository backend
+ * (in-memory, file, SQL) stores and returns exactly these shapes. Timestamps
+ * are ISO-8601 strings so they round-trip losslessly through JSON and SQL TEXT
+ * columns without driver-specific Date handling.
+ */
+
+/** Git hosting platforms supported by the multi-platform abstraction. */
+export type Platform = "github" | "gitlab";
+
+/** Pluggable review engines (mirrors the config union intentionally). */
+export type ReviewEngineKind =
+  | "mock"
+  | "cursor"
+  | "claude-code"
+  | "claude-agent"
+  | "codex";
+
+/** Lifecycle of a review job. See {@link ./state-machine.ts}. */
+export type JobStatus = "pending" | "running" | "succeeded" | "failed";
+
+/** Open/closed/merged state of a pull/merge request. */
+export type PullRequestState = "open" | "closed" | "merged";
+
+/** Severity ranking for a single finding. */
+export type Severity = "info" | "minor" | "major" | "critical";
+
+/** A monitored project — the unit users configure in the Web UI. */
+export interface Project {
+  readonly id: string;
+  readonly name: string;
+  readonly platform: Platform;
+  /** Default engine used when a job does not specify one. */
+  readonly defaultEngine: ReviewEngineKind;
+  /** Engines allowed to be selected for this project. */
+  readonly enabledEngines: ReviewEngineKind[];
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** A repository belonging to a project. */
+export interface Repo {
+  readonly id: string;
+  readonly projectId: string;
+  readonly platform: Platform;
+  /** `owner/repo` (GitHub) or `group/.../project` (GitLab) path — the stable
+   * key used to match inbound webhook/polling events to this repo. */
+  readonly fullName: string;
+  /** Human-facing remote URL (web). */
+  readonly remoteUrl: string;
+  /** Clone URL used by the worker to sync the full repository. */
+  readonly cloneUrl: string;
+  readonly defaultBranch: string;
+  readonly createdAt: string;
+}
+
+/** A pull/merge request observed on a repo. Unique per (repoId, number). */
+export interface PullRequest {
+  readonly id: string;
+  readonly repoId: string;
+  /** Platform-native PR/MR number. */
+  readonly number: number;
+  readonly title: string;
+  readonly sourceBranch: string;
+  readonly targetBranch: string;
+  readonly headSha: string;
+  readonly author: string;
+  readonly url: string;
+  readonly state: PullRequestState;
+  readonly createdAt: string;
+}
+
+/** A review task created for a PR, executed by the worker. */
+export interface ReviewJob {
+  readonly id: string;
+  readonly pullRequestId: string;
+  readonly engine: ReviewEngineKind;
+  readonly status: JobStatus;
+  /** Times the job has entered `running` (retries increment this). */
+  readonly attempts: number;
+  /** Coarse progress 0..100 for the Jenkins-like UI. */
+  readonly progress: number;
+  /** Failure message when status is `failed`. */
+  readonly error?: string;
+  /** Append-only execution log lines. */
+  readonly logs: string[];
+  readonly createdAt: string;
+  readonly startedAt?: string;
+  readonly finishedAt?: string;
+}
+
+/**
+ * Cached whole-project understanding for a repo — a summary the agentic engine
+ * produces by exploring the codebase, reused across PR reviews (refreshed on a
+ * TTL) so each review is grounded in global context without re-exploring.
+ * One per repo, keyed by `repoId`.
+ */
+export interface RepoInsight {
+  readonly repoId: string;
+  readonly summary: string;
+  /** Head sha the summary was generated against (provenance). */
+  readonly headSha: string;
+  readonly updatedAt: string;
+}
+
+/** A structured review result item (the "issue list + suggestion"). */
+export interface Finding {
+  readonly id: string;
+  readonly reviewJobId: string;
+  readonly filePath: string;
+  readonly line?: number;
+  readonly endLine?: number;
+  readonly severity: Severity;
+  readonly title: string;
+  readonly detail: string;
+  readonly suggestion?: string;
+  readonly category?: string;
+}

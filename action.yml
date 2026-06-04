@@ -1,0 +1,47 @@
+name: "ReviewPilot"
+description: "AI code review for a pull request using Claude Code (agentic, whole-project context)."
+author: "ReviewPilot"
+branding:
+  icon: "git-pull-request"
+  color: "blue"
+inputs:
+  engine:
+    description: "Review engine: claude-agent (recommended) | claude-code | mock"
+    required: false
+    default: "claude-agent"
+  anthropic-api-key:
+    description: "Anthropic API key for the Claude engine."
+    required: false
+  agent-model:
+    description: "Model for the claude-agent engine (empty = SDK default)."
+    required: false
+    default: ""
+  insight-file:
+    description: "Path to a project-understanding cache file (persist with actions/cache)."
+    required: false
+    default: ""
+  fail-on-severity:
+    description: "Fail the check (block merge) when a finding is this severity or worse: info|minor|major|critical. Empty = never fail."
+    required: false
+    default: ""
+  check-run-name:
+    description: "Name of the published status check."
+    required: false
+    default: "ReviewPilot"
+  only-changed-lines:
+    description: "Keep only findings on lines the PR changed (noise reduction): true|false."
+    required: false
+    default: "false"
+runs:
+  using: "docker"
+  image: "Dockerfile.action"
+  env:
+    # GITHUB_TOKEN is not auto-exposed to docker actions — pass it explicitly.
+    GITHUB_TOKEN: ${{ github.token }}
+    REVIEW_ENGINE: ${{ inputs.engine }}
+    ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+    REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
+    PROJECT_INSIGHT_FILE: ${{ inputs.insight-file }}
+    FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+    CHECK_RUN_NAME: ${{ inputs.check-run-name }}
+    ONLY_CHANGED_LINES: ${{ inputs.only-changed-lines }}

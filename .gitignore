@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+coverage/
+*.log
+.DS_Store
+.workspace/
+data/
+.claude-trial/
+# Local tooling / agent state (not part of the project)
+.orchestrator/
+.claude/

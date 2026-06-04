@@ -1,0 +1,41 @@
+# =====================================================================
+# SMALL-SCALE TRIAL ONLY — borrow your LOCAL Claude subscription login on
+# the server. Not for production or shared/team use: a personal Pro/Max
+# subscription is licensed for interactive individual use, and its rate
+# limits are sized for one human. Switch to an API key (or Bedrock/Vertex)
+# for anything beyond a personal evaluation.
+#
+# How it works: the `claude` CLI reads the OAuth credentials produced by
+# `claude login` from its config dir. We mount a COPY of your local config
+# dir into the container and point the CLI at it; the CLI uses the
+# subscription and refreshes its token in place (hence a read-write mount).
+#
+# Steps:
+#   1) Locally, log in with your subscription:           claude login
+#   2) Copy the config so refreshes don't touch your primary login:
+#        cp -r ~/.claude ./.claude-trial
+#      (macOS note: if your token lives in the Keychain rather than a file,
+#       ./.claude-trial won't contain it — do the login inside a Linux
+#       container/box so credentials are file-based, then copy that dir.)
+#   3) Run with this override:
+#        docker compose -f docker-compose.yml -f docker-compose.trial.yml up --build
+#
+# Keep the trial private (don't expose the webhook publicly without a secret)
+# and small — point it at one repo.
+services:
+  reviewpilot:
+    environment:
+      # CLI engine honors `claude login` credentials (the agent SDK path is
+      # for API-key auth; use the CLI for a subscription trial).
+      REVIEW_ENGINE: claude-code
+      # Empty → use the subscription login, NOT an API key.
+      ANTHROPIC_API_KEY: ""
+      # Where the CLI looks for its credentials/config inside the container.
+      CLAUDE_CONFIG_DIR: /data/claude
+      # Headless run: keep it non-interactive. Adjust to your CLI version if
+      # the flags differ (e.g. permission/trust handling for a fresh checkout).
+      REVIEW_ENGINE_ARGS: ${REVIEW_ENGINE_ARGS:--p --output-format text --dangerously-skip-permissions}
+    volumes:
+      # Read-write so the CLI can persist refreshed tokens. Mount a COPY,
+      # not your live ~/.claude.
+      - ${CLAUDE_TRIAL_DIR:-./.claude-trial}:/data/claude

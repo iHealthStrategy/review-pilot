@@ -1,0 +1,81 @@
+# One-command local run. Defaults to credential-free mock mode:
+#   docker compose up --build
+# MongoDB-backed stateless run (recommended for cloud deployment):
+#   docker compose --profile mongo up --build
+# Postgres-backed persistence:
+#   docker compose --profile postgres up --build
+services:
+  reviewpilot:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Default: in-memory mock — no external services or credentials needed.
+      DB_DRIVER: ${DB_DRIVER:-mock}
+      # MongoDB (when DB_DRIVER=mongo). Carries auth/credentials in the URI.
+      MONGODB_URI: ${MONGODB_URI:-}
+      MONGODB_DB: ${MONGODB_DB:-reviewpilot}
+      # Used only when DB_DRIVER=postgres (see the postgres profile below).
+      DATABASE_URL: ${DATABASE_URL:-postgres://reviewpilot:reviewpilot@db:5432/reviewpilot}
+      REVIEW_ENGINE: ${REVIEW_ENGINE:-mock}
+      REVIEW_ENGINES_ENABLED: ${REVIEW_ENGINES_ENABLED:-mock,claude-code}
+      # Claude auth (used by claude-code CLI and claude-agent SDK engines).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Agent SDK tuning (used when REVIEW_ENGINE=claude-agent).
+      REVIEW_AGENT_MODEL: ${REVIEW_AGENT_MODEL:-}
+      REVIEW_AGENT_MAX_TURNS: ${REVIEW_AGENT_MAX_TURNS:-30}
+      # Optional: override the external engine command/args.
+      REVIEW_ENGINE_COMMAND: ${REVIEW_ENGINE_COMMAND:-}
+      REVIEW_ENGINE_ARGS: ${REVIEW_ENGINE_ARGS:-}
+      ENGINE_TIMEOUT_MS: ${ENGINE_TIMEOUT_MS:-600000}
+      # Per-repo project-understanding cache.
+      PROJECT_INSIGHT_CACHE: ${PROJECT_INSIGHT_CACHE:-true}
+      PROJECT_INSIGHT_TTL_MS: ${PROJECT_INSIGHT_TTL_MS:-604800000}
+      INLINE_COMMENTS: ${INLINE_COMMENTS:-false}
+      # Recover jobs left running by a crashed/redeployed container (single worker).
+      RECOVER_INTERRUPTED_JOBS_ON_START: ${RECOVER_INTERRUPTED_JOBS_ON_START:-true}
+      # Bearer token guarding the management API/UI (empty disables auth).
+      API_TOKEN: ${API_TOKEN:-}
+      # Polling fallback (0 disables; webhooks preferred).
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-0}
+      # Provide tokens/secrets here to enable real GitHub/GitLab integration.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      # GitHub App auth (preferred over a PAT): set the App id + private key.
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
+      GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-}
+
+  # Optional MongoDB backend — enabled with `--profile mongo`.
+  # For cloud, point MONGODB_URI at a managed cluster (e.g. Atlas) instead.
+  mongo:
+    image: mongo:7
+    profiles: ["mongo"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-reviewpilot}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-reviewpilot}
+    ports:
+      - "27017:27017"
+    volumes:
+      - reviewpilot-mongo:/data/db
+
+  # Optional Postgres backend — enabled with `--profile postgres`.
+  db:
+    image: postgres:16-alpine
+    profiles: ["postgres"]
+    environment:
+      POSTGRES_USER: reviewpilot
+      POSTGRES_PASSWORD: reviewpilot
+      POSTGRES_DB: reviewpilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - reviewpilot-pgdata:/var/lib/postgresql/data
+
+volumes:
+  reviewpilot-pgdata:
+  reviewpilot-mongo:
