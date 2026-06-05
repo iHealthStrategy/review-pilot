@@ -39,7 +39,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
           anthropic-model: "claude-opus-4-6"
-          anthropic-small-fast-model: "claude-4.5-haiku"
+          anthropic-small-fast-model: "claude-haiku-4-5"
           insight-file: .reviewpilot/insight.txt
           # Start advisory (don't block). Set to e.g. "major" once you trust it.
           fail-on-severity: ""
