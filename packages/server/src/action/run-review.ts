@@ -3,7 +3,7 @@ import type { ReviewEngineKind } from "../domain/entities.js";
 import { GitHubProvider } from "../providers/github-provider.js";
 import type { GitProvider } from "../providers/git-provider.js";
 import { FetchHttpClient } from "../providers/http-client.js";
-import { createReviewEngine } from "../review/engine-factory.js";
+import { createReviewEngine, type ReviewEngineDeps } from "../review/engine-factory.js";
 import type { ReviewContext, ReviewEngine } from "../review/review-engine.js";
 import type { CheckConclusion } from "../providers/git-provider.js";
 import { buildCheckRun } from "../review/check-run.js";
@@ -163,6 +163,33 @@ function required(env: Record<string, string | undefined>, key: string): string 
   return v;
 }
 
+/**
+ * Build engine factory deps from the environment. Honors REVIEW_ENGINE_ARGS /
+ * REVIEW_ENGINE_COMMAND (CLI overrides), ENGINE_TIMEOUT_MS, and the agent model
+ * knobs — keeping the action path at parity with the config-driven service path.
+ */
+export function buildEngineDeps(
+  env: NodeJS.ProcessEnv,
+  engineKind: ReviewEngineKind,
+): ReviewEngineDeps {
+  const engineArgs = (env.REVIEW_ENGINE_ARGS ?? "")
+    .split(/\s+/)
+    .filter((s) => s.length > 0);
+  return {
+    ...(env.ENGINE_TIMEOUT_MS ? { timeoutMs: Number.parseInt(env.ENGINE_TIMEOUT_MS, 10) } : {}),
+    ...(env.REVIEW_ENGINE_COMMAND
+      ? { commands: { [engineKind]: env.REVIEW_ENGINE_COMMAND } }
+      : {}),
+    ...(engineArgs.length ? { args: { [engineKind]: engineArgs } } : {}),
+    agent: {
+      ...(env.REVIEW_AGENT_MODEL ? { model: env.REVIEW_AGENT_MODEL } : {}),
+      ...(env.REVIEW_AGENT_MAX_TURNS
+        ? { maxTurns: Number.parseInt(env.REVIEW_AGENT_MAX_TURNS, 10) }
+        : {}),
+    },
+  };
+}
+
 /** Wire real dependencies from the Actions environment and run. */
 export async function main(rawEnv: NodeJS.ProcessEnv = process.env): Promise<void> {
   // Default the workspace to the cwd so the entrypoint is runnable locally from
@@ -177,15 +204,7 @@ export async function main(rawEnv: NodeJS.ProcessEnv = process.env): Promise<voi
     token: env.GITHUB_TOKEN ?? "",
     webhookSecret: "",
   });
-  const engine = createReviewEngine(engineKind, {
-    ...(env.ENGINE_TIMEOUT_MS ? { timeoutMs: Number.parseInt(env.ENGINE_TIMEOUT_MS, 10) } : {}),
-    agent: {
-      ...(env.REVIEW_AGENT_MODEL ? { model: env.REVIEW_AGENT_MODEL } : {}),
-      ...(env.REVIEW_AGENT_MAX_TURNS
-        ? { maxTurns: Number.parseInt(env.REVIEW_AGENT_MAX_TURNS, 10) }
-        : {}),
-    },
-  });
+  const engine = createReviewEngine(engineKind, buildEngineDeps(env, engineKind));
 
   const insightFile = env.PROJECT_INSIGHT_FILE;
   const summaryFile = env.GITHUB_STEP_SUMMARY;

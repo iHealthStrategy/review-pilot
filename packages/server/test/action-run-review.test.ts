@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ReviewContext, ReviewEngine } from "../src/review/review-engine.js";
-import { runReviewAction } from "../src/action/run-review.js";
+import { buildEngineDeps, runReviewAction } from "../src/action/run-review.js";
 import { SpyProvider } from "./spy-provider.js";
 
 function makeEngine(): ReviewEngine & { reviewed?: ReviewContext; summarizeCalls: number } {
@@ -200,6 +200,27 @@ test("runReviewAction: ONLY_CHANGED_LINES drops findings off the diff", async ()
   });
   assert.equal(result.findings, 1); // only src/a.ts:3 survives
   assert.equal(provider.checkRuns[0]?.annotations?.length, 1);
+});
+
+test("buildEngineDeps: action honors REVIEW_ENGINE_ARGS / COMMAND / timeout", () => {
+  const deps = buildEngineDeps(
+    {
+      REVIEW_ENGINE_ARGS: "-p --output-format text --dangerously-skip-permissions",
+      REVIEW_ENGINE_COMMAND: "claude",
+      ENGINE_TIMEOUT_MS: "120000",
+      REVIEW_AGENT_MODEL: "claude-opus-4-6",
+    } as NodeJS.ProcessEnv,
+    "claude-code",
+  );
+  assert.deepEqual(deps.args?.["claude-code"], [
+    "-p",
+    "--output-format",
+    "text",
+    "--dangerously-skip-permissions",
+  ]);
+  assert.equal(deps.commands?.["claude-code"], "claude");
+  assert.equal(deps.timeoutMs, 120000);
+  assert.equal(deps.agent?.model, "claude-opus-4-6");
 });
 
 test("runReviewAction: errors clearly when not a pull_request event", async () => {
