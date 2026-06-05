@@ -37,6 +37,7 @@ jobs:
           engine-args: "-p --output-format text --dangerously-skip-permissions"
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
           insight-file: .reviewpilot/insight.txt
           # Start advisory (don't block). Set to e.g. "major" once you trust it.
           fail-on-severity: ""
