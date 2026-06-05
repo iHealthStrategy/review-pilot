@@ -33,13 +33,12 @@ jobs:
       - name: Review pull request
         uses: ./ # the action in this repo (pulls ghcr.io/.../review-pilot-action:v1)
         with:
-          engine: claude-code
-          engine-args: "-p --output-format text --dangerously-skip-permissions"
+          engine: claude-agent
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
           anthropic-model: "claude-opus-4-6"
-          anthropic-small-fast-model: "claude-opus-4-6"
+          anthropic-small-fast-model: "claude-4.5-haiku"
           insight-file: .reviewpilot/insight.txt
           # Start advisory (don't block). Set to e.g. "major" once you trust it.
           fail-on-severity: ""
