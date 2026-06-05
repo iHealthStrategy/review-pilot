@@ -33,7 +33,8 @@ jobs:
       - name: Review pull request
         uses: ./ # the action in this repo (pulls ghcr.io/.../review-pilot-action:v1)
         with:
-          engine: mock
+          engine: claude-code
+          engine-args: "-p --output-format text --dangerously-skip-permissions"
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           insight-file: .reviewpilot/insight.txt
