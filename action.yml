@@ -33,23 +33,52 @@ inputs:
     required: false
     default: "false"
   github-token:
-    description: "Token for PR comments + check runs. Pass the workflow github.token."
+    description: "Token for PR comments + check runs and pulling the action image. Pass the workflow github.token."
     required: false
     default: ""
+  image:
+    description: "Prebuilt action image to run."
+    required: false
+    default: "ghcr.io/ihealthstrategy/review-pilot-action:v1"
+
+# Composite (not a docker action) so we can authenticate to GHCR before pulling
+# the prebuilt image — a `uses: docker://` action can't log in, so private
+# images fail to pull. This keeps the image private AND fast (no per-run build).
 runs:
-  using: "docker"
-  # Prebuilt image (published by .github/workflows/release-action.yml) so each
-  # run pulls instead of building Dockerfile.action. To build from source
-  # instead, set this back to "Dockerfile.action".
-  image: "docker://ghcr.io/ihealthstrategy/review-pilot-action:v1"
-  env:
-    # GITHUB_TOKEN is not auto-exposed to docker actions; the caller passes it
-    # via the github-token input (action metadata can't read ${{ github.* }}).
-    GITHUB_TOKEN: ${{ inputs.github-token }}
-    REVIEW_ENGINE: ${{ inputs.engine }}
-    ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-    REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
-    PROJECT_INSIGHT_FILE: ${{ inputs.insight-file }}
-    FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
-    CHECK_RUN_NAME: ${{ inputs.check-run-name }}
-    ONLY_CHANGED_LINES: ${{ inputs.only-changed-lines }}
+  using: "composite"
+  steps:
+    - name: Log in to GHCR
+      shell: bash
+      env:
+        GHCR_TOKEN: ${{ inputs.github-token }}
+      run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+    - name: Run ReviewPilot
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        REVIEW_ENGINE: ${{ inputs.engine }}
+        REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
+        FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
+        ONLY_CHANGED_LINES: ${{ inputs.only-changed-lines }}
+        CHECK_RUN_NAME: ${{ inputs.check-run-name }}
+        PROJECT_INSIGHT_FILE: ${{ inputs.insight-file }}
+        GH_REPOSITORY: ${{ github.repository }}
+        GH_API_URL: ${{ github.api_url }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        if [ -n "$PROJECT_INSIGHT_FILE" ]; then mkdir -p "$(dirname "$PROJECT_INSIGHT_FILE")"; fi
+        docker run --rm \
+          -e GITHUB_TOKEN -e ANTHROPIC_API_KEY \
+          -e REVIEW_ENGINE -e REVIEW_AGENT_MODEL \
+          -e FAIL_ON_SEVERITY -e ONLY_CHANGED_LINES -e CHECK_RUN_NAME \
+          -e PROJECT_INSIGHT_FILE \
+          -e GITHUB_REPOSITORY="$GH_REPOSITORY" \
+          -e GITHUB_API_URL="$GH_API_URL" \
+          -e PR_NUMBER \
+          -e GITHUB_WORKSPACE=/github/workspace \
+          -v "${{ github.workspace }}:/github/workspace" \
+          -w /github/workspace \
+          "$IMAGE"
