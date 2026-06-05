@@ -23,6 +23,9 @@ services:
       REVIEW_ENGINES_ENABLED: ${REVIEW_ENGINES_ENABLED:-mock,claude-code}
       # Claude auth (used by claude-code CLI and claude-agent SDK engines).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Optional: route through a relay/gateway (Anthropic-API-compatible).
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
       # Agent SDK tuning (used when REVIEW_ENGINE=claude-agent).
       REVIEW_AGENT_MODEL: ${REVIEW_AGENT_MODEL:-}
       REVIEW_AGENT_MAX_TURNS: ${REVIEW_AGENT_MAX_TURNS:-30}

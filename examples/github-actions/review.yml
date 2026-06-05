@@ -45,6 +45,9 @@ jobs:
           engine: claude-agent
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Using a relay/gateway? Set the base URL (and ANTHROPIC_AUTH_TOKEN if it
+          # needs Bearer auth). Leave empty for api.anthropic.com.
+          anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
           insight-file: .reviewpilot/insight.txt
           # Block the PR when a finding is this severity or worse (omit to keep
           # reviews advisory). Make "ReviewPilot" a required check in branch

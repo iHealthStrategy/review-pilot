@@ -259,6 +259,12 @@ Both pin a strict JSON output schema with tolerant parsing, and are bounded by
 > Auth: use an **API key** (or cloud IAM) on servers — a personal Pro/Max
 > subscription is for interactive local use and is not suitable for an
 > unattended service.
+>
+> Relay/gateway: to route through an Anthropic-API-compatible proxy, set
+> `ANTHROPIC_BASE_URL` (and `ANTHROPIC_AUTH_TOKEN` if it uses Bearer auth) — in
+> the Action via the `anthropic-base-url` / `anthropic-auth-token` inputs, in the
+> service via env. The relay must proxy the **full** Anthropic API (the agentic
+> engines use more than `/v1/messages`), not just a chat shim.
 
 #### Small-scale subscription trial (evaluation only)
 
