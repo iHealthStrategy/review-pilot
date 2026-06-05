@@ -32,6 +32,10 @@ inputs:
     description: "Keep only findings on lines the PR changed (noise reduction): true|false."
     required: false
     default: "false"
+  github-token:
+    description: "Token for PR comments + check runs. Pass ${{ github.token }}."
+    required: false
+    default: ""
 runs:
   using: "docker"
   # Prebuilt image (published by .github/workflows/release-action.yml) so each
@@ -39,8 +43,9 @@ runs:
   # instead, set this back to "Dockerfile.action".
   image: "docker://ghcr.io/ihealthstrategy/review-pilot-action:v1"
   env:
-    # GITHUB_TOKEN is not auto-exposed to docker actions — pass it explicitly.
-    GITHUB_TOKEN: ${{ github.token }}
+    # GITHUB_TOKEN is not auto-exposed to docker actions; the caller passes it
+    # via the github-token input (action metadata can't read ${{ github.* }}).
+    GITHUB_TOKEN: ${{ inputs.github-token }}
     REVIEW_ENGINE: ${{ inputs.engine }}
     ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
     REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}

@@ -43,6 +43,7 @@ jobs:
         uses: iHealthStrategy/review-pilot@v1
         with:
           engine: claude-agent
+          github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           insight-file: .reviewpilot/insight.txt
           # Block the PR when a finding is this severity or worse (omit to keep
