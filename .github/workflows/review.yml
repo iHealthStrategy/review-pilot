@@ -33,9 +33,16 @@ jobs:
       - name: Review pull request
         uses: ./ # the action in this repo (pulls ghcr.io/.../review-pilot-action:v1)
         with:
-          engine: claude-agent
+          # claude-code CLI (the agent SDK isn't compatible with this relay).
+          engine: claude-code
+          engine-args: "-p --output-format text"
           github-token: ${{ github.token }}
+          # Relay/gateway: base URL secret must NOT include /v1/messages.
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
+          anthropic-model: "claude-opus-4-6"
+          anthropic-small-fast-model: "claude-haiku-4-5"
+          output-language: "Chinese"
           insight-file: .reviewpilot/insight.txt
           # Start advisory (don't block). Set to e.g. "major" once you trust it.
           fail-on-severity: ""
