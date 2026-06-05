@@ -1,0 +1,41 @@
+# Dogfood: ReviewPilot reviews its own pull requests.
+# Uses the local action (./) — which pulls the prebuilt GHCR image. Open a PR
+# (from a branch created after this file is on main) to trigger it.
+name: ReviewPilot
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  packages: read
+
+concurrency:
+  group: reviewpilot-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the agent can explore the project
+
+      - uses: actions/cache@v4 # reuse the project-understanding summary
+        with:
+          path: .reviewpilot/insight.txt
+          key: reviewpilot-insight-${{ github.repository }}-v1
+
+      - name: Review pull request
+        uses: ./ # the action in this repo (pulls ghcr.io/.../review-pilot-action:v1)
+        with:
+          engine: claude-agent
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          insight-file: .reviewpilot/insight.txt
+          # Start advisory (don't block). Set to e.g. "major" once you trust it.
+          fail-on-severity: ""
+          only-changed-lines: "false"
