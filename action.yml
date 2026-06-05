@@ -12,6 +12,14 @@ inputs:
   anthropic-api-key:
     description: "Anthropic API key for the Claude engine."
     required: false
+  anthropic-base-url:
+    description: "Override the Anthropic API base URL (for a relay/gateway). Empty = api.anthropic.com."
+    required: false
+    default: ""
+  anthropic-auth-token:
+    description: "Bearer auth token, if the relay expects Authorization: Bearer instead of x-api-key."
+    required: false
+    default: ""
   agent-model:
     description: "Model for the claude-agent engine (empty = SDK default)."
     required: false
@@ -62,6 +70,8 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic-base-url }}
+        ANTHROPIC_AUTH_TOKEN: ${{ inputs.anthropic-auth-token }}
         REVIEW_ENGINE: ${{ inputs.engine }}
         REVIEW_ENGINE_ARGS: ${{ inputs.engine-args }}
         REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
@@ -76,7 +86,7 @@ runs:
       run: |
         if [ -n "$PROJECT_INSIGHT_FILE" ]; then mkdir -p "$(dirname "$PROJECT_INSIGHT_FILE")"; fi
         docker run --rm \
-          -e GITHUB_TOKEN -e ANTHROPIC_API_KEY \
+          -e GITHUB_TOKEN -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e ANTHROPIC_AUTH_TOKEN \
           -e REVIEW_ENGINE -e REVIEW_ENGINE_ARGS -e REVIEW_AGENT_MODEL \
           -e FAIL_ON_SEVERITY -e ONLY_CHANGED_LINES -e CHECK_RUN_NAME \
           -e PROJECT_INSIGHT_FILE \
