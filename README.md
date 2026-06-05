@@ -134,6 +134,7 @@ jobs:
       - uses: iHealthStrategy/review-pilot@v1
         with:
           engine: claude-agent
+          github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           insight-file: .reviewpilot/insight.txt
           fail-on-severity: major   # block the PR on major/critical findings
