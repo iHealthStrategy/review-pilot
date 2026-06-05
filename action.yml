@@ -33,7 +33,7 @@ inputs:
     required: false
     default: "false"
   github-token:
-    description: "Token for PR comments + check runs. Pass ${{ github.token }}."
+    description: "Token for PR comments + check runs. Pass the workflow github.token."
     required: false
     default: ""
 runs:
