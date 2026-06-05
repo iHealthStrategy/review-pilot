@@ -38,8 +38,8 @@ jobs:
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
-          anthropic-model: "claude-sonnet-4-6"
-          anthropic-small-fast-model: "claude-sonnet-4-6"
+          anthropic-model: "claude-opus-4-6"
+          anthropic-small-fast-model: "claude-opus-4-6"
           insight-file: .reviewpilot/insight.txt
           # Start advisory (don't block). Set to e.g. "major" once you trust it.
           fail-on-severity: ""
