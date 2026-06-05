@@ -49,6 +49,7 @@ test("runReviewAction: reviews a PR and posts a summary comment (stateless)", as
 
   assert.equal(result.prNumber, 7);
   assert.equal(result.findings, 2);
+  assert.match(result.summary, /ReviewPilot review/); // summary exposed for outputs
   // Comment written back via the provider (no listComments → fresh post).
   assert.equal(provider.comments.length, 1);
   assert.match(provider.comments[0]!.body, /ReviewPilot review/);

@@ -53,6 +53,8 @@ export interface ActionResult {
   conclusion: CheckConclusion;
   /** True when FAIL_ON_SEVERITY tripped — the caller should exit non-zero. */
   gateFailed: boolean;
+  /** The markdown review summary (also the PR comment body). */
+  summary: string;
 }
 
 export async function runReviewAction(deps: ActionDeps): Promise<ActionResult> {
@@ -154,6 +156,7 @@ export async function runReviewAction(deps: ActionDeps): Promise<ActionResult> {
     commentId: comment.id,
     conclusion,
     gateFailed: failed,
+    summary: body,
   };
 }
 
@@ -232,6 +235,22 @@ export async function main(rawEnv: NodeJS.ProcessEnv = process.env): Promise<voi
       ? { writeSummary: async (md: string) => writeFile(summaryFile, md + "\n", { flag: "a" }) }
       : {}),
   });
+
+  // Expose machine-readable results for the action wrapper to turn into step
+  // outputs (e.g. for downstream notifications).
+  if (env.REVIEWPILOT_OUTPUT_FILE) {
+    await writeFile(
+      env.REVIEWPILOT_OUTPUT_FILE,
+      JSON.stringify({
+        summary: result.summary,
+        findings: result.findings,
+        conclusion: result.conclusion,
+        gateFailed: result.gateFailed,
+        prNumber: result.prNumber,
+      }),
+      "utf8",
+    );
+  }
 
   // Fail the job (and the required check) when the severity gate tripped.
   if (result.gateFailed) {
