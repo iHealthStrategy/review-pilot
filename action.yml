@@ -16,6 +16,14 @@ inputs:
     description: "Override the Anthropic API base URL (for a relay/gateway). Empty = api.anthropic.com."
     required: false
     default: ""
+  anthropic-model:
+    description: "Main model name (set to a model your relay/gateway exposes; empty = client default)."
+    required: false
+    default: ""
+  anthropic-small-fast-model:
+    description: "Cheap model for background tasks (Claude Code uses one); set to a model your relay exposes."
+    required: false
+    default: ""
   anthropic-auth-token:
     description: "Bearer auth token, if the relay expects Authorization: Bearer instead of x-api-key."
     required: false
@@ -72,6 +80,8 @@ runs:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         ANTHROPIC_BASE_URL: ${{ inputs.anthropic-base-url }}
         ANTHROPIC_AUTH_TOKEN: ${{ inputs.anthropic-auth-token }}
+        ANTHROPIC_MODEL: ${{ inputs.anthropic-model }}
+        ANTHROPIC_SMALL_FAST_MODEL: ${{ inputs.anthropic-small-fast-model }}
         REVIEW_ENGINE: ${{ inputs.engine }}
         REVIEW_ENGINE_ARGS: ${{ inputs.engine-args }}
         REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
@@ -87,6 +97,7 @@ runs:
         if [ -n "$PROJECT_INSIGHT_FILE" ]; then mkdir -p "$(dirname "$PROJECT_INSIGHT_FILE")"; fi
         docker run --rm \
           -e GITHUB_TOKEN -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e ANTHROPIC_AUTH_TOKEN \
+          -e ANTHROPIC_MODEL -e ANTHROPIC_SMALL_FAST_MODEL \
           -e REVIEW_ENGINE -e REVIEW_ENGINE_ARGS -e REVIEW_AGENT_MODEL \
           -e FAIL_ON_SEVERITY -e ONLY_CHANGED_LINES -e CHECK_RUN_NAME \
           -e PROJECT_INSIGHT_FILE \
