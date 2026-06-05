@@ -223,4 +223,14 @@ test("buildReviewPrompt: embeds PR metadata, structure and diff with strict sche
   const grounded = buildReviewPrompt(ctx({ projectInsight: "It is a monorepo." }));
   assert.match(grounded, /Project understanding \(cached\)/);
   assert.match(grounded, /It is a monorepo\./);
+
+  // REVIEW_LANGUAGE adds a directive to localise the finding text.
+  assert.doesNotMatch(prompt, /write the "title"/);
+  process.env.REVIEW_LANGUAGE = "Chinese";
+  try {
+    const zh = buildReviewPrompt(ctx());
+    assert.match(zh, /write the "title", "detail" and "suggestion" field VALUES in Chinese/);
+  } finally {
+    delete process.env.REVIEW_LANGUAGE;
+  }
 });

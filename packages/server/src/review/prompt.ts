@@ -74,7 +74,19 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     "}",
     "Only report issues introduced or affected by this PR. If there are no issues,",
     "respond with an empty array: []",
+    ...languageInstruction(),
   ].join("\n");
+}
+
+/** Optional language directive for the human-readable finding fields. */
+function languageInstruction(): string[] {
+  const language = (process.env.REVIEW_LANGUAGE ?? "").trim();
+  if (!language) return [];
+  return [
+    "",
+    `IMPORTANT: write the "title", "detail" and "suggestion" field VALUES in ${language}. ` +
+      "Keep the JSON keys, the severity values, file paths and code identifiers unchanged (do not translate them).",
+  ];
 }
 
 /**
@@ -98,6 +110,7 @@ export function buildProjectSummaryPrompt(ctx: ReviewContext): string {
     "modules/packages and their responsibilities, key architectural patterns and",
     "conventions, important invariants/constraints, and anything a reviewer must",
     "keep in mind. This will be cached and given to future PR reviews as context.",
+    ...languageInstruction(),
   ].join("\n");
 }
 
