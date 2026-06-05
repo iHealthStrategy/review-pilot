@@ -34,7 +34,7 @@ jobs:
         uses: ./ # the action in this repo (pulls ghcr.io/.../review-pilot-action:v1)
         with:
           engine: claude-code
-          engine-args: "-p --output-format text --dangerously-skip-permissions"
+          engine-args: "-p --output-format text"
           github-token: ${{ github.token }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           anthropic-base-url: ${{ secrets.ANTHROPIC_BASE_URL }}
