@@ -122,7 +122,7 @@ and drop this into a repo as `.github/workflows/review.yml` (full example in
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
-permissions: { contents: read, pull-requests: write, checks: write }
+permissions: { contents: read, pull-requests: write, checks: write, packages: read }
 jobs:
   review:
     runs-on: ubuntu-latest
@@ -131,13 +131,22 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/cache@v4   # reuse project understanding across runs
         with: { path: .reviewpilot/insight.txt, key: reviewpilot-insight-${{ github.repository }}-v1 }
-      - uses: your-org/review-pilot@v1
+      - uses: iHealthStrategy/review-pilot@v1
         with:
           engine: claude-agent
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           insight-file: .reviewpilot/insight.txt
           fail-on-severity: major   # block the PR on major/critical findings
 ```
+
+The action uses a **prebuilt image on GHCR** (no per-run Docker build). Publish
+it once by pushing a version tag (`git tag v1.0.0 && git push origin v1.0.0` →
+the `Release action image` workflow builds `Dockerfile.action` and pushes
+`ghcr.io/ihealthstrategy/review-pilot-action:{v1,latest,…}`). Set that package's
+visibility to **Internal** (org-wide) so org repos can pull it with their job
+token (`packages: read`); consumers then pin `iHealthStrategy/review-pilot@v1`.
+To build from source instead, point `action.yml`'s `image:` back to
+`Dockerfile.action`.
 
 Besides the PR comment, the action publishes a **Check Run** (✅/❌ on the PR)
 with the findings summary **and line-level annotations** — each finding that

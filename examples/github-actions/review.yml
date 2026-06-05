@@ -12,11 +12,13 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
 
-# Least-privilege: read code, write PR comments, publish the status check.
+# Least-privilege: read code, write PR comments, publish the status check,
+# pull the prebuilt action image from GHCR.
 permissions:
   contents: read
   pull-requests: write
   checks: write
+  packages: read
 
 # One review per PR at a time; newer pushes cancel older runs.
 concurrency:
@@ -38,8 +40,7 @@ jobs:
           key: reviewpilot-insight-${{ github.repository }}-v1
 
       - name: Review pull request
-        # Point this at your published action, e.g. your-org/review-pilot@v1
-        uses: your-org/review-pilot@v1
+        uses: iHealthStrategy/review-pilot@v1
         with:
           engine: claude-agent
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

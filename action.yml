@@ -34,7 +34,10 @@ inputs:
     default: "false"
 runs:
   using: "docker"
-  image: "Dockerfile.action"
+  # Prebuilt image (published by .github/workflows/release-action.yml) so each
+  # run pulls instead of building Dockerfile.action. To build from source
+  # instead, set this back to "Dockerfile.action".
+  image: "docker://ghcr.io/ihealthstrategy/review-pilot-action:v1"
   env:
     # GITHUB_TOKEN is not auto-exposed to docker actions — pass it explicitly.
     GITHUB_TOKEN: ${{ github.token }}
