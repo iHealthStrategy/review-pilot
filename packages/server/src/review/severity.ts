@@ -33,3 +33,15 @@ export function gateFailed(
   const min = SEVERITY_RANK[threshold];
   return findings.some((f) => SEVERITY_RANK[f.severity] >= min);
 }
+
+/**
+ * Sort findings by severity descending (critical first, info last).
+ * Stable sort: equal-severity findings keep their original relative order.
+ */
+export function sortBySeverity<T extends { severity: Severity }>(
+  findings: readonly T[],
+): T[] {
+  return [...findings].sort(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity],
+  );
+}

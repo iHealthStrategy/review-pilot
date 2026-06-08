@@ -8,7 +8,7 @@ import type { ReviewContext, ReviewEngine } from "../review/review-engine.js";
 import type { CheckConclusion } from "../providers/git-provider.js";
 import { buildCheckRun } from "../review/check-run.js";
 import { filterToChangedLines } from "../review/diff-lines.js";
-import { isSeverity } from "../review/severity.js";
+import { isSeverity, sortBySeverity } from "../review/severity.js";
 import { scanStructure } from "../review/structure-scanner.js";
 import { deliverSummaryComment, formatFindingsComment } from "../worker/comment-format.js";
 
@@ -114,13 +114,18 @@ export async function runReviewAction(deps: ActionDeps): Promise<ActionResult> {
   if (insight) context.projectInsight = insight;
 
   const produced = await deps.engine.review(context);
-  const findings =
+  const scoped =
     env.ONLY_CHANGED_LINES === "true"
       ? filterToChangedLines(produced, diff)
       : produced;
+  const sorted = sortBySeverity(scoped);
+  const maxFindings = env.MAX_FINDINGS ? Number.parseInt(env.MAX_FINDINGS, 10) : undefined;
+  const findings =
+    maxFindings && maxFindings > 0 ? sorted.slice(0, maxFindings) : sorted;
   log(
     `engine produced ${produced.length} finding(s)` +
-      (findings.length !== produced.length ? `, ${findings.length} on changed lines` : ""),
+      (scoped.length !== produced.length ? `, ${scoped.length} on changed lines` : "") +
+      (findings.length !== scoped.length ? `, capped at ${findings.length}` : ""),
   );
 
   const body = formatFindingsComment(findings, {

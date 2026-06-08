@@ -48,6 +48,10 @@ inputs:
     description: "Keep only findings on lines the PR changed (noise reduction): true|false."
     required: false
     default: "false"
+  max-findings:
+    description: "Cap the number of findings reported (sorted by severity first, so critical issues are never dropped). Empty = no cap."
+    required: false
+    default: ""
   output-language:
     description: "Language for the human-readable finding text (e.g. 'Chinese'). Empty = English."
     required: false
@@ -104,6 +108,7 @@ runs:
         REVIEW_AGENT_MODEL: ${{ inputs.agent-model }}
         FAIL_ON_SEVERITY: ${{ inputs.fail-on-severity }}
         ONLY_CHANGED_LINES: ${{ inputs.only-changed-lines }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
         REVIEW_LANGUAGE: ${{ inputs.output-language }}
         CHECK_RUN_NAME: ${{ inputs.check-run-name }}
         PROJECT_INSIGHT_FILE: ${{ inputs.insight-file }}
@@ -119,7 +124,7 @@ runs:
           -e GITHUB_TOKEN -e ANTHROPIC_API_KEY -e ANTHROPIC_BASE_URL -e ANTHROPIC_AUTH_TOKEN \
           -e ANTHROPIC_MODEL -e ANTHROPIC_SMALL_FAST_MODEL \
           -e REVIEW_ENGINE -e REVIEW_ENGINE_ARGS -e REVIEW_AGENT_MODEL \
-          -e FAIL_ON_SEVERITY -e ONLY_CHANGED_LINES -e REVIEW_LANGUAGE -e CHECK_RUN_NAME \
+          -e FAIL_ON_SEVERITY -e ONLY_CHANGED_LINES -e MAX_FINDINGS -e REVIEW_LANGUAGE -e CHECK_RUN_NAME \
           -e PROJECT_INSIGHT_FILE -e REVIEWPILOT_OUTPUT_FILE \
           -e GITHUB_REPOSITORY="$GH_REPOSITORY" \
           -e GITHUB_API_URL="$GH_API_URL" \
