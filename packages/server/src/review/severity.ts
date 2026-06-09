@@ -33,3 +33,17 @@ export function gateFailed(
   const min = SEVERITY_RANK[threshold];
   return findings.some((f) => SEVERITY_RANK[f.severity] >= min);
 }
+
+/**
+ * The highest severity among a set of findings (e.g. for a one-line summary
+ * badge). Returns `info` for an empty set — the neutral floor.
+ */
+export function worstSeverity(
+  findings: ReadonlyArray<{ severity: Severity }>,
+): Severity {
+  let worst: Severity = "info";
+  for (const f of findings) {
+    if (SEVERITY_RANK[f.severity] > SEVERITY_RANK[worst]) worst = f.severity;
+  }
+  return worst;
+}
