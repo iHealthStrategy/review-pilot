@@ -22,8 +22,6 @@ export interface Cloner {
 export interface GitClonerOptions {
   /** Root under which per-job working copies are created. */
   workspaceRoot?: string;
-  /** Shallow clone depth; 0 = full history. Structure review only needs a tree. */
-  depth?: number;
 }
 
 /**
@@ -44,17 +42,26 @@ export class GitCloner implements Cloner {
     // is safe; each then gets its own unique mkdtemp subdir below.
     await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-ws-"));
-    const depth = this.options.depth ?? 1;
-    const cloneArgs = ["clone"];
-    if (depth > 0) cloneArgs.push("--depth", String(depth));
-    cloneArgs.push(cloneUrl, dir);
 
-    const cloned = await this.runner.run("git", cloneArgs);
+    // Full clone (all branches + history) so ANY commit reachable from a ref —
+    // including a PR head on a non-default branch — can be checked out. A
+    // shallow/single-branch clone only has the default branch tip, which made
+    // `checkout <pr-head-sha>` fail with "unable to read tree". Blobs are
+    // filtered out (--filter=blob:none) so this stays cheap on large repos:
+    // git lazily fetches only the blobs the checkout/engine actually reads.
+    const cloned = await this.runner.run("git", [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      cloneUrl,
+      dir,
+    ]);
     if (cloned.code !== 0) {
       throw new Error(`git clone failed: ${cloned.stderr}`);
     }
-    // Fetch + checkout the exact head commit so the review sees the PR state.
-    await this.runner.run("git", ["-C", dir, "fetch", "--depth", "1", "origin", ref]);
+    // Best-effort fetch of the exact commit (covers a head sha not yet pointed
+    // at by a fetched ref); ignored if the server disallows by-sha fetch.
+    await this.runner.run("git", ["-C", dir, "fetch", "origin", ref]);
     const checkout = await this.runner.run("git", ["-C", dir, "checkout", ref]);
     if (checkout.code !== 0) {
       throw new Error(`git checkout ${ref} failed: ${checkout.stderr}`);

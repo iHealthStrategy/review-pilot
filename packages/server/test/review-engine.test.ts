@@ -168,13 +168,15 @@ test("engine-factory: builds the claude-agent engine with an injected SDK client
   assert.equal(engine.kind, "claude-agent");
 });
 
-test("GitCloner: issues clone + fetch + checkout for the head ref", async () => {
+test("GitCloner: issues a full (blobless) clone + checkout for the head ref", async () => {
   const runner = new FakeCommandRunner();
-  const cloner = new GitCloner(runner, { depth: 1 });
+  const cloner = new GitCloner(runner);
   const ws = await cloner.clone("https://host/acme/demo.git", "abc123");
   try {
     const cmds = runner.calls.map((c) => `${c.command} ${c.args.join(" ")}`);
-    assert.ok(cmds[0]?.startsWith("git clone --depth 1 https://host/acme/demo.git"));
+    // Full clone (no --depth) so a PR head on a non-default branch is reachable.
+    assert.ok(cmds[0]?.startsWith("git clone --filter=blob:none --no-checkout https://host/acme/demo.git"));
+    assert.ok(!cmds[0]?.includes("--depth"));
     assert.ok(cmds.some((c) => /checkout abc123$/.test(c)));
   } finally {
     await cloner.cleanup(ws);
