@@ -8,23 +8,24 @@ import { startAppServer } from "../src/app.js";
 import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
-import { TriggerService } from "../src/trigger/trigger-service.js";
+import { TaskService } from "../src/trigger/trigger-service.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
 async function startServer(repo: Repository, opts: { apiToken?: string; webDistDir?: string }) {
-  const triggerService = new TriggerService({
+  const taskService = new TaskService({
     repo,
     providerFor: (_p: Platform) => new SpyProvider(),
     defaultEngine: "mock",
+    enabledEngines: ["mock"],
   });
-  const server = startAppServer({ repo, triggerService, ...opts }, 0);
+  const server = startAppServer({ repo, taskService, ...opts }, 0);
   await new Promise<void>((r) => server.once("listening", () => r()));
   const port = (server.address() as AddressInfo).port;
   return { server, base: `http://127.0.0.1:${port}` };
 }
 
-test("app: bearer auth gates /api but leaves health + webhook open", async () => {
+test("app: bearer auth gates /api but leaves health open", async () => {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
   const { server, base } = await startServer(repo, { apiToken: "secret" });

@@ -6,13 +6,12 @@ import {
 } from "node:http";
 import { createApiHandler } from "./api/rest-api.js";
 import type { Repository } from "./persistence/repository.js";
-import type { TriggerService } from "./trigger/trigger-service.js";
-import { createWebhookHandler } from "./trigger/webhook-server.js";
+import type { TaskService } from "./trigger/trigger-service.js";
 import { createStaticHandler, resolveWebDistDir } from "./web/static-server.js";
 
 export interface AppDeps {
   repo: Repository;
-  triggerService: TriggerService;
+  taskService: TaskService;
   /** Bearer token guarding the /api surface; empty/omitted disables auth. */
   apiToken?: string;
   /** Override directory for the built Web UI (defaults to bundled location). */
@@ -21,21 +20,18 @@ export interface AppDeps {
 
 /**
  * Single HTTP entry point dispatching by path prefix:
- *   /webhook/{github,gitlab}  → PR trigger ingest (HMAC-authenticated)
- *   /api/...                  → REST API for the Web UI (bearer-authenticated)
- *   /*                        → the static Web UI dashboard (SPA)
+ *   /api/...  → REST API (review tasks + jobs), bearer-authenticated
+ *   /*        → the static Web UI dashboard (SPA)
  * Composes the already-tested per-area handlers; this is the deployable face.
  */
 export function createAppHandler(deps: AppDeps) {
-  const webhook = createWebhookHandler(deps.triggerService);
   const api = createApiHandler(deps.repo, {
     apiToken: deps.apiToken,
-    triggerService: deps.triggerService,
+    taskService: deps.taskService,
   });
   const serveStatic = createStaticHandler(resolveWebDistDir(deps.webDistDir ?? ""));
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
-    if (path.startsWith("/webhook")) return webhook(req, res);
     if (path.startsWith("/api")) return api(req, res);
     return serveStatic(path, res);
   };

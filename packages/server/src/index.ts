@@ -9,8 +9,7 @@ import type { GitProvider } from "./providers/git-provider.js";
 import { type Cloner, GitCloner } from "./review/cloner.js";
 import { ProcessCommandRunner } from "./review/command-runner.js";
 import { ReviewService } from "./review/review-service.js";
-import { Poller } from "./trigger/poller.js";
-import { TriggerService } from "./trigger/trigger-service.js";
+import { TaskService } from "./trigger/trigger-service.js";
 import { Worker } from "./worker/worker.js";
 import { NAME, VERSION } from "./version.js";
 
@@ -25,7 +24,7 @@ export interface StartAppOverrides {
 export interface RunningApp {
   repo: Repository;
   worker: Worker;
-  triggerService: TriggerService;
+  taskService: TaskService;
   /** Resolves once storage is initialised (indexes/migrations) and any
    * interrupted jobs have been recovered. The background drain/poller wait on
    * this. Await it before treating the service as ready. */
@@ -69,10 +68,11 @@ export function startApp(
       return p;
     });
 
-  const triggerService = new TriggerService({
+  const taskService = new TaskService({
     repo,
     providerFor,
     defaultEngine: config.review.defaultEngine,
+    enabledEngines: config.review.enabledEngines,
   });
   const reviewService = new ReviewService({
     repo,
@@ -92,11 +92,10 @@ export function startApp(
       : {}),
   });
 
-  const poller = new Poller(triggerService, config.trigger.pollIntervalSeconds);
   const server = startAppServer(
     {
       repo,
-      triggerService,
+      taskService,
       apiToken: config.apiToken,
       webDistDir: config.webDistDir,
     },
@@ -116,7 +115,6 @@ export function startApp(
       port: config.port,
       db: config.db.driver,
       engine: config.review.defaultEngine,
-      poll: config.trigger.pollIntervalSeconds,
       auth: config.apiToken ? "on" : "off",
       recoveredJobs: recovered,
     });
@@ -132,16 +130,14 @@ export function startApp(
       .catch((err) => log.error("worker drain failed", { error: (err as Error).message }));
   }, overrides.drainIntervalMs ?? 5000);
   drain.unref?.();
-  void ready.then(() => poller.start()).catch(() => {});
 
   return {
     repo,
     worker,
-    triggerService,
+    taskService,
     ready,
     close: async () => {
       clearInterval(drain);
-      poller.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await repo.close();
     },

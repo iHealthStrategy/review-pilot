@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { GitHubProvider } from "../src/providers/github-provider.js";
 import type { GitProvider } from "../src/providers/git-provider.js";
-import { GitLabProvider } from "../src/providers/gitlab-provider.js";
-import { TriggerService } from "../src/trigger/trigger-service.js";
+import { TaskService } from "../src/trigger/trigger-service.js";
 import { FakeHttpClient, type Route } from "./fake-http-client.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
-
-const GH_SECRET = "s3cret";
-const GL_SECRET = "gl-token";
 
 const ghPull = {
   number: 7,
@@ -24,167 +19,92 @@ const ghPull = {
   base: { ref: "main" },
 };
 
-const glMr = {
-  iid: 7,
-  title: "Add feature",
-  state: "opened",
-  web_url: "https://gitlab.com/acme/demo/-/merge_requests/7",
-  source_branch: "feat",
-  target_branch: "main",
-  sha: "abc123",
-  author: { username: "alice" },
-};
-
 const ghRoutes: Route[] = [{ method: "GET", urlIncludes: "pulls/7", body: ghPull }];
-const glRoutes: Route[] = [
-  { method: "GET", urlIncludes: "merge_requests?state=opened", body: [glMr] },
-];
 
-function ghProvider(): GitProvider {
+function providerFor(_platform: Platform): GitProvider {
   return new GitHubProvider(new FakeHttpClient(ghRoutes), {
     apiBase: "https://api.github.com",
     token: "",
-    webhookSecret: GH_SECRET,
+    webhookSecret: "",
   });
 }
 
-function glProvider(): GitProvider {
-  return new GitLabProvider(new FakeHttpClient(glRoutes), {
-    apiBase: "https://gitlab.com/api/v4",
-    token: "",
-    webhookSecret: GL_SECRET,
-  });
-}
-
-function providerFor(platform: Platform): GitProvider {
-  return platform === "github" ? ghProvider() : glProvider();
-}
-
-async function setup(platform: Platform): Promise<Repository> {
+async function makeService(): Promise<{ repo: Repository; service: TaskService }> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
-  const project = await repo.createProject({
-    name: "demo",
-    platform,
+  const service = new TaskService({
+    repo,
+    providerFor,
     defaultEngine: "mock",
     enabledEngines: ["mock"],
   });
-  await repo.createRepo({
-    projectId: project.id,
-    platform,
-    fullName: "acme/demo",
-    remoteUrl: "https://host/acme/demo",
-    cloneUrl: "https://host/acme/demo.git",
-    defaultBranch: "main",
-  });
-  return repo;
+  return { repo, service };
 }
 
-function signedGithubWebhook(action: string, repoFullName = "acme/demo") {
-  const rawBody = JSON.stringify({
-    action,
-    pull_request: { number: 7, head: { sha: "abc123" } },
-    repository: { full_name: repoFullName },
-  });
-  const digest = createHmac("sha256", GH_SECRET).update(rawBody).digest("hex");
-  return {
-    headers: {
-      "x-github-event": "pull_request",
-      "x-hub-signature-256": `sha256=${digest}`,
-    },
-    rawBody,
-  };
-}
+const task = {
+  platform: "github" as Platform,
+  repoFullName: "acme/demo",
+  cloneUrl: "https://github.com/acme/demo.git",
+  prNumber: 7,
+};
 
-test("TriggerService: webhook creates exactly one job for a repeated PR event", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
+test("TaskService: auto-provisions project + repo and creates one job", async () => {
+  const { repo, service } = await makeService();
+  // No project/repo pre-registered — the task is self-contained.
+  assert.equal((await repo.listProjects()).length, 0);
 
-  const first = await service.handleWebhook("github", signedGithubWebhook("opened"));
-  assert.equal(first.status, "created");
+  const outcome = await service.createTask(task);
+  assert.equal(outcome.status, "created");
 
-  const second = await service.handleWebhook("github", signedGithubWebhook("synchronize"));
-  assert.equal(second.status, "deduped");
-  assert.equal(second.status === "deduped" && second.jobId, first.status === "created" && first.jobId);
+  // A default project and an ad-hoc repo were provisioned.
+  assert.equal((await repo.listProjects()).length, 1);
+  const r = await repo.findRepoByFullName("github", "acme/demo");
+  assert.equal(r?.cloneUrl, "https://github.com/acme/demo.git");
 
+  // PR metadata was fetched from the provider and persisted.
   assert.equal((await repo.listReviewJobs()).length, 1);
-  // PR metadata was enriched and persisted.
-  const prs = await repo.listReviewJobs();
-  const pr = await repo.getPullRequest(prs[0]!.pullRequestId);
+  const pr = await repo.getPullRequest(
+    outcome.status === "created" ? outcome.pullRequestId : "",
+  );
   assert.equal(pr?.title, "Add feature");
   assert.equal(pr?.headSha, "abc123");
 });
 
-test("TriggerService: rejects an invalid signature", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-  const wh = signedGithubWebhook("opened");
-  const tampered = { ...wh, rawBody: `${wh.rawBody} ` };
-  const outcome = await service.handleWebhook("github", tampered);
-  assert.equal(outcome.status, "rejected");
-  assert.equal((await repo.listReviewJobs()).length, 0);
-});
-
-test("TriggerService: ignores non-reviewable actions", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-  const outcome = await service.handleWebhook("github", signedGithubWebhook("closed"));
-  assert.equal(outcome.status, "ignored");
-  assert.equal((await repo.listReviewJobs()).length, 0);
-});
-
-test("TriggerService: closing a PR cancels its pending job", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-  // Open → creates a pending job.
-  const created = await service.handleWebhook("github", signedGithubWebhook("opened"));
-  assert.equal(created.status, "created");
-  const jobId = created.status === "created" ? created.jobId : "";
-
-  // Close → the pending job is cancelled (failed), not left dangling.
-  const closed = await service.handleWebhook("github", signedGithubWebhook("closed"));
-  assert.equal(closed.status, "ignored");
-  assert.match(
-    closed.status === "ignored" ? closed.reason : "",
-    /cancelled 1 pending job/,
-  );
-  assert.equal((await repo.getReviewJob(jobId))?.status, "failed");
-});
-
-test("TriggerService: ignores events for unmonitored repos", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-  const outcome = await service.handleWebhook(
-    "github",
-    signedGithubWebhook("opened", "other/repo"),
-  );
-  assert.equal(outcome.status, "ignored");
-});
-
-test("TriggerService: polling discovers a PR once and dedupes on re-poll", async () => {
-  const repo = await setup("gitlab");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-
-  const round1 = await service.pollAll();
-  assert.equal(round1.length, 1);
-  assert.equal(round1[0]?.status, "created");
-
-  const round2 = await service.pollAll();
-  assert.equal(round2[0]?.status, "deduped");
-
-  assert.equal((await repo.listReviewJobs()).length, 1);
-});
-
-test("TriggerService: a new job is created after the previous one finishes", async () => {
-  const repo = await setup("github");
-  const service = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
-  const first = await service.handleWebhook("github", signedGithubWebhook("opened"));
+test("TaskService: a repeated task for the same PR is deduped", async () => {
+  const { repo, service } = await makeService();
+  const first = await service.createTask(task);
   assert.equal(first.status, "created");
+
+  const second = await service.createTask(task);
+  assert.equal(second.status, "deduped");
+  assert.equal(
+    second.status === "deduped" && second.jobId,
+    first.status === "created" && first.jobId,
+  );
+  assert.equal((await repo.listReviewJobs()).length, 1);
+  // The default project is reused, not re-created.
+  assert.equal((await repo.listProjects()).length, 1);
+});
+
+test("TaskService: a new job is created after the previous one finishes", async () => {
+  const { repo, service } = await makeService();
+  const first = await service.createTask(task);
   const jobId = first.status === "created" ? first.jobId : "";
   await repo.transitionReviewJob(jobId, "running");
   await repo.transitionReviewJob(jobId, "succeeded");
 
-  const again = await service.handleWebhook("github", signedGithubWebhook("synchronize"));
+  const again = await service.createTask(task);
   assert.equal(again.status, "created");
   assert.equal((await repo.listReviewJobs()).length, 2);
+});
+
+test("TaskService: derives a clone URL when the task omits one", async () => {
+  const { repo, service } = await makeService();
+  await service.createTask({
+    platform: "github",
+    repoFullName: "acme/demo",
+    prNumber: 7,
+  });
+  const r = await repo.findRepoByFullName("github", "acme/demo");
+  assert.equal(r?.cloneUrl, "https://github.com/acme/demo.git");
 });

@@ -15,12 +15,14 @@ test("web build emits a static index.html artifact", async () => {
   await run(process.execPath, [resolve(root, "scripts/build.mjs")]);
   const html = await readFile(resolve(dist, "index.html"), "utf8");
   assert.match(html, /ReviewPilot/);
-  assert.match(html, /<div id="app"|<main id="app"/);
-  // Dashboard sections for projects + jobs are present.
-  assert.match(html, /id="projects"/);
+  // Sidebar nav switches the Dashboard + New task views.
+  assert.match(html, /data-view="dashboard"/);
+  assert.match(html, /data-view="new"/);
+  // Task list + manual new-task form are present.
   assert.match(html, /id="jobs"/);
+  assert.match(html, /id="task-form"/);
   // Embedded mock data hydrates the UI standalone and hits the REST API at runtime.
   assert.match(html, /id="mock-data"/);
-  assert.match(html, /\/api\/projects/);
+  assert.match(html, /\/api\/tasks/);
   assert.match(html, /\/api\/jobs/);
 });

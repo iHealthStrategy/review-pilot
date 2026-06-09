@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { createHmac } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { startAppServer } from "../src/app.js";
@@ -9,13 +8,11 @@ import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import { GitHubProvider } from "../src/providers/github-provider.js";
 import type { GitProvider } from "../src/providers/git-provider.js";
 import { ReviewService } from "../src/review/review-service.js";
-import { TriggerService } from "../src/trigger/trigger-service.js";
+import { TaskService } from "../src/trigger/trigger-service.js";
 import { Worker } from "../src/worker/worker.js";
 import { FakeCloner } from "./fake-cloner.js";
 import { FakeHttpClient, type Route } from "./fake-http-client.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
-
-const SECRET = "whsecret";
 
 const ghPull = {
   number: 7,
@@ -38,23 +35,9 @@ const routes: Route[] = [
   { method: "POST", urlIncludes: "issues/7/comments", body: { id: 999, html_url: "https://github.com/acme/demo/pull/7#c999" } },
 ];
 
-test("e2e: webhook → job → mock review → findings → comment write-back → API query", async () => {
+test("e2e: POST /api/tasks → job → mock review → findings → comment write-back → API query", async () => {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
-  const project = await repo.createProject({
-    name: "demo",
-    platform: "github",
-    defaultEngine: "mock",
-    enabledEngines: ["mock"],
-  });
-  await repo.createRepo({
-    projectId: project.id,
-    platform: "github",
-    fullName: "acme/demo",
-    remoteUrl: "https://github.com/acme/demo",
-    cloneUrl: "https://github.com/acme/demo.git",
-    defaultBranch: "main",
-  });
 
   // One FakeHttpClient instance backs the provider so we can assert the
   // write-back POST actually happened over the (mock) network.
@@ -62,11 +45,16 @@ test("e2e: webhook → job → mock review → findings → comment write-back �
   const provider = new GitHubProvider(http, {
     apiBase: "https://api.github.com",
     token: "",
-    webhookSecret: SECRET,
+    webhookSecret: "",
   });
   const providerFor = (_p: Platform): GitProvider => provider;
 
-  const triggerService = new TriggerService({ repo, providerFor, defaultEngine: "mock" });
+  const taskService = new TaskService({
+    repo,
+    providerFor,
+    defaultEngine: "mock",
+    enabledEngines: ["mock"],
+  });
   const reviewService = new ReviewService({
     repo,
     config: loadConfig({}),
@@ -75,30 +63,25 @@ test("e2e: webhook → job → mock review → findings → comment write-back �
   });
   const worker = new Worker(repo, reviewService, providerFor);
 
-  const server = startAppServer({ repo, triggerService }, 0);
+  const server = startAppServer({ repo, taskService }, 0);
   try {
     await new Promise<void>((r) => server.once("listening", () => r()));
     const port = (server.address() as AddressInfo).port;
     const base = `http://127.0.0.1:${port}`;
 
-    // 1) Inbound webhook over real HTTP → creates exactly one job.
-    const rawBody = JSON.stringify({
-      action: "opened",
-      pull_request: { number: 7, head: { sha: "abc123" } },
-      repository: { full_name: "acme/demo" },
-    });
-    const sig = `sha256=${createHmac("sha256", SECRET).update(rawBody).digest("hex")}`;
-    const hookRes = await fetch(`${base}/webhook/github`, {
+    // 1) Self-contained task over real HTTP → auto-provisions repo, creates one job.
+    const taskRes = await fetch(`${base}/api/tasks`, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-github-event": "pull_request",
-        "x-hub-signature-256": sig,
-      },
-      body: rawBody,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        platform: "github",
+        repoFullName: "acme/demo",
+        cloneUrl: "https://github.com/acme/demo.git",
+        prNumber: 7,
+      }),
     });
-    assert.equal(hookRes.status, 202);
-    const created = (await hookRes.json()) as { status: string; jobId: string };
+    assert.equal(taskRes.status, 202);
+    const created = (await taskRes.json()) as { status: string; jobId: string };
     assert.equal(created.status, "created");
     const jobId = created.jobId;
 

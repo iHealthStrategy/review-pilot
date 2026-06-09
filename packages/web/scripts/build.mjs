@@ -3,10 +3,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /**
- * Build the Jenkins-like Web UI. Emits a single static `dist/index.html` that
- * renders the ReviewPilot dashboard (monitored projects, configuration forms,
- * review jobs with progress, and a job detail view with findings + logs). It
- * hydrates from the server REST API at runtime (`/api/projects`, `/api/jobs`),
+ * Build the task-driven Web UI. Emits a single static `dist/index.html` with a
+ * left sidebar switching two views:
+ *   - Dashboard: the review tasks (jobs) list + a detail panel (findings/logs)
+ *   - New task:  a manual form that POSTs a self-contained review task
+ * It hydrates from the server REST API at runtime (`/api/jobs`, `/api/tasks`),
  * sends the configured bearer token, and falls back to embedded mock data so
  * the built artifact renders standalone with no server.
  */
@@ -16,19 +17,10 @@ const outFile = resolve(distDir, "index.html");
 
 // Mock data mirrors the server DTO shapes (see packages/server/src/api).
 const MOCK = {
-  projects: [
-    {
-      id: "prj_demo",
-      name: "demo",
-      platform: "github",
-      defaultEngine: "mock",
-      enabledEngines: ["mock", "claude-code"],
-    },
-  ],
   jobs: [
     {
       id: "job_1",
-      engine: "mock",
+      engine: "claude-code",
       status: "succeeded",
       progress: 100,
       pullRequest: { number: 7, title: "Add feature", url: "#" },
@@ -52,7 +44,14 @@ const html = `<!doctype html>
       body { font-family: system-ui, sans-serif; margin: 0; background: #0f1115; color: #e6e6e6; }
       header { background: #161a22; padding: 12px 20px; border-bottom: 1px solid #2a2f3a; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
       h1 { font-size: 18px; margin: 0; }
-      main { padding: 20px; max-width: 1100px; }
+      .layout { display: flex; min-height: calc(100vh - 49px); }
+      nav { width: 160px; background: #11151c; border-right: 1px solid #2a2f3a; padding: 14px 0; flex-shrink: 0; }
+      nav a { display: block; padding: 10px 20px; color: #8b95a5; text-decoration: none; font-size: 14px; border-left: 3px solid transparent; }
+      nav a:hover { background: #161a22; color: #e6e6e6; }
+      nav a.active { color: #fff; border-left-color: #1f6feb; background: #161a22; }
+      main { padding: 20px; flex: 1; max-width: 1100px; }
+      .view { display: none; }
+      .view.active { display: block; }
       section { margin-bottom: 28px; }
       h2 { font-size: 14px; text-transform: uppercase; color: #8b95a5; }
       table { width: 100%; border-collapse: collapse; }
@@ -70,7 +69,11 @@ const html = `<!doctype html>
       input, select, button { background: #11151c; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
       button { cursor: pointer; background: #1f6feb; border-color: #1f6feb; color: #fff; }
       button.secondary { background: #232833; border-color: #2a2f3a; }
-      fieldset { border: 1px solid #232833; border-radius: 8px; padding: 10px 14px; }
+      fieldset { border: 1px solid #232833; border-radius: 8px; padding: 14px; max-width: 520px; }
+      fieldset form { flex-direction: column; align-items: stretch; }
+      fieldset label { font-size: 12px; color: #8b95a5; display: block; margin-bottom: 2px; }
+      fieldset .field { margin-bottom: 10px; }
+      fieldset input, fieldset select { width: 100%; box-sizing: border-box; }
       legend { color: #8b95a5; font-size: 12px; text-transform: uppercase; }
       .sev { font-weight: 600; }
       .sev-critical { color: #e76e6e; } .sev-major { color: #e7a16e; }
@@ -90,37 +93,50 @@ const html = `<!doctype html>
         <button class="secondary" id="save-token">Save</button>
       </div>
     </header>
-    <main id="app">
-      <section id="projects"><h2>Monitored projects</h2><div data-loading>Loading…</div></section>
-      <section id="repos"><h2>Monitored repositories</h2><div data-loading>Loading…</div></section>
-      <section id="new-config">
-        <h2>Configuration</h2>
-        <fieldset>
-          <legend>New project</legend>
-          <form id="project-form">
-            <input name="name" placeholder="name" required />
-            <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
-            <select name="defaultEngine">${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
-            <input name="enabledEngines" placeholder="enabled engines (comma-separated)" value="mock" style="width:240px" />
-            <button type="submit">Create project</button>
-          </form>
-        </fieldset>
-        <fieldset>
-          <legend>Add repository</legend>
-          <form id="repo-form">
-            <select name="projectId" id="repo-project"></select>
-            <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
-            <input name="fullName" placeholder="owner/repo" required />
-            <input name="remoteUrl" placeholder="https://github.com/owner/repo" required />
-            <input name="cloneUrl" placeholder="https://github.com/owner/repo.git" required />
-            <input name="defaultBranch" placeholder="main" value="main" />
-            <button type="submit">Add repo</button>
-          </form>
-        </fieldset>
-      </section>
-      <section id="jobs"><h2>Review jobs</h2><div data-loading>Loading…</div></section>
-      <section id="detail"></section>
-    </main>
+    <div class="layout">
+      <nav>
+        <a href="#dashboard" data-view="dashboard">Dashboard</a>
+        <a href="#new" data-view="new">New task</a>
+      </nav>
+      <main>
+        <div class="view" id="view-dashboard">
+          <section id="jobs"><h2>Review tasks</h2><div data-loading>Loading…</div></section>
+          <section id="detail"></section>
+        </div>
+        <div class="view" id="view-new">
+          <section>
+            <h2>New review task</h2>
+            <fieldset>
+              <legend>Review a pull request</legend>
+              <form id="task-form">
+                <div class="field">
+                  <label>Platform</label>
+                  <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
+                </div>
+                <div class="field">
+                  <label>Repository (owner/repo)</label>
+                  <input name="repoFullName" placeholder="owner/repo" required />
+                </div>
+                <div class="field">
+                  <label>Clone URL (optional — derived from repo when blank)</label>
+                  <input name="cloneUrl" placeholder="https://github.com/owner/repo.git" />
+                </div>
+                <div class="field">
+                  <label>Pull request number</label>
+                  <input name="prNumber" type="number" min="1" placeholder="123" required />
+                </div>
+                <div class="field">
+                  <label>Engine (optional)</label>
+                  <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
+                </div>
+                <button type="submit">Start review</button>
+              </form>
+              <p class="muted" id="task-result"></p>
+            </fieldset>
+          </section>
+        </div>
+      </main>
+    </div>
     <script id="mock-data" type="application/json">${JSON.stringify(MOCK)}</script>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
@@ -143,44 +159,26 @@ const html = `<!doctype html>
         const o = Object.assign({}, opts || {});
         o.headers = headers(o.headers);
         const res = await fetch(path, o);
-        if (!res.ok) throw new Error("HTTP " + res.status + " for " + path);
+        if (!res.ok) {
+          let detail = "";
+          try { detail = (await res.json()).error || ""; } catch {}
+          throw new Error("HTTP " + res.status + (detail ? ": " + detail : "") + " for " + path);
+        }
         return res.status === 204 ? null : res.json();
       }
       async function load(path, fallback) {
         try { return await api(path); } catch { return fallback; }
       }
 
-      function renderProjects(projects) {
-        const rows = projects.map((p) =>
-          \`<tr><td>\${esc(p.name)}</td><td>\${esc(p.platform)}</td><td>\${esc(p.defaultEngine)}</td><td>\${(p.enabledEngines||[]).map(esc).join(", ")}</td></tr>\`
-        ).join("");
-        document.querySelector("#projects").innerHTML =
-          \`<h2>Monitored projects</h2><table><thead><tr><th>Name</th><th>Platform</th><th>Default engine</th><th>Enabled</th></tr></thead><tbody>\${rows}</tbody></table>\`;
-        const sel = document.getElementById("repo-project");
-        if (sel) sel.innerHTML = projects.map((p) => \`<option value="\${esc(p.id)}">\${esc(p.name)}</option>\`).join("");
+      // --- view routing (sidebar + hash) ---
+      function showView(name) {
+        const view = name === "new" ? "new" : "dashboard";
+        document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+        document.getElementById("view-" + view)?.classList.add("active");
+        document.querySelectorAll("nav a").forEach((a) =>
+          a.classList.toggle("active", a.getAttribute("data-view") === view));
       }
-
-      // Aggregate repos across all projects so a successful "Add repo" is
-      // immediately visible (the form alone gave no feedback before).
-      async function loadRepos(projects) {
-        const byProject = {};
-        for (const p of projects) byProject[p.id] = p.name;
-        const lists = await Promise.all(
-          projects.map((p) => load("/api/projects/" + p.id + "/repos", []))
-        );
-        return lists.flat().map((r) => ({ ...r, projectName: byProject[r.projectId] || r.projectId }));
-      }
-
-      function renderRepos(repos) {
-        const rows = repos.map((r) =>
-          \`<tr><td>\${esc(r.projectName)}</td><td>\${esc(r.platform)}</td><td><code>\${esc(r.fullName)}</code></td><td>\${esc(r.defaultBranch)}</td></tr>\`
-        ).join("");
-        document.querySelector("#repos").innerHTML =
-          \`<h2>Monitored repositories</h2>\` +
-          (repos.length
-            ? \`<table><thead><tr><th>Project</th><th>Platform</th><th>Repository</th><th>Default branch</th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No repositories registered yet. Add one below.</p>\`);
-      }
+      window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
       function renderJobs(jobs) {
         const rows = jobs.map((j) => {
@@ -189,7 +187,10 @@ const html = `<!doctype html>
           return \`<tr class="clickable" data-job="\${esc(j.id)}"><td>#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} finding(s)</td></tr>\`;
         }).join("");
         document.querySelector("#jobs").innerHTML =
-          \`<h2>Review jobs</h2><table><thead><tr><th>Pull request</th><th>Engine</th><th>Status</th><th>Progress</th><th>Findings</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+          \`<h2>Review tasks</h2>\` +
+          (jobs.length
+            ? \`<table><thead><tr><th>Pull request</th><th>Engine</th><th>Status</th><th>Progress</th><th>Findings</th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">No review tasks yet. Create one from <a href="#new" style="color:#4c8bf5">New task</a> or via POST /api/tasks.</p>\`);
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
           tr.onclick = () => showJob(tr.getAttribute("data-job"));
         });
@@ -206,7 +207,7 @@ const html = `<!doctype html>
           ? \`<button id="retry">Retry job</button>\`
           : "";
         el.innerHTML =
-          \`<h2>Job \${esc(job.id)} \${retry}</h2>\` +
+          \`<h2>Task \${esc(job.id)} \${retry}</h2>\` +
           \`<p class="muted">engine \${esc(job.engine)} · status \${esc(job.status)} · progress \${Number(job.progress)||0}%\${job.error ? " · error: " + esc(job.error) : ""}</p>\` +
           \`<h3>Findings (\${(job.findings||[]).length})</h3><ul>\${findings || "<li class='muted'>none</li>"}</ul>\` +
           \`<h3>Logs</h3><pre>\${(job.logs||[]).map(esc).join("\\n") || "(none)"}</pre>\`;
@@ -217,58 +218,39 @@ const html = `<!doctype html>
         };
       }
 
-      document.getElementById("project-form").onsubmit = async (ev) => {
+      document.getElementById("task-form").onsubmit = async (ev) => {
         ev.preventDefault();
         const f = ev.target;
-        try {
-          await api("/api/projects", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: f.name.value,
-              platform: f.platform.value,
-              defaultEngine: f.defaultEngine.value,
-              enabledEngines: f.enabledEngines.value.split(",").map((s) => s.trim()).filter(Boolean),
-            }),
-          });
-          f.reset(); refresh();
-        } catch (e) { alert(e.message); }
-      };
-
-      document.getElementById("repo-form").onsubmit = async (ev) => {
-        ev.preventDefault();
-        const f = ev.target;
-        if (!f.projectId.value) { alert("Create a project first, then add a repository to it."); return; }
-        // Disable the button while the request is in flight so a slow response
-        // can't be double-submitted into duplicate repos.
+        const out = document.getElementById("task-result");
         const btn = f.querySelector('button[type="submit"]');
         const label = btn.textContent;
-        btn.disabled = true; btn.textContent = "Adding…";
+        btn.disabled = true; btn.textContent = "Starting…"; out.textContent = "";
         try {
-          const res = await api("/api/projects/" + f.projectId.value + "/repos", {
+          const payload = {
+            platform: f.platform.value,
+            repoFullName: f.repoFullName.value,
+            prNumber: Number(f.prNumber.value),
+          };
+          if (f.cloneUrl.value) payload.cloneUrl = f.cloneUrl.value;
+          if (f.engine.value) payload.engine = f.engine.value;
+          const res = await api("/api/tasks", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              platform: f.platform.value,
-              fullName: f.fullName.value,
-              remoteUrl: f.remoteUrl.value,
-              cloneUrl: f.cloneUrl.value,
-              defaultBranch: f.defaultBranch.value || "main",
-            }),
+            body: JSON.stringify(payload),
           });
-          f.reset(); f.defaultBranch.value = "main";
+          out.textContent = "✓ Task " + res.taskId + " (" + res.status + "). Switching to Dashboard…";
+          f.reset();
           await refresh();
-          btn.textContent = "✓ Added"; setTimeout(() => { btn.textContent = label; }, 1500);
-        } catch (e) { alert(e.message); btn.textContent = label; }
-        finally { btn.disabled = false; }
+          setTimeout(() => { location.hash = "#dashboard"; }, 800);
+        } catch (e) { out.textContent = "✗ " + e.message; }
+        finally { btn.disabled = false; btn.textContent = label; }
       };
 
       async function refresh() {
-        const projects = await load("/api/projects", MOCK.projects);
-        renderProjects(projects);
-        renderRepos(await loadRepos(projects));
         renderJobs(await load("/api/jobs", MOCK.jobs));
       }
+
+      showView(location.hash.slice(1));
       refresh();
       setInterval(refresh, 5000);
     </script>

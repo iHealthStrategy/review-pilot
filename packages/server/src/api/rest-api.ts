@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import { EntityNotFoundError, type Repository } from "../persistence/repository.js";
-import type { TriggerService } from "../trigger/trigger-service.js";
+import type { TaskService } from "../trigger/trigger-service.js";
 
 const PLATFORMS: readonly Platform[] = ["github", "gitlab"];
 const ENGINES: readonly ReviewEngineKind[] = [
@@ -25,7 +25,7 @@ interface ApiResult {
 type Handler = (
   ctx: { params: Record<string, string>; body: unknown; query: URLSearchParams },
   repo: Repository,
-  trigger: TriggerService | undefined,
+  tasks: TaskService | undefined,
 ) => Promise<ApiResult>;
 
 interface Route {
@@ -181,25 +181,34 @@ const ROUTES: Route[] = [
     },
   },
   {
-    // API-based review trigger — alternative to the webhook path for GitHub
-    // Actions and other callers that can't receive inbound webhooks.
-    // Requires the repo to be monitored (registered under a project).
+    // Self-contained review task — the single ingress for reviews. Callers
+    // (GitHub Actions, other services, the Web UI form) POST everything needed;
+    // no monitored project/repo has to be pre-registered.
     method: "POST",
-    pattern: /^\/api\/trigger$/,
-    handler: async ({ body }, _repo, trigger) => {
-      if (!trigger) throw new HttpError(503, "trigger service not available");
+    pattern: /^\/api\/tasks$/,
+    handler: async ({ body }, _repo, tasks) => {
+      if (!tasks) throw new HttpError(503, "task service not available");
       const b = (body ?? {}) as Record<string, unknown>;
       const platform = asEnum(b.platform, PLATFORMS, "platform");
       const repoFullName = asString(b.repoFullName, "repoFullName");
-      const prNumber = typeof b.prNumber === "number" ? b.prNumber : Number.parseInt(String(b.prNumber ?? ""), 10);
+      const prNumber =
+        typeof b.prNumber === "number"
+          ? b.prNumber
+          : Number.parseInt(String(b.prNumber ?? ""), 10);
       if (!Number.isFinite(prNumber) || prNumber <= 0) {
         throw new HttpError(400, "field 'prNumber' must be a positive integer");
       }
-      const outcome = await trigger.enqueueByNumber(platform, repoFullName, prNumber);
+      const outcome = await tasks.createTask({
+        platform,
+        repoFullName,
+        prNumber,
+        ...(typeof b.cloneUrl === "string" && b.cloneUrl ? { cloneUrl: b.cloneUrl } : {}),
+        ...(b.engine ? { engine: asEnum(b.engine, ENGINES, "engine") } : {}),
+      });
       if (outcome.status !== "created" && outcome.status !== "deduped") {
-        throw new HttpError(404, outcome.reason);
+        throw new HttpError(400, outcome.reason);
       }
-      return ok({ jobId: outcome.jobId, status: outcome.status }, 202);
+      return ok({ taskId: outcome.jobId, jobId: outcome.jobId, status: outcome.status }, 202);
     },
   },
 ];
@@ -222,8 +231,8 @@ function readBody(req: IncomingMessage): Promise<string> {
 export interface ApiOptions {
   /** When set, every route except /api/health requires `Bearer <token>`. */
   apiToken?: string;
-  /** Required for the POST /api/trigger route. */
-  triggerService?: TriggerService;
+  /** Required for the POST /api/tasks route. */
+  taskService?: TaskService;
 }
 
 function authorized(req: IncomingMessage, token: string): boolean {
@@ -233,7 +242,7 @@ function authorized(req: IncomingMessage, token: string): boolean {
 
 export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const token = options.apiToken ?? "";
-  const trigger = options.triggerService;
+  const tasks = options.taskService;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const parsed = new URL(req.url ?? "/", "http://localhost");
@@ -264,7 +273,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
       const result = await route.handler(
         { params, body, query: parsed.searchParams },
         repo,
-        trigger,
+        tasks,
       );
       send(result.status, result.body);
     } catch (err) {

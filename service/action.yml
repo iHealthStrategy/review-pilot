@@ -71,12 +71,12 @@ runs:
             -H "Content-Type: application/json" \
             -H "$AUTH_HEADER" \
             -d "$PAYLOAD" \
-            "${BASE}/api/trigger")
+            "${BASE}/api/tasks")
         else
           RESP=$(curl -sf -X POST \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" \
-            "${BASE}/api/trigger")
+            "${BASE}/api/tasks")
         fi
 
         JOB_ID=$(echo "$RESP" | jq -r '.jobId // empty')
