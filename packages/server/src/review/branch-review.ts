@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
@@ -64,6 +64,9 @@ export class BranchReviewService {
     const engine = this.deps.createEngine(kind);
 
     const root = this.deps.workspaceRoot ?? tmpdir();
+    // Ensure the workspace root exists; recursive is idempotent under
+    // concurrency, and each task gets its own unique mkdtemp subdir below.
+    await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-branch-"));
     try {
       await this.run(["clone", task.cloneUrl, dir]);

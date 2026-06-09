@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner } from "./command-runner.js";
@@ -39,6 +39,10 @@ export class GitCloner implements Cloner {
 
   async clone(cloneUrl: string, ref: string): Promise<Workspace> {
     const root = this.options.workspaceRoot ?? tmpdir();
+    // Ensure the workspace root exists (mkdtemp needs an existing parent).
+    // recursive: true is idempotent, so concurrent jobs racing to create it
+    // is safe; each then gets its own unique mkdtemp subdir below.
+    await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-ws-"));
     const depth = this.options.depth ?? 1;
     const cloneArgs = ["clone"];
