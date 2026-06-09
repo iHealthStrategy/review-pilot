@@ -28,7 +28,10 @@ export interface AppDeps {
  */
 export function createAppHandler(deps: AppDeps) {
   const webhook = createWebhookHandler(deps.triggerService);
-  const api = createApiHandler(deps.repo, { apiToken: deps.apiToken });
+  const api = createApiHandler(deps.repo, {
+    apiToken: deps.apiToken,
+    triggerService: deps.triggerService,
+  });
   const serveStatic = createStaticHandler(resolveWebDistDir(deps.webDistDir ?? ""));
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";

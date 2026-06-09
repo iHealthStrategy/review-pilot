@@ -90,6 +90,29 @@ export class TriggerService {
   }
 
   /**
+   * API-triggered review: fetch PR metadata from the provider, upsert the PR
+   * record, and enqueue a job — same dedup as the webhook path.
+   * Returns "ignored" (with a reason) when the repo is not monitored.
+   */
+  async enqueueByNumber(
+    platform: Platform,
+    repoFullName: string,
+    prNumber: number,
+  ): Promise<TriggerOutcome> {
+    const repo = await this.deps.repo.findRepoByFullName(platform, repoFullName);
+    if (!repo) {
+      return { status: "ignored", reason: `repo not monitored: ${repoFullName}` };
+    }
+    const provider = this.deps.providerFor(platform);
+    const meta = await provider.getPullRequest({ fullName: repoFullName }, prNumber);
+    const pr = await this.deps.repo.upsertPullRequest({
+      repoId: repo.id,
+      ...prFields(meta),
+    });
+    return this.enqueue(pr);
+  }
+
+  /**
    * Polling fallback: scan every monitored repo for open PRs and enqueue any
    * that lack an active job. Shares dedup with the webhook path.
    */

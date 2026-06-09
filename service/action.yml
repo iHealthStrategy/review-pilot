@@ -1,0 +1,145 @@
+name: "ReviewPilot (service)"
+description: "Trigger an AI code review via a self-hosted ReviewPilot service and wait for the result."
+author: "ReviewPilot"
+branding:
+  icon: "git-pull-request"
+  color: "blue"
+
+inputs:
+  service-url:
+    description: "Base URL of the ReviewPilot service (e.g. https://review.example.com). No trailing slash."
+    required: true
+  api-token:
+    description: "Bearer token for the service management API (API_TOKEN on the server). Leave empty if auth is disabled."
+    required: false
+    default: ""
+  github-token:
+    description: "GitHub token used to read PR metadata. Pass github.token."
+    required: false
+    default: ${{ github.token }}
+  timeout-seconds:
+    description: "Max seconds to wait for the review job to complete before failing."
+    required: false
+    default: "600"
+
+outputs:
+  job-id:
+    description: "Internal job ID on the ReviewPilot service."
+    value: ${{ steps.trigger.outputs.job_id }}
+  findings:
+    description: "Number of findings reported."
+    value: ${{ steps.poll.outputs.findings }}
+  conclusion:
+    description: "Review conclusion: success | neutral | failure."
+    value: ${{ steps.poll.outputs.conclusion }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Trigger review
+      id: trigger
+      shell: bash
+      env:
+        SERVICE_URL: ${{ inputs.service-url }}
+        API_TOKEN: ${{ inputs.api-token }}
+        REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        BASE="${SERVICE_URL%/}"
+
+        # Health check
+        echo "Checking service at ${BASE}/api/health ..."
+        HEALTH=$(curl -sf "${BASE}/api/health" || echo "{}")
+        echo "$HEALTH" | grep -q '"ok"' || { echo "::error::ReviewPilot service health check failed (${BASE}/api/health)"; exit 1; }
+
+        # Build auth header
+        AUTH_HEADER=""
+        if [ -n "$API_TOKEN" ]; then
+          AUTH_HEADER="Authorization: Bearer ${API_TOKEN}"
+        fi
+
+        # Trigger
+        echo "Triggering review for ${REPO} PR #${PR_NUMBER} ..."
+        PAYLOAD=$(jq -n \
+          --arg platform "github" \
+          --arg repo "$REPO" \
+          --argjson pr "$PR_NUMBER" \
+          '{platform: $platform, repoFullName: $repo, prNumber: $pr}')
+
+        if [ -n "$AUTH_HEADER" ]; then
+          RESP=$(curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -H "$AUTH_HEADER" \
+            -d "$PAYLOAD" \
+            "${BASE}/api/trigger")
+        else
+          RESP=$(curl -sf -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${BASE}/api/trigger")
+        fi
+
+        JOB_ID=$(echo "$RESP" | jq -r '.jobId // empty')
+        JOB_STATUS=$(echo "$RESP" | jq -r '.status // empty')
+
+        if [ -z "$JOB_ID" ]; then
+          echo "::error::Failed to create review job. Response: $RESP"
+          exit 1
+        fi
+
+        echo "Job created: id=${JOB_ID} status=${JOB_STATUS}"
+        echo "job_id=${JOB_ID}" >> "$GITHUB_OUTPUT"
+
+    - name: Wait for review to complete
+      id: poll
+      shell: bash
+      env:
+        SERVICE_URL: ${{ inputs.service-url }}
+        API_TOKEN: ${{ inputs.api-token }}
+        JOB_ID: ${{ steps.trigger.outputs.job_id }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+      run: |
+        BASE="${SERVICE_URL%/}"
+        AUTH_HEADER=""
+        if [ -n "$API_TOKEN" ]; then
+          AUTH_HEADER="Authorization: Bearer ${API_TOKEN}"
+        fi
+
+        DEADLINE=$(( $(date +%s) + TIMEOUT ))
+        INTERVAL=10
+
+        echo "Polling job ${JOB_ID} (timeout: ${TIMEOUT}s) ..."
+        while true; do
+          if [ "$(date +%s)" -gt "$DEADLINE" ]; then
+            echo "::error::Timed out waiting for review job ${JOB_ID} to complete"
+            exit 1
+          fi
+
+          if [ -n "$AUTH_HEADER" ]; then
+            JOB=$(curl -sf -H "$AUTH_HEADER" "${BASE}/api/jobs/${JOB_ID}" || echo "{}")
+          else
+            JOB=$(curl -sf "${BASE}/api/jobs/${JOB_ID}" || echo "{}")
+          fi
+
+          STATUS=$(echo "$JOB" | jq -r '.status // "unknown"')
+          echo "  status: ${STATUS}"
+
+          case "$STATUS" in
+            completed|failed)
+              FINDINGS=$(echo "$JOB" | jq '[.findings // [] | length] | .[0]')
+              # Map job status to check conclusion
+              if [ "$STATUS" = "completed" ]; then
+                CONCLUSION="success"
+              else
+                CONCLUSION="failure"
+              fi
+              echo "findings=${FINDINGS}" >> "$GITHUB_OUTPUT"
+              echo "conclusion=${CONCLUSION}" >> "$GITHUB_OUTPUT"
+              echo "Review job ${JOB_ID} finished: status=${STATUS} findings=${FINDINGS}"
+              break
+              ;;
+            *)
+              sleep "$INTERVAL"
+              ;;
+          esac
+        done
