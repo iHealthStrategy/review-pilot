@@ -112,10 +112,20 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/projects\/(?<id>[^/]+)\/repos$/,
     handler: async ({ params, body }, repo) => {
       const b = (body ?? {}) as Record<string, unknown>;
+      const platform = asEnum(b.platform, PLATFORMS, "platform");
+      const fullName = asString(b.fullName, "fullName");
+      // Idempotent: a repo is uniquely identified within a project by
+      // (platform, fullName). If it's already registered, return the existing
+      // record (200) instead of creating a duplicate — guards against
+      // double-submits and retries.
+      const existing = (await repo.listReposByProject(params.id!)).find(
+        (r) => r.platform === platform && r.fullName === fullName,
+      );
+      if (existing) return ok(existing, 200);
       const created = await repo.createRepo({
         projectId: params.id!,
-        platform: asEnum(b.platform, PLATFORMS, "platform"),
-        fullName: asString(b.fullName, "fullName"),
+        platform,
+        fullName,
         remoteUrl: asString(b.remoteUrl, "remoteUrl"),
         cloneUrl: asString(b.cloneUrl, "cloneUrl"),
         defaultBranch: asString(b.defaultBranch, "defaultBranch"),

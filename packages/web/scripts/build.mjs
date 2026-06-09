@@ -92,6 +92,7 @@ const html = `<!doctype html>
     </header>
     <main id="app">
       <section id="projects"><h2>Monitored projects</h2><div data-loading>Loading…</div></section>
+      <section id="repos"><h2>Monitored repositories</h2><div data-loading>Loading…</div></section>
       <section id="new-config">
         <h2>Configuration</h2>
         <fieldset>
@@ -159,6 +160,28 @@ const html = `<!doctype html>
         if (sel) sel.innerHTML = projects.map((p) => \`<option value="\${esc(p.id)}">\${esc(p.name)}</option>\`).join("");
       }
 
+      // Aggregate repos across all projects so a successful "Add repo" is
+      // immediately visible (the form alone gave no feedback before).
+      async function loadRepos(projects) {
+        const byProject = {};
+        for (const p of projects) byProject[p.id] = p.name;
+        const lists = await Promise.all(
+          projects.map((p) => load("/api/projects/" + p.id + "/repos", []))
+        );
+        return lists.flat().map((r) => ({ ...r, projectName: byProject[r.projectId] || r.projectId }));
+      }
+
+      function renderRepos(repos) {
+        const rows = repos.map((r) =>
+          \`<tr><td>\${esc(r.projectName)}</td><td>\${esc(r.platform)}</td><td><code>\${esc(r.fullName)}</code></td><td>\${esc(r.defaultBranch)}</td></tr>\`
+        ).join("");
+        document.querySelector("#repos").innerHTML =
+          \`<h2>Monitored repositories</h2>\` +
+          (repos.length
+            ? \`<table><thead><tr><th>Project</th><th>Platform</th><th>Repository</th><th>Default branch</th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">No repositories registered yet. Add one below.</p>\`);
+      }
+
       function renderJobs(jobs) {
         const rows = jobs.map((j) => {
           const pr = j.pullRequest || {};
@@ -215,8 +238,14 @@ const html = `<!doctype html>
       document.getElementById("repo-form").onsubmit = async (ev) => {
         ev.preventDefault();
         const f = ev.target;
+        if (!f.projectId.value) { alert("Create a project first, then add a repository to it."); return; }
+        // Disable the button while the request is in flight so a slow response
+        // can't be double-submitted into duplicate repos.
+        const btn = f.querySelector('button[type="submit"]');
+        const label = btn.textContent;
+        btn.disabled = true; btn.textContent = "Adding…";
         try {
-          await api("/api/projects/" + f.projectId.value + "/repos", {
+          const res = await api("/api/projects/" + f.projectId.value + "/repos", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -227,12 +256,17 @@ const html = `<!doctype html>
               defaultBranch: f.defaultBranch.value || "main",
             }),
           });
-          f.reset(); f.defaultBranch.value = "main"; refresh();
-        } catch (e) { alert(e.message); }
+          f.reset(); f.defaultBranch.value = "main";
+          await refresh();
+          btn.textContent = "✓ Added"; setTimeout(() => { btn.textContent = label; }, 1500);
+        } catch (e) { alert(e.message); btn.textContent = label; }
+        finally { btn.disabled = false; }
       };
 
       async function refresh() {
-        renderProjects(await load("/api/projects", MOCK.projects));
+        const projects = await load("/api/projects", MOCK.projects);
+        renderProjects(projects);
+        renderRepos(await loadRepos(projects));
         renderJobs(await load("/api/jobs", MOCK.jobs));
       }
       refresh();
