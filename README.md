@@ -1,39 +1,46 @@
 # ReviewPilot
 
-Server-side **continuous code review** platform. ReviewPilot watches your
-GitHub and GitLab repositories, and when a pull/merge request appears it
-automatically syncs the **full repository** and runs a configurable AI review
-engine (Cursor / Claude Code / Codex) that reviews the change **in the context
-of the whole codebase** — not just the diff. Results are delivered two ways:
+Server-side **continuous code review** platform. ReviewPilot is **task-driven**:
+a caller (a GitHub Action, CI, or another service) POSTs a self-contained review
+task to `POST /api/tasks`, and the service syncs the **full repository** and runs
+a configurable AI review engine (Cursor / Claude Code / Codex) that reviews the
+change **in the context of the whole codebase** — not just the diff. A task is
+one of two shapes:
 
-- a **Jenkins-like Web UI** showing monitored projects, jobs, live progress and
-  the structured issue list, and
-- **write-back to the PR/MR** as review comments, closing the loop.
+- **PR mode** (`prNumber`) — reviews a pull/merge request. Persisted as a job,
+  shown in the dashboard, and **written back to the PR** as a summary comment +
+  Check Run. Results also queryable over the API.
+- **Branch-diff mode** (`headBranch` + `baseBranch`) — reviews the diff between
+  two branches with no PR. Headless: runs in the background and delivers the
+  result **only via a callback** (machine-to-machine); not shown in the dashboard.
 
 ## Status
 
-Functional end-to-end: GitHub/GitLab providers, webhook + polling triggers,
+Functional end-to-end: GitHub/GitLab providers, a self-contained task API,
 full-repo sync, pluggable review engines (mock + Claude Code / Cursor / Codex
-CLIs), dual-channel delivery (Web UI + PR comment write-back with update-in-place
-dedup), a bearer-authenticated management API/UI, and `mock`/`postgres`/`mongo`
+CLIs), result delivery on three channels (Web UI, PR comment + Check Run
+write-back with update-in-place dedup, and a JSON callback), a
+bearer-authenticated management API/UI, and `mock`/`postgres`/`mongo`
 persistence — the last designed for stateless cloud deployment.
 
-## Architecture (target)
+## Architecture
 
 ```
-GitHub / GitLab ──webhook (or polling fallback)──▶ Trigger
-                                                     │ creates
-                                                     ▼
-                                                 ReviewJob (queue)
-                                                     │
-            full-repo clone ◀── Worker ──▶ ReviewEngine (mock|cursor|claude-code|codex)
-                                                     │ produces
-                                                     ▼
-                                              Finding[] (file/line/severity/issue/suggestion)
-                                                  │            │
-                                          persist │            │ write-back
-                                                  ▼            ▼
-                                              Web UI       PR/MR comment
+GitHub Action / CI / other service ──POST /api/tasks──▶ TaskService
+                                                          │
+                          ┌───────────────────────────────┴───────────────────────────┐
+                          │ prNumber → PR mode                  headBranch+baseBranch → branch mode
+                          ▼                                     ▼
+                     ReviewJob (queue, persisted)         ephemeral background review
+                          │                                     │
+   full-repo clone ◀── Worker ──▶ ReviewEngine          clone + `git diff base...head` ──▶ ReviewEngine
+                          │  (mock|cursor|claude-code|claude-agent|codex)                   │
+                          ▼ produces                                                        ▼ produces
+                     Finding[] (file/line/severity/issue/suggestion)                   Finding[]
+                       │          │                                                         │
+               persist │          │ write-back                                             │ callback
+                       ▼          ▼                                                         ▼
+                   Web UI    PR/MR comment + Check Run                            POST JSON to caller
 ```
 
 ## Requirements
@@ -56,10 +63,9 @@ npm test
 
 All runtime behaviour is environment-driven (see `.env.example`): database
 driver (`mock`/`sqlite`/`postgres`/`mongo`), default and enabled review engines,
-GitHub and GitLab credentials/webhook secrets, the management-API bearer token,
-and the polling interval used when webhooks are unavailable. Defaults are chosen
-so the whole pipeline runs in `mock` mode with **no external credentials**,
-which is also how the test suite exercises it.
+GitHub and GitLab credentials, and the management-API bearer token. Defaults are
+chosen so the whole pipeline runs in `mock` mode with **no external
+credentials**, which is also how the test suite exercises it.
 
 ### Stateless + MongoDB (cloud deployment)
 
@@ -85,30 +91,72 @@ workers.
 
 A single server (`packages/server/src/app.ts`) dispatches by path prefix:
 
-- `POST /webhook/github`, `POST /webhook/gitlab` — verified PR/MR ingest (falls
-  back to polling when `POLL_INTERVAL_SECONDS > 0` and no webhook is configured).
-  A closed/merged PR cancels any still-pending review for it.
-- `GET/POST /api/projects`, `GET /api/projects/:id`,
-  `GET/POST /api/projects/:id/repos` — project & repo configuration.
+- `POST /api/tasks` — the single ingress for reviews. A self-contained task; no
+  repo has to be pre-registered. Body:
+
+  ```jsonc
+  {
+    "platform": "github",                 // github | gitlab
+    "repoFullName": "owner/repo",
+    "cloneUrl": "https://github.com/owner/repo.git",  // optional; derived when omitted
+    "engine": "claude-code",              // optional; falls back to the server default
+
+    // PR mode — review a pull/merge request:
+    "prNumber": 123,
+
+    // …OR branch-diff mode — review head vs base (no PR), result via callback:
+    "headBranch": "feature/x",
+    "baseBranch": "main",
+    "callback": { "url": "https://caller/hook", "headers": { "Authorization": "Bearer …" } }
+  }
+  ```
+
+  PR mode returns `202 {taskId, jobId, status}` (the worker drains it). Branch
+  mode returns `202 {taskId, status:"accepted"}` and runs in the background,
+  POSTing the result to `callback.url` when done (see "Result callback").
 - `GET /api/jobs`, `GET /api/jobs/:id`, `GET /api/jobs/:id/findings` — review
-  jobs with progress/logs and the structured findings the Web UI renders.
+  jobs (PR mode) with progress/logs and the structured findings the Web UI renders.
 - `POST /api/jobs/:id/retry` — requeue a failed job (the worker drain re-runs it).
+- `GET /api/health` — open liveness probe.
 - `GET /` and other non-API paths — the static **Web UI** dashboard.
 
 When `API_TOKEN` is set, every `/api` route except `/api/health` requires an
 `Authorization: Bearer <token>` header (the Web UI prompts for and stores the
-token). Webhooks are authenticated independently by their platform signatures.
+token). **Set a strong `API_TOKEN` for any internet-exposed deployment** — it is
+the only thing guarding the task ingress.
+
+### Result callback (branch-diff mode)
+
+When a branch-mode task finishes, the service POSTs a JSON body to `callback.url`
+with the caller-supplied headers:
+
+```jsonc
+{
+  "taskId": "task_…",
+  "status": "completed",                 // or "failed"
+  "conclusion": "success" | "neutral",   // completed only
+  "findings": [ { "filePath", "line", "severity", "title", "detail", "suggestion", "category" } ],
+  "error": "…"                            // failed only
+}
+```
+
+Delivery is best-effort (a single POST); the caller owns its own retries/timeout.
 
 ## Deployment
 
-ReviewPilot ships in two shapes that share the same review core:
+ReviewPilot ships in three shapes that share the same review core:
 
 - **A. Long-running service** (below) — central, multi-repo, with a dashboard
-  and persistence (`mock`/`postgres`/`mongo`). Best when you want one console
-  across many repos and org-wide control.
+  and persistence (`mock`/`postgres`/`mongo`). Reviews are fed to it over
+  `POST /api/tasks`. Best when you want one console across many repos and
+  org-wide control.
 - **B. GitHub Action** (one-shot) — an ephemeral runner reviews each PR and
-  exits. **No server, no database, no webhook**; the PR/checks are the store.
-  Best for GitHub-centric, per-repo use. See "Deploy as a GitHub Action".
+  exits. **No server, no database**; the PR/checks are the store. Best for
+  GitHub-centric, per-repo use. See "Deploy as a GitHub Action".
+- **C. Service action** (`service/action.yml`) — a thin GitHub Action that POSTs
+  the PR to a **self-hosted service (A)** and waits for the result. Use it to
+  drive the central service from each repo's CI. See "Drive the service from
+  GitHub Actions".
 
 ### Deploy as a GitHub Action (no server, no database)
 
@@ -217,8 +265,9 @@ DB_DRIVER=postgres docker compose --profile postgres up --build
 
 The image installs `git` (needed to sync full repositories) and the MongoDB
 driver, then starts the unified server. To connect real platforms, set
-`GITHUB_TOKEN` / `GITHUB_WEBHOOK_SECRET` (and/or the GitLab equivalents) and
-point your repository's webhook at `/webhook/github` or `/webhook/gitlab`.
+`GITHUB_TOKEN` (and/or the GitLab equivalents) so the service can read PRs and
+write back comments/checks, then feed it reviews over `POST /api/tasks` (see
+"Drive the service from GitHub Actions" for the turnkey path).
 
 ### GitHub integration steps
 
@@ -228,13 +277,39 @@ point your repository's webhook at `/webhook/github` or `/webhook/gitlab`.
    and mints short-lived, per-installation tokens automatically (cached and
    refreshed); the installation is resolved per repo unless you pin
    `GITHUB_APP_INSTALLATION_ID`.
-2. **Webhook.** Set `GITHUB_WEBHOOK_SECRET` and add a repo (or org) webhook
-   pointing at `https://<host>/webhook/github` for the **Pull requests** event,
-   using that secret. (No public endpoint? Set `POLL_INTERVAL_SECONDS>0` to use
-   the polling fallback instead.)
-3. **Monitor.** Add the repository in the Web UI (or `POST /api/projects` +
-   `.../repos`) with its `owner/repo` full name so inbound events are matched
-   and reviewed.
+2. **Expose + protect.** Put the service behind HTTPS and set a strong
+   `API_TOKEN`; callers pass it as `Authorization: Bearer <token>`.
+3. **Send tasks.** POST each PR to `https://<host>/api/tasks` (see HTTP surface).
+   No per-repo registration is needed — the task is self-contained. The simplest
+   path is the **service action** below.
+
+### Drive the service from GitHub Actions
+
+`service/action.yml` is a thin composite action that health-checks the service,
+POSTs the current PR to `POST /api/tasks`, and polls `GET /api/jobs/:id` until
+the review finishes — exposing `findings` / `conclusion` as step outputs. Add
+the service URL + token as repo secrets and drop this into `.github/workflows/`:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+permissions: { contents: read, pull-requests: write }
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: iHealthStrategy/review-pilot/service@v1
+        with:
+          service-url: ${{ secrets.REVIEWPILOT_URL }}    # https://<host>
+          api-token: ${{ secrets.REVIEWPILOT_TOKEN }}    # matches the service API_TOKEN
+          github-token: ${{ github.token }}
+```
+
+The service does the actual review (and PR write-back) with its own
+`GITHUB_TOKEN`; the workflow just triggers it and waits. For non-PR /
+machine-to-machine use, POST a **branch-diff** task with a `callback` instead
+(no Action needed).
 
 ### Review engines (Claude Code — agentic)
 
@@ -301,7 +376,6 @@ engines that can't explore (e.g. `mock`).
 | Persistence    | `DB_DRIVER` (`mock`/`sqlite`/`postgres`/`mongo`), `MONGODB_URI`, `MONGODB_DB`, `DATABASE_URL` | `mock` |
 | Review engine  | `REVIEW_ENGINE`, `REVIEW_ENGINES_ENABLED`, `ENGINE_TIMEOUT_MS` | `mock`  |
 | Git platform   | `GITHUB_*`, `GITLAB_*`                       | unset (mock) |
-| Trigger        | `POLL_INTERVAL_SECONDS` (0 = webhook only)  | `0`     |
 | Worker         | `RECOVER_INTERRUPTED_JOBS_ON_START`, `INLINE_COMMENTS`, `PUBLISH_CHECK_RUN`, `FAIL_ON_SEVERITY`, `ONLY_CHANGED_LINES` | `true`/`false`/—/`false` |
 | Auth/UI        | `API_TOKEN`, `WEB_DIST_DIR`                  | unset (no auth) |
 
@@ -319,8 +393,8 @@ engines that can't explore (e.g. `mock`).
 
 ```
 packages/
-  server/   # API, providers, trigger, worker, review engines, persistence
-  web/       # Jenkins-like Web UI dashboard (static build)
+  server/   # task API, providers, review engines (PR + branch), worker, persistence
+  web/       # task-driven Web UI dashboard (static build)
 ```
 
 ## Roadmap
@@ -328,10 +402,10 @@ packages/
 - [x] Project skeleton & engineering baseline
 - [x] Core domain model & persistence (Project/Repo/PullRequest/ReviewJob/Finding)
 - [x] Git provider abstraction (GitHub + GitLab)
-- [x] PR trigger: webhook receiver + polling fallback
+- [x] Self-contained task API (`POST /api/tasks`): PR mode + branch-diff mode
 - [x] Code sync & pluggable review engine abstraction
-- [x] Job orchestration & dual-channel delivery (UI + PR comment)
-- [x] Jenkins-like Web UI & configuration management
+- [x] Job orchestration & triple-channel delivery (UI + PR comment + callback)
+- [x] Task-driven Web UI dashboard
 - [x] End-to-end wiring, docs & deployable image
 
 ## License

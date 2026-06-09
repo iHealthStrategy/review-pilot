@@ -39,19 +39,16 @@ services:
       INLINE_COMMENTS: ${INLINE_COMMENTS:-false}
       # Recover jobs left running by a crashed/redeployed container (single worker).
       RECOVER_INTERRUPTED_JOBS_ON_START: ${RECOVER_INTERRUPTED_JOBS_ON_START:-true}
-      # Bearer token guarding the management API/UI (empty disables auth).
+      # Bearer token guarding the API (incl. POST /api/tasks) + Web UI.
       API_TOKEN: ${API_TOKEN:-}
-      # Polling fallback (0 disables; webhooks preferred).
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-0}
-      # Provide tokens/secrets here to enable real GitHub/GitLab integration.
+      # Provide tokens to enable real GitHub/GitLab integration (read PRs +
+      # write back comments/checks).
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       # GitHub App auth (preferred over a PAT): set the App id + private key.
       GITHUB_APP_ID: ${GITHUB_APP_ID:-}
       GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
       GITHUB_APP_INSTALLATION_ID: ${GITHUB_APP_INSTALLATION_ID:-}
       GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-      GITLAB_WEBHOOK_SECRET: ${GITLAB_WEBHOOK_SECRET:-}
 
   # Optional MongoDB backend — enabled with `--profile mongo`.
   # For cloud, point MONGODB_URI at a managed cluster (e.g. Atlas) instead.
