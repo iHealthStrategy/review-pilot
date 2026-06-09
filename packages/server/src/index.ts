@@ -6,8 +6,10 @@ import { createRepository } from "./persistence/factory.js";
 import type { Repository } from "./persistence/repository.js";
 import { createGitProvider } from "./providers/factory.js";
 import type { GitProvider } from "./providers/git-provider.js";
+import { BranchReviewService } from "./review/branch-review.js";
 import { type Cloner, GitCloner } from "./review/cloner.js";
 import { ProcessCommandRunner } from "./review/command-runner.js";
+import { createReviewEngine } from "./review/engine-factory.js";
 import { ReviewService } from "./review/review-service.js";
 import { TaskService } from "./trigger/trigger-service.js";
 import { Worker } from "./worker/worker.js";
@@ -68,11 +70,34 @@ export function startApp(
       return p;
     });
 
+  // Branch-diff (no-PR) reviews: clone + `git diff` + engine, delivered via the
+  // task callback. Engines are built with the same config-driven knobs as the
+  // PR pipeline.
+  const { engineCommand, engineArgs, agentModel, agentMaxTurns } = config.review;
+  const branchReview = new BranchReviewService({
+    git: new ProcessCommandRunner(),
+    createEngine: (kind) =>
+      createReviewEngine(kind, {
+        timeoutMs: config.worker.engineTimeoutMs,
+        ...(engineCommand ? { commands: { [kind]: engineCommand } } : {}),
+        ...(engineArgs.length ? { args: { [kind]: engineArgs } } : {}),
+        agent: {
+          ...(agentModel ? { model: agentModel } : {}),
+          maxTurns: agentMaxTurns,
+        },
+      }),
+    defaultEngine: config.review.defaultEngine,
+    enabledEngines: config.review.enabledEngines,
+    workspaceRoot: config.workspaceDir,
+    onlyChangedLines: config.review.onlyChangedLines,
+  });
+
   const taskService = new TaskService({
     repo,
     providerFor,
     defaultEngine: config.review.defaultEngine,
     enabledEngines: config.review.enabledEngines,
+    branchReview,
   });
   const reviewService = new ReviewService({
     repo,

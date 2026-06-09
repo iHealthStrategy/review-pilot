@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import { EntityNotFoundError, type Repository } from "../persistence/repository.js";
-import type { TaskService } from "../trigger/trigger-service.js";
+import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
 
 const PLATFORMS: readonly Platform[] = ["github", "gitlab"];
 const ENGINES: readonly ReviewEngineKind[] = [
@@ -59,6 +59,19 @@ function asEnum<T extends string>(v: unknown, allowed: readonly T[], field: stri
     throw new HttpError(400, `field '${field}' must be one of ${allowed.join(", ")}`);
   }
   return v as T;
+}
+
+/** Validate a callback spec: { url, headers? }. */
+function parseCallback(v: unknown): { url: string; headers?: Record<string, string> } {
+  const c = (v ?? {}) as Record<string, unknown>;
+  const url = asString(c.url, "callback.url");
+  const headers: Record<string, string> = {};
+  if (c.headers && typeof c.headers === "object") {
+    for (const [k, val] of Object.entries(c.headers as Record<string, unknown>)) {
+      if (typeof val === "string") headers[k] = val;
+    }
+  }
+  return Object.keys(headers).length ? { url, headers } : { url };
 }
 
 const ROUTES: Route[] = [
@@ -191,22 +204,31 @@ const ROUTES: Route[] = [
       const b = (body ?? {}) as Record<string, unknown>;
       const platform = asEnum(b.platform, PLATFORMS, "platform");
       const repoFullName = asString(b.repoFullName, "repoFullName");
-      const prNumber =
-        typeof b.prNumber === "number"
-          ? b.prNumber
-          : Number.parseInt(String(b.prNumber ?? ""), 10);
-      if (!Number.isFinite(prNumber) || prNumber <= 0) {
-        throw new HttpError(400, "field 'prNumber' must be a positive integer");
+
+      // PR mode (prNumber) vs branch-diff mode (headBranch + baseBranch).
+      const hasPr = b.prNumber !== undefined && b.prNumber !== null && b.prNumber !== "";
+      const task: ReviewTaskInput = { platform, repoFullName };
+      if (hasPr) {
+        const prNumber =
+          typeof b.prNumber === "number" ? b.prNumber : Number.parseInt(String(b.prNumber), 10);
+        if (!Number.isFinite(prNumber) || prNumber <= 0) {
+          throw new HttpError(400, "field 'prNumber' must be a positive integer");
+        }
+        task.prNumber = prNumber;
+      } else if (b.headBranch || b.baseBranch) {
+        task.headBranch = asString(b.headBranch, "headBranch");
+        task.baseBranch = asString(b.baseBranch, "baseBranch");
+        if (b.callback) task.callback = parseCallback(b.callback);
+      } else {
+        throw new HttpError(400, "provide 'prNumber' (PR mode) or 'headBranch'+'baseBranch' (branch mode)");
       }
-      const outcome = await tasks.createTask({
-        platform,
-        repoFullName,
-        prNumber,
-        ...(typeof b.cloneUrl === "string" && b.cloneUrl ? { cloneUrl: b.cloneUrl } : {}),
-        ...(b.engine ? { engine: asEnum(b.engine, ENGINES, "engine") } : {}),
-      });
-      if (outcome.status !== "created" && outcome.status !== "deduped") {
-        throw new HttpError(400, outcome.reason);
+      if (typeof b.cloneUrl === "string" && b.cloneUrl) task.cloneUrl = b.cloneUrl;
+      if (b.engine) task.engine = asEnum(b.engine, ENGINES, "engine");
+
+      const outcome = await tasks.createTask(task);
+      if (outcome.status === "ignored") throw new HttpError(400, outcome.reason);
+      if (outcome.status === "accepted") {
+        return ok({ taskId: outcome.taskId, status: outcome.status }, 202);
       }
       return ok({ taskId: outcome.jobId, jobId: outcome.jobId, status: outcome.status }, 202);
     },

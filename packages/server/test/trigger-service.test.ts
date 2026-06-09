@@ -5,6 +5,7 @@ import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { GitHubProvider } from "../src/providers/github-provider.js";
 import type { GitProvider } from "../src/providers/git-provider.js";
+import type { BranchReviewService } from "../src/review/branch-review.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
 import { FakeHttpClient, type Route } from "./fake-http-client.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
@@ -107,4 +108,94 @@ test("TaskService: derives a clone URL when the task omits one", async () => {
   });
   const r = await repo.findRepoByFullName("github", "acme/demo");
   assert.equal(r?.cloneUrl, "https://github.com/acme/demo.git");
+});
+
+test("TaskService: branch-mode task runs ephemerally and delivers via callback", async () => {
+  const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
+  await repo.init();
+
+  const branchReview = {
+    review: async () => ({
+      findings: [
+        {
+          filePath: "src/a.ts",
+          severity: "minor" as const,
+          title: "t",
+          detail: "d",
+        },
+      ],
+      conclusion: "neutral" as const,
+    }),
+  } as unknown as BranchReviewService;
+
+  // Capture the callback delivery (fired in the background).
+  let resolveDelivered: (v: { url: string; body: string }) => void;
+  const delivered = new Promise<{ url: string; body: string }>((r) => {
+    resolveDelivered = r;
+  });
+
+  const service = new TaskService({
+    repo,
+    providerFor,
+    defaultEngine: "mock",
+    enabledEngines: ["mock"],
+    branchReview,
+    genId: () => "task_fixed",
+    callbackSender: async (url, _headers, body) => {
+      resolveDelivered({ url, body });
+    },
+  });
+
+  const outcome = await service.createTask({
+    platform: "github",
+    repoFullName: "acme/demo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+    callback: { url: "https://hook.example/cb" },
+  });
+
+  assert.equal(outcome.status, "accepted");
+  assert.equal(outcome.status === "accepted" && outcome.taskId, "task_fixed");
+  // No persistent job was created for the headless branch task.
+  assert.equal((await repo.listReviewJobs()).length, 0);
+
+  const cb = await delivered;
+  assert.equal(cb.url, "https://hook.example/cb");
+  const payload = JSON.parse(cb.body);
+  assert.equal(payload.taskId, "task_fixed");
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.conclusion, "neutral");
+  assert.equal(payload.findings.length, 1);
+});
+
+test("TaskService: branch-mode requires a callback url", async () => {
+  const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
+  await repo.init();
+  const branchReview = {
+    review: async () => ({ findings: [], conclusion: "success" as const }),
+  } as unknown as BranchReviewService;
+  const svc = new TaskService({
+    repo,
+    providerFor,
+    defaultEngine: "mock",
+    enabledEngines: ["mock"],
+    branchReview,
+  });
+  const outcome = await svc.createTask({
+    platform: "github",
+    repoFullName: "acme/demo",
+    headBranch: "feature/x",
+    baseBranch: "main",
+  });
+  assert.equal(outcome.status, "ignored");
+  assert.match(outcome.status === "ignored" ? outcome.reason : "", /callback\.url/);
+});
+
+test("TaskService: a task with neither PR nor branches is rejected", async () => {
+  const { service } = await makeService();
+  const outcome = await service.createTask({
+    platform: "github",
+    repoFullName: "acme/demo",
+  });
+  assert.equal(outcome.status, "ignored");
 });

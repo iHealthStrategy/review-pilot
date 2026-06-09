@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   Platform,
   Project,
@@ -7,14 +8,24 @@ import type {
 } from "../domain/entities.js";
 import type { Repository } from "../persistence/repository.js";
 import type { GitProvider, ProviderPullRequest } from "../providers/git-provider.js";
+import type { BranchReviewService } from "../review/branch-review.js";
+import {
+  type CallbackConfig,
+  type CallbackSender,
+  deliverCallback,
+} from "../review/callback.js";
 
 /** Outcome of creating a review task. */
 export type TriggerOutcome =
   | { status: "created"; jobId: string; pullRequestId: string }
   | { status: "deduped"; jobId: string; pullRequestId: string }
+  | { status: "accepted"; taskId: string }
   | { status: "ignored"; reason: string };
 
-/** Self-contained review task as received over the API. */
+/**
+ * Self-contained review task as received over the API. PR mode when `prNumber`
+ * is set; branch-diff mode when `headBranch` + `baseBranch` are set instead.
+ */
 export interface ReviewTaskInput {
   platform: Platform;
   /** `owner/repo` (GitHub) or `group/.../project` (GitLab) path. */
@@ -22,9 +33,15 @@ export interface ReviewTaskInput {
   /** Clone URL for syncing the full repo; derived from fullName when omitted. */
   cloneUrl?: string;
   /** PR/MR number to review (PR mode). */
-  prNumber: number;
+  prNumber?: number;
+  /** Head branch (branch-diff mode). */
+  headBranch?: string;
+  /** Base branch the head is diffed against (branch-diff mode). */
+  baseBranch?: string;
   /** Engine override (stored on the job; falls back to the service default). */
   engine?: ReviewEngineKind;
+  /** Deliver the result here when the review finishes (branch mode). */
+  callback?: CallbackConfig;
 }
 
 export interface TaskServiceDeps {
@@ -35,6 +52,12 @@ export interface TaskServiceDeps {
   defaultEngine: ReviewEngineKind;
   /** Engines allowed globally (used to seed the internal default project). */
   enabledEngines: ReviewEngineKind[];
+  /** Runs branch-diff reviews (required to accept branch-mode tasks). */
+  branchReview?: BranchReviewService;
+  /** POST seam for callback delivery (defaults to global fetch). */
+  callbackSender?: CallbackSender;
+  /** Ephemeral task-id generator (injectable for deterministic tests). */
+  genId?: () => string;
 }
 
 /** Name of the internal project that ad-hoc, API-created repos hang off of. */
@@ -52,11 +75,65 @@ export class TaskService {
   constructor(private readonly deps: TaskServiceDeps) {}
 
   /**
-   * Create (or dedupe) a review job for a self-contained task. Fetches PR
-   * metadata from the provider, upserts an ad-hoc repo + PR record, and
-   * enqueues the job.
+   * Create a review task. PR mode (prNumber set) enqueues a persistent job
+   * that the worker drains and writes back to the PR. Branch-diff mode
+   * (headBranch + baseBranch) runs an ephemeral, headless review in the
+   * background and delivers the result via the task's callback.
    */
   async createTask(input: ReviewTaskInput): Promise<TriggerOutcome> {
+    if (input.prNumber !== undefined) return this.createPrTask(input);
+    if (input.headBranch && input.baseBranch) return this.createBranchTask(input);
+    return {
+      status: "ignored",
+      reason: "task must carry either prNumber (PR mode) or headBranch+baseBranch (branch mode)",
+    };
+  }
+
+  /**
+   * Branch-diff mode: kick off an ephemeral background review and return an
+   * id immediately. Results are delivered only via the callback (no PR
+   * write-back, not shown in the dashboard). Requires a configured
+   * branchReview dependency and a callback to deliver to.
+   */
+  private createBranchTask(input: ReviewTaskInput): TriggerOutcome {
+    if (!this.deps.branchReview) {
+      return { status: "ignored", reason: "branch-mode reviews are not enabled on this server" };
+    }
+    if (!input.callback?.url) {
+      return { status: "ignored", reason: "branch-mode tasks require a callback.url to deliver the result" };
+    }
+    const callback = input.callback;
+    const taskId = (this.deps.genId ?? (() => `task_${randomUUID()}`))();
+    const task = {
+      platform: input.platform,
+      repoFullName: input.repoFullName,
+      cloneUrl: input.cloneUrl ?? deriveCloneUrl(input.platform, input.repoFullName),
+      headBranch: input.headBranch!,
+      baseBranch: input.baseBranch!,
+      ...(input.engine ? { engine: input.engine } : {}),
+    };
+    // Fire and forget: run the review, then deliver the outcome via callback.
+    void this.deps.branchReview
+      .review(task)
+      .then((res) =>
+        deliverCallback(
+          callback,
+          { taskId, status: "completed", conclusion: res.conclusion, findings: res.findings },
+          this.deps.callbackSender,
+        ),
+      )
+      .catch((err) =>
+        deliverCallback(
+          callback,
+          { taskId, status: "failed", error: (err as Error).message },
+          this.deps.callbackSender,
+        ),
+      );
+    return { status: "accepted", taskId };
+  }
+
+  /** PR mode: upsert an ad-hoc repo + PR record and enqueue a persistent job. */
+  private async createPrTask(input: ReviewTaskInput): Promise<TriggerOutcome> {
     const project = await this.ensureDefaultProject();
     let repo = await this.deps.repo.findRepoByFullName(
       input.platform,
@@ -76,7 +153,7 @@ export class TaskService {
     const provider = this.deps.providerFor(input.platform);
     const meta = await provider.getPullRequest(
       { fullName: repo.fullName },
-      input.prNumber,
+      input.prNumber!,
     );
     const pr = await this.deps.repo.upsertPullRequest({
       repoId: repo.id,
