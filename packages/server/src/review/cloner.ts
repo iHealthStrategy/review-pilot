@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner } from "./command-runner.js";
+import { cloneBloblessWithRetry } from "./git-clone.js";
 
 /** A synced working copy of a repository at a specific ref. */
 export interface Workspace {
@@ -49,16 +50,8 @@ export class GitCloner implements Cloner {
     // `checkout <pr-head-sha>` fail with "unable to read tree". Blobs are
     // filtered out (--filter=blob:none) so this stays cheap on large repos:
     // git lazily fetches only the blobs the checkout/engine actually reads.
-    const cloned = await this.runner.run("git", [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      cloneUrl,
-      dir,
-    ]);
-    if (cloned.code !== 0) {
-      throw new Error(`git clone failed: ${cloned.stderr}`);
-    }
+    // Retries ride out transient repo-host egress blips.
+    await cloneBloblessWithRetry(this.runner, cloneUrl, dir);
     // Best-effort fetch of the exact commit (covers a head sha not yet pointed
     // at by a fetched ref); ignored if the server disallows by-sha fetch.
     await this.runner.run("git", ["-C", dir, "fetch", "origin", ref]);

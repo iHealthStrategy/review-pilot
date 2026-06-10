@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import type { DiffFile, DiffFileStatus } from "../providers/git-provider.js";
 import type { CommandRunner } from "../review/command-runner.js";
+import { cloneBloblessWithRetry } from "../review/git-clone.js";
 import { filterToChangedLines } from "../review/diff-lines.js";
 import type { FindingDraft, ReviewContext, ReviewEngine } from "../review/review-engine.js";
 import { scanStructure } from "../review/structure-scanner.js";
@@ -64,13 +65,9 @@ export class ScheduledScanService {
     const dir = await mkdtemp(join(root, "reviewpilot-scan-"));
     try {
       // Clone WITHOUT `-C dir` (cloning into the cwd confuses git); subsequent
-      // commands run inside the repo via the `-C dir` helper.
-      const cloned = await this.deps.git.run("git", [
-        "clone", "--filter=blob:none", "--no-checkout", config.cloneUrl, dir,
-      ]);
-      if (cloned.code !== 0) {
-        throw new Error(`git clone failed: ${cloned.stderr.trim()}`);
-      }
+      // commands run inside the repo via the `-C dir` helper. Retries ride out
+      // transient repo-host egress blips.
+      await cloneBloblessWithRetry(this.deps.git, config.cloneUrl, dir);
 
       const branches = config.branches.length
         ? config.branches
