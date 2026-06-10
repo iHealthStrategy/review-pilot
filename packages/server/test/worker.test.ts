@@ -114,6 +114,26 @@ test("Worker: publishes a Check Run with annotations + gate when enabled", async
   assert.ok((spy.checkRuns[0]?.annotations?.length ?? 0) >= 1);
 });
 
+test("Worker: a check-run failure is non-fatal (review + comment still succeed)", async () => {
+  const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
+  await repo.init();
+  const { jobIds } = await seed(repo, [7]);
+  const spy = new SpyProvider();
+  // Simulate the GitHub Check Runs API rejecting a PAT (must use a GitHub App).
+  spy.createCheckRun = async () => {
+    throw new Error("HTTP 403: You must authenticate via a GitHub App.");
+  };
+  const { worker } = makeWorker(repo, spy, { publishCheckRun: true });
+
+  const outcome = await worker.runJob(jobIds[0]!);
+  assert.equal(outcome.status, "succeeded");
+  // The summary comment was still delivered.
+  assert.equal(spy.comments.length, 1);
+  const job = await repo.getReviewJob(jobIds[0]!);
+  assert.equal(job?.status, "succeeded");
+  assert.ok(job!.logs.some((l) => /check run skipped \(non-fatal\)/.test(l)));
+});
+
 test("Worker: failure sets job failed and it can be retried to success", async () => {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();

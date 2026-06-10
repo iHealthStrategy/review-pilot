@@ -84,14 +84,24 @@ export class Worker {
       await this.repo.appendJobLog(jobId, `delivered summary comment ${comment.id}`);
 
       if (this.options.publishCheckRun && provider.createCheckRun) {
-        const { checkRun, conclusion } = buildCheckRun(findings, {
-          name: "ReviewPilot",
-          headSha: pr.headSha,
-          summary: body,
-          ...(this.options.failOnSeverity ? { threshold: this.options.failOnSeverity } : {}),
-        });
-        const check = await provider.createCheckRun({ fullName: repo.fullName }, checkRun);
-        await this.repo.appendJobLog(jobId, `published check run ${check.id} (${conclusion})`);
+        // Best-effort: the review + comment have already succeeded, so a
+        // check-run failure (e.g. the GitHub Check Runs API requires a GitHub
+        // App — a PAT gets 403) must not fail the whole job. Log and continue.
+        try {
+          const { checkRun, conclusion } = buildCheckRun(findings, {
+            name: "ReviewPilot",
+            headSha: pr.headSha,
+            summary: body,
+            ...(this.options.failOnSeverity ? { threshold: this.options.failOnSeverity } : {}),
+          });
+          const check = await provider.createCheckRun({ fullName: repo.fullName }, checkRun);
+          await this.repo.appendJobLog(jobId, `published check run ${check.id} (${conclusion})`);
+        } catch (err) {
+          await this.repo.appendJobLog(
+            jobId,
+            `check run skipped (non-fatal): ${(err as Error).message}`,
+          );
+        }
       }
 
       if (this.options.inlineComments && provider.postInlineComment) {
