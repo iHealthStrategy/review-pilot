@@ -51,6 +51,7 @@ function makeScheduler(store: FileScheduleStore, scanResult: ScanResult, sent: s
     now: () => after,
     feishuSender: async (_url, body) => {
       sent.push(body);
+      return { status: 200, text: '{"code":0}' };
     },
   });
 }

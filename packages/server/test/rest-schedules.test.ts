@@ -30,7 +30,7 @@ async function start() {
   const scheduler = new Scheduler({
     store: scheduleStore,
     scan,
-    feishuSender: async (_u, b) => { sent.push(b); },
+    feishuSender: async (_u, b) => { sent.push(b); return { status: 200, text: '{"code":0}' }; },
   });
   const taskService = new TaskService({
     repo, providerFor: (_p: Platform) => new SpyProvider(),

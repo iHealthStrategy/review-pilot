@@ -1,15 +1,19 @@
 import type { Severity } from "../domain/entities.js";
 import type { ScanResult } from "./scan-service.js";
 
-/** Minimal HTTP POST seam (injectable; defaults to global fetch). */
-export type FeishuSender = (url: string, body: string) => Promise<void>;
+/** Minimal HTTP POST seam returning the response (injectable; defaults to fetch). */
+export type FeishuSender = (
+  url: string,
+  body: string,
+) => Promise<{ status: number; text: string }>;
 
 const fetchSender: FeishuSender = async (url, body) => {
-  await fetch(url, {
+  const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body,
   });
+  return { status: res.status, text: await res.text() };
 };
 
 const SEVERITY_EMOJI: Record<Severity, string> = {
@@ -63,7 +67,20 @@ export async function deliverFeishu(
   send: FeishuSender = fetchSender,
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    await send(webhookUrl, JSON.stringify(formatScanCard(result)));
+    const res = await send(webhookUrl, JSON.stringify(formatScanCard(result)));
+    if (res.status < 200 || res.status >= 300) {
+      return { ok: false, error: `HTTP ${res.status}: ${res.text.slice(0, 200)}` };
+    }
+    // Feishu returns 200 even on rejection — the body's `code` is the real
+    // status (0 = ok; e.g. 19007 "Bot Not Enabled", 19021 "sign match fail").
+    try {
+      const body = JSON.parse(res.text) as { code?: number; msg?: string };
+      if (typeof body.code === "number" && body.code !== 0) {
+        return { ok: false, error: `feishu code ${body.code}: ${body.msg ?? ""}` };
+      }
+    } catch {
+      // Non-JSON 2xx body — treat as delivered.
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
