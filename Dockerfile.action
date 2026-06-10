@@ -25,7 +25,10 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
     fi \
  && for i in 1 2 3; do apk add --no-cache git && break || { echo "apk retry $i"; sleep 3; }; done \
  && if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g @anthropic-ai/claude-code
+ && npm install -g @anthropic-ai/claude-code \
+ && claude --version
+# (claude --version verifies the CLI binary is runnable — fails the build loudly
+# rather than shipping a CLI that dies at runtime with "spawn … ENOEXEC".)
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json /app/package-lock.json /app/tsconfig.base.json ./

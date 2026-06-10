@@ -32,8 +32,13 @@ RUN if [ -n "$ALPINE_MIRROR" ]; then \
 # Optional npm registry mirror (e.g. https://registry.npmmirror.com) for the
 # global Claude Code CLI install.
 ARG NPM_REGISTRY=
+# Verify the CLI is actually runnable at BUILD time. On restricted networks npm
+# can silently skip the platform-specific binary (optionalDependency), leaving a
+# CLI that fails at runtime with "spawn … ENOEXEC". `claude --version` here turns
+# that into a loud, visible build failure instead of a broken image.
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
- && npm install -g @anthropic-ai/claude-code
+ && npm install -g @anthropic-ai/claude-code \
+ && claude --version
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json /app/package-lock.json /app/tsconfig.base.json ./
