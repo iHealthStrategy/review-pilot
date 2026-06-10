@@ -305,7 +305,9 @@ DB_DRIVER=postgres docker compose --profile postgres up --build
 ```
 
 The image installs `git` (needed to sync full repositories) and the MongoDB
-driver, then starts the unified server. To connect real platforms, set
+driver, then starts the unified server. On networks where the Alpine CDN or npm
+registry is slow/unreachable, build with mirror args:
+`docker build --build-arg ALPINE_MIRROR=mirrors.aliyun.com --build-arg NPM_REGISTRY=https://registry.npmmirror.com .` To connect real platforms, set
 `GITHUB_TOKEN` (and/or the GitLab equivalents) so the service can read PRs and
 write back comments/checks, then feed it reviews over `POST /api/tasks` (see
 "Drive the service from GitHub Actions" for the turnkey path).

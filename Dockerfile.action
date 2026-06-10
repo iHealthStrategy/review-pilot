@@ -3,6 +3,9 @@
 # (The long-running service uses ./Dockerfile instead.)
 FROM node:20-alpine AS build
 WORKDIR /app
+# Optional npm registry mirror for restricted networks (see Dockerfile).
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/server/package.json packages/server/
 COPY packages/web/package.json packages/web/
@@ -14,7 +17,15 @@ RUN npm run build --workspace=packages/server
 
 FROM node:20-alpine AS runtime
 # git for diffing/inspection; the Claude Code CLI for the claude-code engine.
-RUN apk add --no-cache git && npm install -g @anthropic-ai/claude-code
+# Optional mirrors for restricted networks (see Dockerfile for examples).
+ARG ALPINE_MIRROR=
+ARG NPM_REGISTRY=
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; \
+    fi \
+ && for i in 1 2 3; do apk add --no-cache git && break || { echo "apk retry $i"; sleep 3; }; done \
+ && if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json /app/package-lock.json /app/tsconfig.base.json ./

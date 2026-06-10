@@ -2,6 +2,10 @@
 # Build stage: install workspaces and compile.
 FROM node:20-alpine AS build
 WORKDIR /app
+# Optional npm registry mirror for restricted networks, e.g.:
+#   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ...
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/server/package.json packages/server/
 COPY packages/web/package.json packages/web/
@@ -17,8 +21,19 @@ RUN npm run build
 # the Claude Code CLI is the default external review engine (run with
 # `claude -p` non-interactively; provide ANTHROPIC_API_KEY at runtime).
 FROM node:20-alpine AS runtime
-RUN apk add --no-cache git
-RUN npm install -g @anthropic-ai/claude-code
+# Optional Alpine mirror for networks where dl-cdn.alpinelinux.org is slow or
+# unreachable (e.g. behind a corporate proxy / in regions with poor CDN access):
+#   docker build --build-arg ALPINE_MIRROR=mirrors.aliyun.com ...
+ARG ALPINE_MIRROR=
+RUN if [ -n "$ALPINE_MIRROR" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; \
+    fi \
+ && for i in 1 2 3; do apk add --no-cache git && break || { echo "apk retry $i"; sleep 3; }; done
+# Optional npm registry mirror (e.g. https://registry.npmmirror.com) for the
+# global Claude Code CLI install.
+ARG NPM_REGISTRY=
+RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
+ && npm install -g @anthropic-ai/claude-code
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/package.json /app/package-lock.json /app/tsconfig.base.json ./
