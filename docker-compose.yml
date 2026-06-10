@@ -41,6 +41,8 @@ services:
       RECOVER_INTERRUPTED_JOBS_ON_START: ${RECOVER_INTERRUPTED_JOBS_ON_START:-true}
       # Scheduled-scan config store (non-mongo drivers); mongo uses a collection.
       SCHEDULE_STORE_FILE: ${SCHEDULE_STORE_FILE:-./.reviewpilot/schedules.json}
+      # Default Feishu webhook for scheduled-scan delivery (per-schedule override wins).
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
       # Bearer token guarding the API (incl. POST /api/tasks) + Web UI.
       API_TOKEN: ${API_TOKEN:-}
       # Provide tokens to enable real GitHub/GitLab integration (read PRs +

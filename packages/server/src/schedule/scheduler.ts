@@ -12,6 +12,8 @@ export interface SchedulerDeps {
   tickMs?: number;
   /** Feishu POST seam (injected in tests). */
   feishuSender?: FeishuSender;
+  /** Default Feishu webhook used when a schedule omits its own. */
+  defaultFeishuWebhook?: string;
   log?: (line: string) => void;
 }
 
@@ -100,7 +102,15 @@ export class Scheduler {
     result: ScanResult,
   ): Promise<{ ok: boolean; error?: string }> {
     if (config.delivery.type === "feishu") {
-      return deliverFeishu(config.delivery.webhookUrl, result, this.deps.feishuSender);
+      // Per-schedule webhook wins; otherwise fall back to the deploy-wide default.
+      const url = config.delivery.webhookUrl || this.deps.defaultFeishuWebhook || "";
+      if (!url) {
+        return Promise.resolve({
+          ok: false,
+          error: "no Feishu webhook configured (set delivery.webhookUrl or FEISHU_WEBHOOK_URL)",
+        });
+      }
+      return deliverFeishu(url, result, this.deps.feishuSender);
     }
     return Promise.resolve({ ok: false, error: `unsupported delivery: ${config.delivery.type}` });
   }

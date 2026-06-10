@@ -89,6 +89,12 @@ export interface AppConfig {
      * volume for stateless deploys, or use the `mongo` driver for DB-backed.
      */
     readonly storeFile: string;
+    /**
+     * Default Feishu webhook URL for scheduled-scan delivery. Used when a
+     * schedule doesn't specify its own `delivery.webhookUrl`, so the push
+     * target can be set once at deploy time instead of per-schedule.
+     */
+    readonly feishuWebhookUrl: string;
   };
   /** Bearer token required for the management API/UI; empty disables auth. */
   readonly apiToken: string;
@@ -239,6 +245,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     schedule: {
       storeFile: str(env, "SCHEDULE_STORE_FILE", "./.reviewpilot/schedules.json"),
+      feishuWebhookUrl: str(env, "FEISHU_WEBHOOK_URL", ""),
     },
     apiToken: str(env, "API_TOKEN", ""),
     webDistDir: str(env, "WEB_DIST_DIR", ""),

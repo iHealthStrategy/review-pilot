@@ -87,7 +87,7 @@ test("schedules API: create, list, get, update, delete", async () => {
   }
 });
 
-test("schedules API: validation rejects a bad time / missing webhook", async () => {
+test("schedules API: rejects a bad time; allows an omitted webhook (env fallback)", async () => {
   const { server, base } = await start();
   try {
     const badTime = await fetch(`${base}/api/schedules`, {
@@ -96,11 +96,14 @@ test("schedules API: validation rejects a bad time / missing webhook", async () 
     });
     assert.equal(badTime.status, 400);
 
+    // Omitting webhookUrl is allowed — delivery uses FEISHU_WEBHOOK_URL at send time.
     const noHook = await fetch(`${base}/api/schedules`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...body, delivery: { type: "feishu" } }),
     });
-    assert.equal(noHook.status, 400);
+    assert.equal(noHook.status, 201);
+    const created = await noHook.json() as { delivery: { webhookUrl: string } };
+    assert.equal(created.delivery.webhookUrl, "");
   } finally {
     server.close();
   }

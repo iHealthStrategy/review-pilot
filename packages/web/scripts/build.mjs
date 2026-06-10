@@ -140,8 +140,8 @@ const html = `<!doctype html>
                   <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
                 </div>
                 <div class="field">
-                  <label>Feishu webhook URL</label>
-                  <input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" required />
+                  <label>Feishu webhook URL (blank = use server default FEISHU_WEBHOOK_URL)</label>
+                  <input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" />
                 </div>
                 <button type="submit">Create schedule</button>
               </form>

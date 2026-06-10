@@ -119,6 +119,9 @@ export function startApp(
   const scheduler = new Scheduler({
     store: scheduleStore,
     scan: scanService,
+    ...(config.schedule.feishuWebhookUrl
+      ? { defaultFeishuWebhook: config.schedule.feishuWebhookUrl }
+      : {}),
     log: (line) => createLogger(config.logLevel).info(line),
   });
   const reviewService = new ReviewService({

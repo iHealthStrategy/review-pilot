@@ -175,6 +175,10 @@ aggregate diff of that branch's commits authored that day, and pushes one Feishu
 card summarising the findings. `POST /api/schedules/:id/run` triggers a run
 immediately (for testing). Disable a schedule with `PUT {"enabled": false}`.
 
+`delivery.webhookUrl` is optional — leave it empty to use the deploy-wide
+`FEISHU_WEBHOOK_URL` env var as the default push target (configure the
+destination once at deploy time; a per-schedule URL still overrides it).
+
 The in-process scheduler runs **only while at least one enabled schedule
 exists** — with none configured, no timer is started. Schedule configs are kept
 in a lightweight store independent of the review database: the `mongo` DB driver

@@ -306,11 +306,16 @@ const ROUTES: Route[] = [
   },
 ];
 
-/** Validate and normalise a Feishu delivery spec: { type:"feishu", webhookUrl }. */
+/**
+ * Validate a Feishu delivery spec: { type:"feishu", webhookUrl? }. webhookUrl
+ * is optional — when omitted, delivery falls back to the deploy-wide
+ * FEISHU_WEBHOOK_URL default at send time.
+ */
 function parseDelivery(v: unknown): DeliveryConfig {
   const d = (v ?? {}) as Record<string, unknown>;
   const type = asEnum(d.type, ["feishu"] as const, "delivery.type");
-  return { type, webhookUrl: asString(d.webhookUrl, "delivery.webhookUrl") };
+  const webhookUrl = typeof d.webhookUrl === "string" ? d.webhookUrl : "";
+  return { type, webhookUrl };
 }
 
 function asBranches(v: unknown): string[] {
