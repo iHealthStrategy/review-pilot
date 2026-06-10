@@ -1,7 +1,7 @@
 import { startAppServer } from "./app.js";
 import { type AppConfig, loadConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import type { Platform, Severity } from "./domain/entities.js";
+import type { Platform, ReviewEngineKind, Severity } from "./domain/entities.js";
 import { createRepository } from "./persistence/factory.js";
 import type { Repository } from "./persistence/repository.js";
 import { createGitProvider } from "./providers/factory.js";
@@ -11,6 +11,9 @@ import { type Cloner, GitCloner } from "./review/cloner.js";
 import { ProcessCommandRunner } from "./review/command-runner.js";
 import { createReviewEngine } from "./review/engine-factory.js";
 import { ReviewService } from "./review/review-service.js";
+import { ScheduledScanService } from "./schedule/scan-service.js";
+import { createScheduleStore } from "./schedule/schedule-store-factory.js";
+import { Scheduler } from "./schedule/scheduler.js";
 import { TaskService } from "./trigger/trigger-service.js";
 import { Worker } from "./worker/worker.js";
 import { NAME, VERSION } from "./version.js";
@@ -70,22 +73,25 @@ export function startApp(
       return p;
     });
 
-  // Branch-diff (no-PR) reviews: clone + `git diff` + engine, delivered via the
-  // task callback. Engines are built with the same config-driven knobs as the
-  // PR pipeline.
+  // Build an engine for a kind with the same config-driven knobs as the PR
+  // pipeline — shared by the branch-diff and scheduled-scan reviewers.
   const { engineCommand, engineArgs, agentModel, agentMaxTurns } = config.review;
+  const createEngine = (kind: ReviewEngineKind) =>
+    createReviewEngine(kind, {
+      timeoutMs: config.worker.engineTimeoutMs,
+      ...(engineCommand ? { commands: { [kind]: engineCommand } } : {}),
+      ...(engineArgs.length ? { args: { [kind]: engineArgs } } : {}),
+      agent: {
+        ...(agentModel ? { model: agentModel } : {}),
+        maxTurns: agentMaxTurns,
+      },
+    });
+
+  // Branch-diff (no-PR) reviews: clone + `git diff` + engine, delivered via the
+  // task callback.
   const branchReview = new BranchReviewService({
     git: new ProcessCommandRunner(),
-    createEngine: (kind) =>
-      createReviewEngine(kind, {
-        timeoutMs: config.worker.engineTimeoutMs,
-        ...(engineCommand ? { commands: { [kind]: engineCommand } } : {}),
-        ...(engineArgs.length ? { args: { [kind]: engineArgs } } : {}),
-        agent: {
-          ...(agentModel ? { model: agentModel } : {}),
-          maxTurns: agentMaxTurns,
-        },
-      }),
+    createEngine,
     defaultEngine: config.review.defaultEngine,
     enabledEngines: config.review.enabledEngines,
     workspaceRoot: config.workspaceDir,
@@ -98,6 +104,22 @@ export function startApp(
     defaultEngine: config.review.defaultEngine,
     enabledEngines: config.review.enabledEngines,
     branchReview,
+  });
+
+  // Scheduled daily scans: per-branch review of the day's changes + delivery.
+  const scheduleStore = createScheduleStore(config);
+  const scanService = new ScheduledScanService({
+    git: new ProcessCommandRunner(),
+    createEngine,
+    defaultEngine: config.review.defaultEngine,
+    enabledEngines: config.review.enabledEngines,
+    workspaceRoot: config.workspaceDir,
+    onlyChangedLines: config.review.onlyChangedLines,
+  });
+  const scheduler = new Scheduler({
+    store: scheduleStore,
+    scan: scanService,
+    log: (line) => createLogger(config.logLevel).info(line),
   });
   const reviewService = new ReviewService({
     repo,
@@ -123,6 +145,8 @@ export function startApp(
       taskService,
       apiToken: config.apiToken,
       webDistDir: config.webDistDir,
+      scheduleStore,
+      scheduler,
     },
     config.port,
   );
@@ -133,6 +157,9 @@ export function startApp(
   // The drain/poller gate on this so they never touch uninitialised storage.
   const ready = (async () => {
     await repo.init();
+    await scheduleStore.init();
+    // Start the daily scheduler only if at least one enabled schedule exists.
+    await scheduler.refresh();
     const recovered = config.worker.recoverInterruptedJobsOnStart
       ? await worker.recoverInterrupted()
       : 0;
@@ -142,6 +169,7 @@ export function startApp(
       engine: config.review.defaultEngine,
       auth: config.apiToken ? "on" : "off",
       recoveredJobs: recovered,
+      schedules: (await scheduleStore.list()).length,
     });
   })().catch((err) => {
     log.error("startup failed", { error: (err as Error).message });
@@ -163,7 +191,9 @@ export function startApp(
     ready,
     close: async () => {
       clearInterval(drain);
+      scheduler.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await scheduleStore.close();
       await repo.close();
     },
   };

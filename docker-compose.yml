@@ -39,6 +39,8 @@ services:
       INLINE_COMMENTS: ${INLINE_COMMENTS:-false}
       # Recover jobs left running by a crashed/redeployed container (single worker).
       RECOVER_INTERRUPTED_JOBS_ON_START: ${RECOVER_INTERRUPTED_JOBS_ON_START:-true}
+      # Scheduled-scan config store (non-mongo drivers); mongo uses a collection.
+      SCHEDULE_STORE_FILE: ${SCHEDULE_STORE_FILE:-./.reviewpilot/schedules.json}
       # Bearer token guarding the API (incl. POST /api/tasks) + Web UI.
       API_TOKEN: ${API_TOKEN:-}
       # Provide tokens to enable real GitHub/GitLab integration (read PRs +

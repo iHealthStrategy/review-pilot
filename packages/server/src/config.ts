@@ -82,6 +82,14 @@ export interface AppConfig {
     /** Gate threshold: Check Run fails at this severity or worse ("" = off). */
     readonly failOnSeverity: string;
   };
+  readonly schedule: {
+    /**
+     * JSON file backing the lightweight schedule store when the DB driver is
+     * not `mongo`. Persists scheduled-scan configs across restarts; put it on a
+     * volume for stateless deploys, or use the `mongo` driver for DB-backed.
+     */
+    readonly storeFile: string;
+  };
   /** Bearer token required for the management API/UI; empty disables auth. */
   readonly apiToken: string;
   /** Directory of the built Web UI to serve; empty uses the bundled default. */
@@ -228,6 +236,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       engineTimeoutMs: int(env, "ENGINE_TIMEOUT_MS", 600000),
       publishCheckRun: bool(env, "PUBLISH_CHECK_RUN", true),
       failOnSeverity: severityOrEmpty(env, "FAIL_ON_SEVERITY"),
+    },
+    schedule: {
+      storeFile: str(env, "SCHEDULE_STORE_FILE", "./.reviewpilot/schedules.json"),
     },
     apiToken: str(env, "API_TOKEN", ""),
     webDistDir: str(env, "WEB_DIST_DIR", ""),

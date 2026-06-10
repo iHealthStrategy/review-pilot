@@ -6,6 +6,8 @@ import {
 } from "node:http";
 import { createApiHandler } from "./api/rest-api.js";
 import type { Repository } from "./persistence/repository.js";
+import type { ScheduleStore } from "./schedule/schedule.js";
+import type { Scheduler } from "./schedule/scheduler.js";
 import type { TaskService } from "./trigger/trigger-service.js";
 import { createStaticHandler, resolveWebDistDir } from "./web/static-server.js";
 
@@ -16,6 +18,10 @@ export interface AppDeps {
   apiToken?: string;
   /** Override directory for the built Web UI (defaults to bundled location). */
   webDistDir?: string;
+  /** Backs the /api/schedules routes (scheduled scans). */
+  scheduleStore?: ScheduleStore;
+  /** Refreshed on schedule changes; runs schedules on demand. */
+  scheduler?: Scheduler;
 }
 
 /**
@@ -28,6 +34,8 @@ export function createAppHandler(deps: AppDeps) {
   const api = createApiHandler(deps.repo, {
     apiToken: deps.apiToken,
     taskService: deps.taskService,
+    ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
+    ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
   });
   const serveStatic = createStaticHandler(resolveWebDistDir(deps.webDistDir ?? ""));
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

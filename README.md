@@ -14,6 +14,11 @@ one of two shapes:
   two branches with no PR. Headless: runs in the background and delivers the
   result **only via a callback** (machine-to-machine); not shown in the dashboard.
 
+Besides on-demand tasks, the service can run **scheduled daily scans**: at a
+configured time it reviews the day's changes on a repo's branches and pushes a
+digest to Feishu. Configure these in the Web UI ("Scheduled scans") or over
+`/api/schedules`; with no schedule configured, the scheduler does not run.
+
 ## Status
 
 Functional end-to-end: GitHub/GitLab providers, a self-contained task API,
@@ -117,6 +122,8 @@ A single server (`packages/server/src/app.ts`) dispatches by path prefix:
 - `GET /api/jobs`, `GET /api/jobs/:id`, `GET /api/jobs/:id/findings` — review
   jobs (PR mode) with progress/logs and the structured findings the Web UI renders.
 - `POST /api/jobs/:id/retry` — requeue a failed job (the worker drain re-runs it).
+- `GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/:id`,
+  `POST /api/schedules/:id/run` — scheduled daily scans (see below).
 - `GET /api/health` — open liveness probe.
 - `GET /` and other non-API paths — the static **Web UI** dashboard.
 
@@ -141,6 +148,40 @@ with the caller-supplied headers:
 ```
 
 Delivery is best-effort (a single POST); the caller owns its own retries/timeout.
+
+### Scheduled daily scans
+
+Configure a repo to be reviewed automatically every day and pushed to Feishu —
+no PR or external trigger needed. Manage these in the Web UI ("Scheduled scans")
+or over the API:
+
+```jsonc
+POST /api/schedules
+{
+  "name": "nightly",
+  "platform": "github",
+  "repoFullName": "owner/repo",
+  "cloneUrl": "https://github.com/owner/repo.git",   // optional; derived when omitted
+  "branches": ["main", "develop"],                    // empty/omitted = all remote branches
+  "timeOfDay": "02:00",                               // 24h, in `timezone`
+  "timezone": "Asia/Shanghai",                        // IANA tz
+  "engine": "claude-code",                            // optional; server default otherwise
+  "delivery": { "type": "feishu", "webhookUrl": "https://open.feishu.cn/open-apis/bot/v2/hook/…" }
+}
+```
+
+At `timeOfDay` (in `timezone`) the scheduler reviews, **per branch**, the
+aggregate diff of that branch's commits authored that day, and pushes one Feishu
+card summarising the findings. `POST /api/schedules/:id/run` triggers a run
+immediately (for testing). Disable a schedule with `PUT {"enabled": false}`.
+
+The in-process scheduler runs **only while at least one enabled schedule
+exists** — with none configured, no timer is started. Schedule configs are kept
+in a lightweight store independent of the review database: the `mongo` DB driver
+stores them in a `schedules` collection (survives stateless redeploys); other
+drivers use a JSON file (`SCHEDULE_STORE_FILE`, default
+`./.reviewpilot/schedules.json` — put it on a volume to persist). Email delivery
+is a planned addition; Feishu is supported today.
 
 ## Deployment
 
@@ -377,6 +418,7 @@ engines that can't explore (e.g. `mock`).
 | Review engine  | `REVIEW_ENGINE`, `REVIEW_ENGINES_ENABLED`, `ENGINE_TIMEOUT_MS` | `mock`  |
 | Git platform   | `GITHUB_*`, `GITLAB_*`                       | unset (mock) |
 | Worker         | `RECOVER_INTERRUPTED_JOBS_ON_START`, `INLINE_COMMENTS`, `PUBLISH_CHECK_RUN`, `FAIL_ON_SEVERITY`, `ONLY_CHANGED_LINES` | `true`/`false`/—/`false` |
+| Scheduled scans| `SCHEDULE_STORE_FILE` (non-mongo drivers; mongo uses a `schedules` collection) | `./.reviewpilot/schedules.json` |
 | Auth/UI        | `API_TOKEN`, `WEB_DIST_DIR`                  | unset (no auth) |
 
 > Persistence: `mock` (in-memory) and `file` run with zero dependencies.

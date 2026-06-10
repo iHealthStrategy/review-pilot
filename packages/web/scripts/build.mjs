@@ -97,11 +97,57 @@ const html = `<!doctype html>
       <nav>
         <a href="#dashboard" data-view="dashboard">Dashboard</a>
         <a href="#new" data-view="new">New task</a>
+        <a href="#schedules" data-view="schedules">Scheduled scans</a>
       </nav>
       <main>
         <div class="view" id="view-dashboard">
           <section id="jobs"><h2>Review tasks</h2><div data-loading>Loading…</div></section>
           <section id="detail"></section>
+        </div>
+        <div class="view" id="view-schedules">
+          <section id="schedules"><h2>Scheduled scans</h2><div data-loading>Loading…</div></section>
+          <section>
+            <h2>New scheduled scan</h2>
+            <fieldset>
+              <legend>Daily scan → Feishu</legend>
+              <form id="schedule-form">
+                <div class="field">
+                  <label>Name</label>
+                  <input name="name" placeholder="nightly review" required />
+                </div>
+                <div class="field">
+                  <label>Platform</label>
+                  <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
+                </div>
+                <div class="field">
+                  <label>Repository (owner/repo)</label>
+                  <input name="repoFullName" placeholder="owner/repo" required />
+                </div>
+                <div class="field">
+                  <label>Branches (comma-separated; blank = all branches)</label>
+                  <input name="branches" placeholder="main, develop" />
+                </div>
+                <div class="field">
+                  <label>Time of day (HH:MM, 24h)</label>
+                  <input name="timeOfDay" placeholder="02:00" required />
+                </div>
+                <div class="field">
+                  <label>Timezone (IANA)</label>
+                  <input name="timezone" value="Asia/Shanghai" />
+                </div>
+                <div class="field">
+                  <label>Engine (optional)</label>
+                  <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
+                </div>
+                <div class="field">
+                  <label>Feishu webhook URL</label>
+                  <input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" required />
+                </div>
+                <button type="submit">Create schedule</button>
+              </form>
+              <p class="muted" id="schedule-result"></p>
+            </fieldset>
+          </section>
         </div>
         <div class="view" id="view-new">
           <section>
@@ -172,7 +218,7 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const view = name === "new" ? "new" : "dashboard";
+        const view = ["new", "schedules"].includes(name) ? name : "dashboard";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>
@@ -246,8 +292,88 @@ const html = `<!doctype html>
         finally { btn.disabled = false; btn.textContent = label; }
       };
 
+      function renderSchedules(schedules) {
+        const rows = schedules.map((s) => {
+          const branches = (s.branches && s.branches.length) ? s.branches.join(", ") : "(all)";
+          return \`<tr>
+            <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(disabled)</span>'}</td>
+            <td><code>\${esc(s.repoFullName)}</code></td>
+            <td>\${esc(branches)}</td>
+            <td>\${esc(s.timeOfDay)} \${esc(s.timezone)}</td>
+            <td>\${esc(s.delivery && s.delivery.type || "")}</td>
+            <td class="muted">\${esc(s.lastResult || "—")}</td>
+            <td>
+              <button class="secondary" data-run="\${esc(s.id)}">Run now</button>
+              <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
+              <button class="secondary" data-del="\${esc(s.id)}">Delete</button>
+            </td>
+          </tr>\`;
+        }).join("");
+        document.querySelector("#schedules").innerHTML =
+          \`<h2>Scheduled scans</h2>\` +
+          (schedules.length
+            ? \`<table><thead><tr><th>Name</th><th>Repository</th><th>Branches</th><th>Time</th><th>Deliver</th><th>Last result</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">No scheduled scans. The daily scheduler runs only when at least one is configured.</p>\`);
+        document.querySelectorAll('#schedules [data-run]').forEach((b) => {
+          b.onclick = async () => {
+            b.disabled = true; b.textContent = "Running…";
+            try { await api("/api/schedules/" + b.getAttribute("data-run") + "/run", { method: "POST" }); await refresh(); }
+            catch (e) { alert(e.message); b.disabled = false; b.textContent = "Run now"; }
+          };
+        });
+        document.querySelectorAll('#schedules [data-toggle]').forEach((b) => {
+          b.onclick = async () => {
+            try {
+              await api("/api/schedules/" + b.getAttribute("data-toggle"), {
+                method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: b.getAttribute("data-enabled") !== "true" }),
+              });
+              await refresh();
+            } catch (e) { alert(e.message); }
+          };
+        });
+        document.querySelectorAll('#schedules [data-del]').forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm("Delete this schedule?")) return;
+            try { await api("/api/schedules/" + b.getAttribute("data-del"), { method: "DELETE" }); await refresh(); }
+            catch (e) { alert(e.message); }
+          };
+        });
+      }
+
+      document.getElementById("schedule-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const out = document.getElementById("schedule-result");
+        const btn = f.querySelector('button[type="submit"]');
+        const label = btn.textContent;
+        btn.disabled = true; btn.textContent = "Creating…"; out.textContent = "";
+        try {
+          const payload = {
+            name: f.name.value,
+            platform: f.platform.value,
+            repoFullName: f.repoFullName.value,
+            branches: f.branches.value.split(",").map((s) => s.trim()).filter(Boolean),
+            timeOfDay: f.timeOfDay.value,
+            timezone: f.timezone.value || "UTC",
+            delivery: { type: "feishu", webhookUrl: f.webhookUrl.value },
+          };
+          if (f.engine.value) payload.engine = f.engine.value;
+          await api("/api/schedules", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          out.textContent = "✓ Schedule created.";
+          f.reset(); f.timezone.value = "Asia/Shanghai";
+          await refresh();
+        } catch (e) { out.textContent = "✗ " + e.message; }
+        finally { btn.disabled = false; btn.textContent = label; }
+      };
+
       async function refresh() {
         renderJobs(await load("/api/jobs", MOCK.jobs));
+        renderSchedules(await load("/api/schedules", []));
       }
 
       showView(location.hash.slice(1));

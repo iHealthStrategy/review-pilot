@@ -15,6 +15,8 @@ export interface CommandRunOptions {
   timeoutMs?: number;
   /** Written to the child's stdin (then closed) — used to feed review prompts. */
   input?: string;
+  /** Extra env vars merged over the parent env (e.g. TZ for date-bounded git). */
+  env?: Record<string, string>;
 }
 
 export interface CommandRunner {
@@ -40,6 +42,7 @@ export class ProcessCommandRunner implements CommandRunner {
           cwd: opts.cwd,
           timeout: opts.timeoutMs ?? 0,
           maxBuffer: 64 * 1024 * 1024,
+          ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
         },
         (err, stdout, stderr) => {
           const e = err as

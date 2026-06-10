@@ -21,8 +21,12 @@ test("web build emits a static index.html artifact", async () => {
   // Task list + manual new-task form are present.
   assert.match(html, /id="jobs"/);
   assert.match(html, /id="task-form"/);
+  // Scheduled-scans view + form.
+  assert.match(html, /data-view="schedules"/);
+  assert.match(html, /id="schedule-form"/);
   // Embedded mock data hydrates the UI standalone and hits the REST API at runtime.
   assert.match(html, /id="mock-data"/);
   assert.match(html, /\/api\/tasks/);
   assert.match(html, /\/api\/jobs/);
+  assert.match(html, /\/api\/schedules/);
 });

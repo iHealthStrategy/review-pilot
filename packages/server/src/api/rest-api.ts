@@ -7,6 +7,15 @@ import {
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import { EntityNotFoundError, type Repository } from "../persistence/repository.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
+import type {
+  CreateScheduleInput,
+  DeliveryConfig,
+  ScheduleStore,
+  UpdateScheduleInput,
+} from "../schedule/schedule.js";
+import { ScheduleNotFoundError } from "../schedule/schedule.js";
+import type { Scheduler } from "../schedule/scheduler.js";
+import { parseTimeOfDay } from "../schedule/tz.js";
 
 const PLATFORMS: readonly Platform[] = ["github", "gitlab"];
 const ENGINES: readonly ReviewEngineKind[] = [
@@ -26,6 +35,8 @@ type Handler = (
   ctx: { params: Record<string, string>; body: unknown; query: URLSearchParams },
   repo: Repository,
   tasks: TaskService | undefined,
+  schedules: ScheduleStore | undefined,
+  scheduler: Scheduler | undefined,
 ) => Promise<ApiResult>;
 
 interface Route {
@@ -233,7 +244,121 @@ const ROUTES: Route[] = [
       return ok({ taskId: outcome.jobId, jobId: outcome.jobId, status: outcome.status }, 202);
     },
   },
+  {
+    method: "GET",
+    pattern: /^\/api\/schedules$/,
+    handler: async (_ctx, _repo, _tasks, schedules) => {
+      if (!schedules) throw new HttpError(503, "schedule store not available");
+      return ok(await schedules.list());
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/schedules$/,
+    handler: async ({ body }, _repo, _tasks, schedules, scheduler) => {
+      if (!schedules) throw new HttpError(503, "schedule store not available");
+      const created = await schedules.create(parseScheduleCreate(body));
+      await scheduler?.refresh();
+      return ok(created, 201);
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/schedules\/(?<id>[^/]+)$/,
+    handler: async ({ params }, _repo, _tasks, schedules) => {
+      if (!schedules) throw new HttpError(503, "schedule store not available");
+      const s = await schedules.get(params.id!);
+      if (!s) throw new HttpError(404, `schedule not found: ${params.id}`);
+      return ok(s);
+    },
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/schedules\/(?<id>[^/]+)$/,
+    handler: async ({ params, body }, _repo, _tasks, schedules, scheduler) => {
+      if (!schedules) throw new HttpError(503, "schedule store not available");
+      const updated = await schedules.update(params.id!, parseScheduleUpdate(body));
+      await scheduler?.refresh();
+      return ok(updated);
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/api\/schedules\/(?<id>[^/]+)$/,
+    handler: async ({ params }, _repo, _tasks, schedules, scheduler) => {
+      if (!schedules) throw new HttpError(503, "schedule store not available");
+      await schedules.remove(params.id!);
+      await scheduler?.refresh();
+      return { status: 204, body: null };
+    },
+  },
+  {
+    // Run a schedule immediately (testing / on-demand), regardless of its time.
+    method: "POST",
+    pattern: /^\/api\/schedules\/(?<id>[^/]+)\/run$/,
+    handler: async ({ params }, _repo, _tasks, schedules, scheduler) => {
+      if (!schedules || !scheduler) throw new HttpError(503, "scheduler not available");
+      const config = await schedules.get(params.id!);
+      if (!config) throw new HttpError(404, `schedule not found: ${params.id}`);
+      const result = await scheduler.runConfig(config);
+      return ok({ ran: true, result });
+    },
+  },
 ];
+
+/** Validate and normalise a Feishu delivery spec: { type:"feishu", webhookUrl }. */
+function parseDelivery(v: unknown): DeliveryConfig {
+  const d = (v ?? {}) as Record<string, unknown>;
+  const type = asEnum(d.type, ["feishu"] as const, "delivery.type");
+  return { type, webhookUrl: asString(d.webhookUrl, "delivery.webhookUrl") };
+}
+
+function asBranches(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v)) throw new HttpError(400, "field 'branches' must be an array of strings");
+  return v.map((b, i) => asString(b, `branches[${i}]`));
+}
+
+function assertTime(v: string): string {
+  if (parseTimeOfDay(v) === null) {
+    throw new HttpError(400, "field 'timeOfDay' must be 'HH:MM' (24h)");
+  }
+  return v;
+}
+
+function parseScheduleCreate(body: unknown): CreateScheduleInput {
+  const b = (body ?? {}) as Record<string, unknown>;
+  return {
+    name: asString(b.name, "name"),
+    platform: asEnum(b.platform, PLATFORMS, "platform"),
+    repoFullName: asString(b.repoFullName, "repoFullName"),
+    ...(typeof b.cloneUrl === "string" && b.cloneUrl ? { cloneUrl: b.cloneUrl } : {}),
+    branches: asBranches(b.branches),
+    timeOfDay: assertTime(asString(b.timeOfDay, "timeOfDay")),
+    ...(typeof b.timezone === "string" && b.timezone ? { timezone: b.timezone } : {}),
+    ...(b.engine ? { engine: asEnum(b.engine, ENGINES, "engine") } : {}),
+    delivery: parseDelivery(b.delivery),
+    ...(typeof b.enabled === "boolean" ? { enabled: b.enabled } : {}),
+  };
+}
+
+function parseScheduleUpdate(body: unknown): UpdateScheduleInput {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const patch: UpdateScheduleInput = {};
+  if (b.name !== undefined) patch.name = asString(b.name, "name");
+  if (b.repoFullName !== undefined) patch.repoFullName = asString(b.repoFullName, "repoFullName");
+  if (b.cloneUrl !== undefined) patch.cloneUrl = asString(b.cloneUrl, "cloneUrl");
+  if (b.branches !== undefined) patch.branches = asBranches(b.branches);
+  if (b.timeOfDay !== undefined) patch.timeOfDay = assertTime(asString(b.timeOfDay, "timeOfDay"));
+  if (b.timezone !== undefined) patch.timezone = asString(b.timezone, "timezone");
+  if (b.engine !== undefined) patch.engine = b.engine === null ? null : asEnum(b.engine, ENGINES, "engine");
+  if (b.delivery !== undefined) patch.delivery = parseDelivery(b.delivery);
+  if (b.enabled !== undefined) {
+    if (typeof b.enabled !== "boolean") throw new HttpError(400, "field 'enabled' must be a boolean");
+    patch.enabled = b.enabled;
+  }
+  return patch;
+}
 
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -255,6 +380,10 @@ export interface ApiOptions {
   apiToken?: string;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
+  /** Required for the /api/schedules routes. */
+  scheduleStore?: ScheduleStore;
+  /** Refreshed after schedule mutations; drives manual run-now. */
+  scheduler?: Scheduler;
 }
 
 function authorized(req: IncomingMessage, token: string): boolean {
@@ -265,6 +394,8 @@ function authorized(req: IncomingMessage, token: string): boolean {
 export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const token = options.apiToken ?? "";
   const tasks = options.taskService;
+  const schedules = options.scheduleStore;
+  const scheduler = options.scheduler;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const parsed = new URL(req.url ?? "/", "http://localhost");
@@ -296,11 +427,14 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
         { params, body, query: parsed.searchParams },
         repo,
         tasks,
+        schedules,
+        scheduler,
       );
       send(result.status, result.body);
     } catch (err) {
       if (err instanceof HttpError) send(err.status, { error: err.message });
       else if (err instanceof EntityNotFoundError) send(404, { error: err.message });
+      else if (err instanceof ScheduleNotFoundError) send(404, { error: err.message });
       else if (err instanceof SyntaxError) send(400, { error: "invalid JSON body" });
       else send(500, { error: (err as Error).message });
     }
