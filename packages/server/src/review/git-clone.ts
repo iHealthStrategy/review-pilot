@@ -2,14 +2,21 @@ import { mkdir, rm } from "node:fs/promises";
 import type { CommandRunner } from "./command-runner.js";
 
 /**
- * Clone a repo (blobless, no checkout) with retries. Repo egress to a Git host
- * can be intermittently flaky behind proxies/firewalls (transient
+ * Clone a repo (full history, no checkout) with retries. Repo egress to a Git
+ * host can be intermittently flaky behind proxies/firewalls (transient
  * "SSL unexpected eof" / connect timeouts), and a one-shot clone fails the whole
  * review on the first blip. Retries up to `attempts` times, wiping the partial
  * working dir between tries (git refuses to clone into a non-empty dir).
- * Throws with the last stderr if every attempt fails.
+ *
+ * NOTE: a FULL clone (not `--filter=blob:none`) is deliberate. A blobless clone
+ * defers blob downloads to checkout/diff time, fetching them lazily from the
+ * promisor remote — and that mid-operation fetch is git-internal, so our retry
+ * can't cover it; on a flaky network it fails with "could not fetch … from
+ * promisor remote". Fetching everything up-front (inside the retried clone)
+ * keeps all later checkout/diff steps purely local. Throws with the last
+ * stderr if every attempt fails.
  */
-export async function cloneBloblessWithRetry(
+export async function cloneWithRetry(
   runner: CommandRunner,
   cloneUrl: string,
   dir: string,
@@ -17,13 +24,7 @@ export async function cloneBloblessWithRetry(
 ): Promise<void> {
   let lastErr = "";
   for (let i = 1; i <= attempts; i++) {
-    const res = await runner.run("git", [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      cloneUrl,
-      dir,
-    ]);
+    const res = await runner.run("git", ["clone", "--no-checkout", cloneUrl, dir]);
     if (res.code === 0) return;
     lastErr = res.stderr.trim();
     if (i < attempts) {

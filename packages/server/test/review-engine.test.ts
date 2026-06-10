@@ -174,9 +174,11 @@ test("GitCloner: issues a full (blobless) clone + checkout for the head ref", as
   const ws = await cloner.clone("https://host/acme/demo.git", "abc123");
   try {
     const cmds = runner.calls.map((c) => `${c.command} ${c.args.join(" ")}`);
-    // Full clone (no --depth) so a PR head on a non-default branch is reachable.
-    assert.ok(cmds[0]?.startsWith("git clone --filter=blob:none --no-checkout https://host/acme/demo.git"));
+    // Full clone (no --depth, no blob filter) so a PR head on a non-default
+    // branch is reachable and no blob is lazily fetched later.
+    assert.ok(cmds[0]?.startsWith("git clone --no-checkout https://host/acme/demo.git"));
     assert.ok(!cmds[0]?.includes("--depth"));
+    assert.ok(!cmds[0]?.includes("--filter"));
     assert.ok(cmds.some((c) => /checkout abc123$/.test(c)));
   } finally {
     await cloner.cleanup(ws);

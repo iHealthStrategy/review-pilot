@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner } from "./command-runner.js";
-import { cloneBloblessWithRetry } from "./git-clone.js";
+import { cloneWithRetry } from "./git-clone.js";
 
 /** A synced working copy of a repository at a specific ref. */
 export interface Workspace {
@@ -47,11 +47,11 @@ export class GitCloner implements Cloner {
     // Full clone (all branches + history) so ANY commit reachable from a ref —
     // including a PR head on a non-default branch — can be checked out. A
     // shallow/single-branch clone only has the default branch tip, which made
-    // `checkout <pr-head-sha>` fail with "unable to read tree". Blobs are
-    // filtered out (--filter=blob:none) so this stays cheap on large repos:
-    // git lazily fetches only the blobs the checkout/engine actually reads.
-    // Retries ride out transient repo-host egress blips.
-    await cloneBloblessWithRetry(this.runner, cloneUrl, dir);
+    // `checkout <pr-head-sha>` fail with "unable to read tree". A full (not
+    // blobless) clone also means checkout never lazily fetches blobs from a
+    // promisor remote mid-operation (which can't be retried and fails on flaky
+    // networks). Retries ride out transient repo-host egress blips.
+    await cloneWithRetry(this.runner, cloneUrl, dir);
     // Best-effort fetch of the exact commit (covers a head sha not yet pointed
     // at by a fetched ref); ignored if the server disallows by-sha fetch.
     await this.runner.run("git", ["-C", dir, "fetch", "origin", ref]);

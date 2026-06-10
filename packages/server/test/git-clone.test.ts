@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { CommandResult, CommandRunner } from "../src/review/command-runner.js";
-import { cloneBloblessWithRetry } from "../src/review/git-clone.js";
+import { cloneWithRetry } from "../src/review/git-clone.js";
 
 class SeqRunner implements CommandRunner {
   calls = 0;
@@ -16,18 +16,18 @@ class SeqRunner implements CommandRunner {
   }
 }
 
-test("cloneBloblessWithRetry: succeeds on a later attempt after transient failures", async () => {
+test("cloneWithRetry: succeeds on a later attempt after transient failures", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rp-clone-"));
   const runner = new SeqRunner([1, 1, 0]); // fail, fail, succeed
-  await cloneBloblessWithRetry(runner, "https://host/x.git", dir);
+  await cloneWithRetry(runner, "https://host/x.git", dir);
   assert.equal(runner.calls, 3);
 });
 
-test("cloneBloblessWithRetry: throws after all attempts fail", async () => {
+test("cloneWithRetry: throws after all attempts fail", async () => {
   const dir = await mkdtemp(join(tmpdir(), "rp-clone-"));
   const runner = new SeqRunner([1, 1, 1]);
   await assert.rejects(
-    cloneBloblessWithRetry(runner, "https://host/x.git", dir),
+    cloneWithRetry(runner, "https://host/x.git", dir),
     /after 3 attempts: unexpected eof/,
   );
 });
