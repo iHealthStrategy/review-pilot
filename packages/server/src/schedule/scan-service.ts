@@ -35,6 +35,13 @@ export interface ScanServiceDeps {
   scan?: (dir: string) => Promise<string[]>;
   workspaceRoot?: string;
   onlyChangedLines?: boolean;
+  /**
+   * Resolve an authenticated clone URL via the platform provider (injects a
+   * token + honours any host override), so PRIVATE repos can be cloned — the
+   * same resolution the PR pipeline uses. Falls back to the schedule's stored
+   * cloneUrl when omitted.
+   */
+  resolveCloneUrl?: (platform: Platform, repoFullName: string) => Promise<string>;
 }
 
 /**
@@ -64,10 +71,14 @@ export class ScheduledScanService {
     await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-scan-"));
     try {
-      // Clone WITHOUT `-C dir` (cloning into the cwd confuses git); subsequent
-      // commands run inside the repo via the `-C dir` helper. Retries ride out
-      // transient repo-host egress blips.
-      await cloneWithRetry(this.deps.git, config.cloneUrl, dir);
+      // Prefer a provider-resolved (token-injected) URL so private repos clone;
+      // fall back to the stored URL. Clone WITHOUT `-C dir` (cloning into the
+      // cwd confuses git); subsequent commands run inside the repo via `-C dir`.
+      // Retries ride out transient repo-host egress blips.
+      const cloneUrl = this.deps.resolveCloneUrl
+        ? await this.deps.resolveCloneUrl(config.platform, config.repoFullName)
+        : config.cloneUrl;
+      await cloneWithRetry(this.deps.git, cloneUrl, dir);
 
       const branches = config.branches.length
         ? config.branches

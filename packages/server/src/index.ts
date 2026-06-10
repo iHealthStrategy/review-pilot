@@ -115,6 +115,9 @@ export function startApp(
     enabledEngines: config.review.enabledEngines,
     workspaceRoot: config.workspaceDir,
     onlyChangedLines: config.review.onlyChangedLines,
+    // Token-injected clone URL (via the provider) so private repos can be cloned.
+    resolveCloneUrl: (platform, fullName) =>
+      providerFor(platform).cloneUrl({ fullName }),
   });
   const scheduler = new Scheduler({
     store: scheduleStore,

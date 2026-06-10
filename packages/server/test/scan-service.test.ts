@@ -70,6 +70,25 @@ test("ScheduledScanService: reviews today's aggregate diff per branch", async ()
   assert.ok(logCall?.args.some((a) => a.startsWith("--since=")));
 });
 
+test("ScheduledScanService: clones the provider-resolved (auth) URL when given", async () => {
+  const git = new FakeGit([
+    [/log origin\/main/, "aaa\n"],
+    [/diff --name-status/, "M\tsrc/a.ts\n"],
+    [/diff .* -- src\/a\.ts/, "@@ +1 @@\n+z"],
+  ]);
+  const service = new ScheduledScanService({
+    git,
+    createEngine: () => new MockReviewEngine(),
+    defaultEngine: "mock",
+    enabledEngines: ["mock"],
+    scan: async () => ["src/a.ts"],
+    resolveCloneUrl: async (_p, fn) => `https://x-access-token:TOK@github.com/${fn}.git`,
+  });
+  await service.scan(config, new Date("2026-06-10T20:00:00Z"));
+  const cloneCall = git.calls.find((c) => c.args.includes("clone"));
+  assert.ok(cloneCall?.args.some((a) => a.includes("x-access-token:TOK@github.com/acme/demo.git")));
+});
+
 test("ScheduledScanService: a branch with no commits today is skipped", async () => {
   const git = new FakeGit([[/log origin\/main/, ""]]); // no commits today
   const result = await makeService(git).scan(config, new Date("2026-06-10T20:00:00Z"));
