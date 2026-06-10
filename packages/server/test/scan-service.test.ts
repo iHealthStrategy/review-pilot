@@ -58,6 +58,11 @@ test("ScheduledScanService: reviews today's aggregate diff per branch", async ()
   assert.equal(result.branches[0]!.findings.length, 2); // one per changed file
   assert.equal(result.totalFindings, 2);
 
+  // Clone runs WITHOUT `-C dir` (cloning into the cwd breaks git).
+  const cloneCall = git.calls.find((c) => c.args.includes("clone"));
+  assert.equal(cloneCall?.args[0], "clone");
+  assert.ok(!cloneCall?.args.includes("-C"));
+
   // Diff range is parent-of-oldest..branch-tip; log uses since with TZ env.
   assert.ok(git.calls.some((c) => c.args.join(" ").includes("bbb111^..origin/main")));
   const logCall = git.calls.find((c) => c.args.includes("log"));

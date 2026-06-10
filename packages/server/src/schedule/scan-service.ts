@@ -63,7 +63,14 @@ export class ScheduledScanService {
     await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-scan-"));
     try {
-      await this.run(dir, ["clone", "--filter=blob:none", "--no-checkout", config.cloneUrl, dir]);
+      // Clone WITHOUT `-C dir` (cloning into the cwd confuses git); subsequent
+      // commands run inside the repo via the `-C dir` helper.
+      const cloned = await this.deps.git.run("git", [
+        "clone", "--filter=blob:none", "--no-checkout", config.cloneUrl, dir,
+      ]);
+      if (cloned.code !== 0) {
+        throw new Error(`git clone failed: ${cloned.stderr.trim()}`);
+      }
 
       const branches = config.branches.length
         ? config.branches
