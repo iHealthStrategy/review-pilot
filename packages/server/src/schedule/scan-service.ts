@@ -65,7 +65,10 @@ export class ScheduledScanService {
     const engine = this.deps.createEngine(kind);
     const tz = config.timezone || "UTC";
     const date = tzDate(tz, now);
-    const since = `${date} 00:00:00`;
+    // Rolling lookback window (NOT "since midnight"), so a run shortly after
+    // midnight still covers the previous day. git parses the relative date.
+    const lookbackHours = config.lookbackHours && config.lookbackHours > 0 ? config.lookbackHours : 24;
+    const since = `${lookbackHours} hours ago`;
 
     const root = this.deps.workspaceRoot ?? tmpdir();
     await mkdir(root, { recursive: true });

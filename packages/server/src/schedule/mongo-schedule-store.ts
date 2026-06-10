@@ -67,6 +67,7 @@ export class MongoScheduleStore implements ScheduleStore {
       branches: input.branches ?? [],
       timeOfDay: input.timeOfDay,
       timezone: input.timezone ?? "UTC",
+      lookbackHours: input.lookbackHours && input.lookbackHours > 0 ? input.lookbackHours : 24,
       ...(input.engine ? { engine: input.engine } : {}),
       delivery: input.delivery,
       enabled: input.enabled ?? true,
@@ -83,7 +84,7 @@ export class MongoScheduleStore implements ScheduleStore {
     const set: Record<string, unknown> = { updatedAt: this.clock() };
     for (const k of [
       "name", "repoFullName", "cloneUrl", "branches", "timeOfDay", "timezone",
-      "delivery", "enabled", "lastRunAt", "lastResult",
+      "lookbackHours", "delivery", "enabled", "lastRunAt", "lastResult",
     ] as const) {
       if (patch[k] !== undefined) set[k] = patch[k];
     }

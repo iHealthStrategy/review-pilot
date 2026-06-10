@@ -331,6 +331,14 @@ function assertTime(v: string): string {
   return v;
 }
 
+function asLookbackHours(v: unknown): number {
+  const n = typeof v === "number" ? v : Number.parseInt(String(v), 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new HttpError(400, "field 'lookbackHours' must be a positive number");
+  }
+  return n;
+}
+
 function parseScheduleCreate(body: unknown): CreateScheduleInput {
   const b = (body ?? {}) as Record<string, unknown>;
   return {
@@ -341,6 +349,7 @@ function parseScheduleCreate(body: unknown): CreateScheduleInput {
     branches: asBranches(b.branches),
     timeOfDay: assertTime(asString(b.timeOfDay, "timeOfDay")),
     ...(typeof b.timezone === "string" && b.timezone ? { timezone: b.timezone } : {}),
+    ...(b.lookbackHours !== undefined ? { lookbackHours: asLookbackHours(b.lookbackHours) } : {}),
     ...(b.engine ? { engine: asEnum(b.engine, ENGINES, "engine") } : {}),
     delivery: parseDelivery(b.delivery),
     ...(typeof b.enabled === "boolean" ? { enabled: b.enabled } : {}),
@@ -356,6 +365,7 @@ function parseScheduleUpdate(body: unknown): UpdateScheduleInput {
   if (b.branches !== undefined) patch.branches = asBranches(b.branches);
   if (b.timeOfDay !== undefined) patch.timeOfDay = assertTime(asString(b.timeOfDay, "timeOfDay"));
   if (b.timezone !== undefined) patch.timezone = asString(b.timezone, "timezone");
+  if (b.lookbackHours !== undefined) patch.lookbackHours = asLookbackHours(b.lookbackHours);
   if (b.engine !== undefined) patch.engine = b.engine === null ? null : asEnum(b.engine, ENGINES, "engine");
   if (b.delivery !== undefined) patch.delivery = parseDelivery(b.delivery);
   if (b.enabled !== undefined) {

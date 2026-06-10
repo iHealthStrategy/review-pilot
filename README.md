@@ -165,15 +165,18 @@ POST /api/schedules
   "branches": ["main", "develop"],                    // empty/omitted = all remote branches
   "timeOfDay": "02:00",                               // 24h, in `timezone`
   "timezone": "Asia/Shanghai",                        // IANA tz
+  "lookbackHours": 24,                                // rolling window to scan (default 24)
   "engine": "claude-code",                            // optional; server default otherwise
   "delivery": { "type": "feishu", "webhookUrl": "https://open.feishu.cn/open-apis/bot/v2/hook/…" }
 }
 ```
 
 At `timeOfDay` (in `timezone`) the scheduler reviews, **per branch**, the
-aggregate diff of that branch's commits authored that day, and pushes one Feishu
-card summarising the findings. `POST /api/schedules/:id/run` triggers a run
-immediately (for testing). Disable a schedule with `PUT {"enabled": false}`.
+aggregate diff of that branch's commits from the **last `lookbackHours`** (a
+rolling window, default 24h — NOT "since midnight", so a run shortly after
+midnight still covers the previous day), and pushes one Feishu card summarising
+the findings. `POST /api/schedules/:id/run` triggers a run immediately (for
+testing). Disable a schedule with `PUT {"enabled": false}`.
 
 `delivery.webhookUrl` is optional — leave it empty to use the deploy-wide
 `FEISHU_WEBHOOK_URL` env var as the default push target (configure the

@@ -25,8 +25,15 @@ export interface ScheduleConfig {
   readonly branches: string[];
   /** Daily fire time, "HH:MM" 24h. */
   readonly timeOfDay: string;
-  /** IANA timezone the `timeOfDay` and "today" boundary are evaluated in. */
+  /** IANA timezone the `timeOfDay` is evaluated in. */
   readonly timezone: string;
+  /**
+   * How far back to look for commits, in hours (default 24). The scan reviews
+   * commits authored within the last `lookbackHours` from the run time — a
+   * rolling window, NOT "since midnight", so a run shortly after midnight still
+   * covers the previous day's work.
+   */
+  readonly lookbackHours: number;
   /** Engine override; falls back to the server default when empty. */
   readonly engine?: ReviewEngineKind;
   readonly delivery: DeliveryConfig;
@@ -48,6 +55,7 @@ export interface CreateScheduleInput {
   branches?: string[];
   timeOfDay: string;
   timezone?: string;
+  lookbackHours?: number;
   engine?: ReviewEngineKind;
   delivery: DeliveryConfig;
   enabled?: boolean;
@@ -61,6 +69,7 @@ export interface UpdateScheduleInput {
   branches?: string[];
   timeOfDay?: string;
   timezone?: string;
+  lookbackHours?: number;
   engine?: ReviewEngineKind | null;
   delivery?: DeliveryConfig;
   enabled?: boolean;

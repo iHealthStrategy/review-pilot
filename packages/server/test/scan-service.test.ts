@@ -26,6 +26,7 @@ const config: ScheduleConfig = {
   branches: ["main"],
   timeOfDay: "02:00",
   timezone: "Asia/Shanghai",
+  lookbackHours: 24,
   delivery: { type: "feishu", webhookUrl: "https://hook" },
   enabled: true,
   createdAt: "2026-01-01T00:00:00Z",
@@ -67,7 +68,8 @@ test("ScheduledScanService: reviews today's aggregate diff per branch", async ()
   assert.ok(git.calls.some((c) => c.args.join(" ").includes("bbb111^..origin/main")));
   const logCall = git.calls.find((c) => c.args.includes("log"));
   assert.equal(logCall?.env?.TZ, "Asia/Shanghai");
-  assert.ok(logCall?.args.some((a) => a.startsWith("--since=")));
+  // Rolling window (default 24h), not "since midnight".
+  assert.ok(logCall?.args.includes("--since=24 hours ago"));
 });
 
 test("ScheduledScanService: clones the provider-resolved (auth) URL when given", async () => {

@@ -37,6 +37,7 @@ test("FileScheduleStore: create defaults + read back (in-memory)", async () => {
   assert.deepEqual(c.branches, []); // empty = all branches
   assert.equal(c.cloneUrl, "https://github.com/acme/demo.git"); // derived
   assert.equal(c.timezone, "Asia/Shanghai");
+  assert.equal(c.lookbackHours, 24); // default rolling window
   assert.deepEqual((await store.list()).map((s) => s.id), ["sch_1"]);
 });
 

@@ -14,6 +14,7 @@ const cfg = (over: Partial<ScheduleConfig> = {}): ScheduleConfig => ({
   branches: ["main"],
   timeOfDay: "02:00",
   timezone: "Asia/Shanghai",
+  lookbackHours: 24,
   delivery: { type: "feishu", webhookUrl: "https://hook" },
   enabled: true,
   createdAt: "2026-01-01T00:00:00Z",

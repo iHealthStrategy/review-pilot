@@ -136,6 +136,10 @@ const html = `<!doctype html>
                   <input name="timezone" value="Asia/Shanghai" />
                 </div>
                 <div class="field">
+                  <label>Lookback hours (how far back to scan commits; default 24)</label>
+                  <input name="lookbackHours" type="number" min="1" placeholder="24" />
+                </div>
+                <div class="field">
                   <label>Engine (optional)</label>
                   <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
                 </div>
@@ -358,6 +362,7 @@ const html = `<!doctype html>
             timezone: f.timezone.value || "UTC",
             delivery: { type: "feishu", webhookUrl: f.webhookUrl.value },
           };
+          if (f.lookbackHours.value) payload.lookbackHours = Number(f.lookbackHours.value);
           if (f.engine.value) payload.engine = f.engine.value;
           await api("/api/schedules", {
             method: "POST",
