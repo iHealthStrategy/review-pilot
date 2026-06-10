@@ -32,6 +32,8 @@ services:
       # Optional: override the external engine command/args.
       REVIEW_ENGINE_COMMAND: ${REVIEW_ENGINE_COMMAND:-}
       REVIEW_ENGINE_ARGS: ${REVIEW_ENGINE_ARGS:-}
+      # Language for finding text (e.g. "Chinese"); empty = English.
+      REVIEW_LANGUAGE: ${REVIEW_LANGUAGE:-}
       ENGINE_TIMEOUT_MS: ${ENGINE_TIMEOUT_MS:-600000}
       # Per-repo project-understanding cache.
       PROJECT_INSIGHT_CACHE: ${PROJECT_INSIGHT_CACHE:-true}

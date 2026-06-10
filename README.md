@@ -424,7 +424,7 @@ engines that can't explore (e.g. `mock`).
 | Concern        | Env var(s)                                  | Default |
 | -------------- | ------------------------------------------- | ------- |
 | Persistence    | `DB_DRIVER` (`mock`/`sqlite`/`postgres`/`mongo`), `MONGODB_URI`, `MONGODB_DB`, `DATABASE_URL` | `mock` |
-| Review engine  | `REVIEW_ENGINE`, `REVIEW_ENGINES_ENABLED`, `ENGINE_TIMEOUT_MS` | `mock`  |
+| Review engine  | `REVIEW_ENGINE`, `REVIEW_ENGINES_ENABLED`, `ENGINE_TIMEOUT_MS`, `REVIEW_LANGUAGE` (finding text language, e.g. `Chinese`) | `mock` / English |
 | Git platform   | `GITHUB_*`, `GITLAB_*`                       | unset (mock) |
 | Worker         | `RECOVER_INTERRUPTED_JOBS_ON_START`, `INLINE_COMMENTS`, `PUBLISH_CHECK_RUN`, `FAIL_ON_SEVERITY`, `ONLY_CHANGED_LINES` | `true`/`false`/—/`false` |
 | Scheduled scans| `SCHEDULE_STORE_FILE` (non-mongo drivers; mongo uses a `schedules` collection) | `./.reviewpilot/schedules.json` |
