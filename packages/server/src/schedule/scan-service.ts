@@ -89,17 +89,20 @@ export class ScheduledScanService {
 
       const results: BranchScanResult[] = [];
       for (const branch of branches) {
+        // Use the FULL ref so the branch name can't be ambiguous (e.g. a branch
+        // literally named "origin" → `origin/origin` is rejected by git).
+        const ref = `refs/remotes/origin/${branch}`;
         const commits = (await this.run(dir, [
-          "log", `origin/${branch}`, `--since=${since}`, "--format=%H",
+          "log", ref, `--since=${since}`, "--format=%H",
         ], tz)).stdout.split("\n").map((s) => s.trim()).filter(Boolean);
         if (commits.length === 0) continue; // no changes today on this branch
 
         const oldest = commits[commits.length - 1]!;
-        const range = `${oldest}^..origin/${branch}`;
+        const range = `${oldest}^..${ref}`;
         const diff = await this.collectDiff(dir, range);
         if (diff.length === 0) continue;
 
-        await this.run(dir, ["checkout", "--force", `origin/${branch}`]);
+        await this.run(dir, ["checkout", "--force", ref]);
         const structure = await (this.deps.scan ?? scanStructure)(dir);
         const context = this.buildContext(config, branch, structure, diff);
         const produced = await engine.review(context);
@@ -146,17 +149,15 @@ export class ScheduledScanService {
   }
 
   private async remoteBranches(dir: string): Promise<string[]> {
+    // for-each-ref with lstrip=3 yields just the branch name (e.g. "main",
+    // "feature/x"), with no "origin/" prefix and no symbolic HEAD-pointer noise
+    // that `git branch -r` emits — so we never build an ambiguous ref.
     const out = (await this.run(dir, [
-      "branch", "-r", "--format=%(refname:short)",
+      "for-each-ref", "--format=%(refname:lstrip=3)", "refs/remotes/origin",
     ])).stdout;
-    // Keep only real `origin/<branch>` entries. The remote HEAD pointer shows
-    // up as a bare "origin" (and "origin/HEAD -> origin/main" with some flags),
-    // which must be dropped — otherwise it becomes a bogus `origin/origin` ref.
     return out
       .split("\n")
       .map((s) => s.trim())
-      .filter((s) => s.startsWith("origin/") && !s.includes("->"))
-      .map((s) => s.slice("origin/".length))
       .filter((s) => s && s !== "HEAD");
   }
 

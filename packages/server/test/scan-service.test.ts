@@ -45,7 +45,7 @@ function makeService(git: FakeGit) {
 
 test("ScheduledScanService: reviews today's aggregate diff per branch", async () => {
   const git = new FakeGit([
-    [/log origin\/main/, "ccc222\nbbb111\n"], // two commits today (newest first)
+    [/log refs\/remotes\/origin\/main/, "ccc222\nbbb111\n"], // two commits (newest first)
     [/diff --name-status/, "A\tsrc/new.ts\nM\tsrc/mod.ts\n"],
     [/diff .* -- src\/new\.ts/, "@@ +1 @@\n+x"],
     [/diff .* -- src\/mod\.ts/, "@@ +1 @@\n+y"],
@@ -64,8 +64,8 @@ test("ScheduledScanService: reviews today's aggregate diff per branch", async ()
   assert.equal(cloneCall?.args[0], "clone");
   assert.ok(!cloneCall?.args.includes("-C"));
 
-  // Diff range is parent-of-oldest..branch-tip; log uses since with TZ env.
-  assert.ok(git.calls.some((c) => c.args.join(" ").includes("bbb111^..origin/main")));
+  // Full-ref range (unambiguous); log uses since with TZ env.
+  assert.ok(git.calls.some((c) => c.args.join(" ").includes("bbb111^..refs/remotes/origin/main")));
   const logCall = git.calls.find((c) => c.args.includes("log"));
   assert.equal(logCall?.env?.TZ, "Asia/Shanghai");
   // Rolling window (default 24h), not "since midnight".
@@ -74,7 +74,7 @@ test("ScheduledScanService: reviews today's aggregate diff per branch", async ()
 
 test("ScheduledScanService: clones the provider-resolved (auth) URL when given", async () => {
   const git = new FakeGit([
-    [/log origin\/main/, "aaa\n"],
+    [/log refs\/remotes\/origin\/main/, "aaa\n"],
     [/diff --name-status/, "M\tsrc/a.ts\n"],
     [/diff .* -- src\/a\.ts/, "@@ +1 @@\n+z"],
   ]);
@@ -92,7 +92,7 @@ test("ScheduledScanService: clones the provider-resolved (auth) URL when given",
 });
 
 test("ScheduledScanService: a branch with no commits today is skipped", async () => {
-  const git = new FakeGit([[/log origin\/main/, ""]]); // no commits today
+  const git = new FakeGit([[/log refs\/remotes\/origin\/main/, ""]]); // no commits today
   const result = await makeService(git).scan(config, new Date("2026-06-10T20:00:00Z"));
   assert.equal(result.branches.length, 0);
   assert.equal(result.totalFindings, 0);
@@ -100,11 +100,11 @@ test("ScheduledScanService: a branch with no commits today is skipped", async ()
 
 test("ScheduledScanService: enumerates all remote branches when none configured", async () => {
   const git = new FakeGit([
-    // Includes the bare "origin" HEAD pointer (refname:short of origin/HEAD),
-    // which must be dropped so we never query a bogus `origin/origin`.
-    [/branch -r/, "origin\norigin/HEAD -> origin/main\norigin/main\norigin/dev\n"],
-    [/log origin\/main/, "aaa\n"],
-    [/log origin\/dev/, ""],
+    // for-each-ref --format=%(refname:lstrip=3) yields bare branch names and no
+    // HEAD-pointer noise — "main" and "dev" only.
+    [/for-each-ref/, "HEAD\nmain\ndev\n"],
+    [/log refs\/remotes\/origin\/main/, "aaa\n"],
+    [/log refs\/remotes\/origin\/dev/, ""],
     [/diff --name-status/, "M\tsrc/a.ts\n"],
     [/diff .* -- src\/a\.ts/, "@@ +1 @@\n+z"],
   ]);
@@ -112,9 +112,7 @@ test("ScheduledScanService: enumerates all remote branches when none configured"
     { ...config, branches: [] },
     new Date("2026-06-10T20:00:00Z"),
   );
-  // main had a commit (1 finding); dev had none (skipped); HEAD pointer ignored.
+  // main had a commit (1 finding); dev had none (skipped); HEAD ignored.
   assert.equal(result.branches.length, 1);
   assert.equal(result.branches[0]!.branch, "main");
-  // Never queries the bogus origin/origin (the bare "origin" HEAD pointer).
-  assert.ok(!git.calls.some((c) => c.args.join(" ").includes("origin/origin")));
 });
