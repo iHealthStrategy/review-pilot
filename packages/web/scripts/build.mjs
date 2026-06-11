@@ -5,11 +5,13 @@ import { fileURLToPath } from "node:url";
 /**
  * Build the task-driven Web UI. Emits a single static `dist/index.html` with a
  * left sidebar switching two views:
- *   - Dashboard: the review tasks (jobs) list + a detail panel (findings/logs)
- *   - New task:  a manual form that POSTs a self-contained review task
- * It hydrates from the server REST API at runtime (`/api/jobs`, `/api/tasks`),
- * sends the configured bearer token, and falls back to embedded mock data so
- * the built artifact renders standalone with no server.
+ *   - Scheduled scans (default): the daily-scan schedules list; "+ New scheduled
+ *     scan" opens a modal form.
+ *   - Dashboard: the review tasks (jobs) list + detail; "+ New task" opens a
+ *     modal form that POSTs a self-contained review task.
+ * It hydrates from the server REST API at runtime (`/api/jobs`, `/api/schedules`,
+ * `/api/tasks`), sends the configured bearer token, and falls back to embedded
+ * mock data so the built artifact renders standalone with no server.
  */
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = resolve(root, "dist");
@@ -54,6 +56,8 @@ const html = `<!doctype html>
       .view.active { display: block; }
       section { margin-bottom: 28px; }
       h2 { font-size: 14px; text-transform: uppercase; color: #8b95a5; }
+      .view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+      .view-head h2 { margin: 0; }
       table { width: 100%; border-collapse: collapse; }
       th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #232833; font-size: 14px; }
       tr.clickable { cursor: pointer; }
@@ -65,16 +69,9 @@ const html = `<!doctype html>
       .pending { background: #232833; color: #8b95a5; }
       .bar { background: #232833; border-radius: 6px; height: 8px; width: 120px; overflow: hidden; }
       .bar > i { display: block; height: 100%; background: #4c8bf5; }
-      form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-      input, select, button { background: #11151c; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+      input, select, button, textarea { background: #11151c; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
       button { cursor: pointer; background: #1f6feb; border-color: #1f6feb; color: #fff; }
       button.secondary { background: #232833; border-color: #2a2f3a; }
-      fieldset { border: 1px solid #232833; border-radius: 8px; padding: 14px; max-width: 520px; }
-      fieldset form { flex-direction: column; align-items: stretch; }
-      fieldset label { font-size: 12px; color: #8b95a5; display: block; margin-bottom: 2px; }
-      fieldset .field { margin-bottom: 10px; }
-      fieldset input, fieldset select { width: 100%; box-sizing: border-box; }
-      legend { color: #8b95a5; font-size: 12px; text-transform: uppercase; }
       .sev { font-weight: 600; }
       .sev-critical { color: #e76e6e; } .sev-major { color: #e7a16e; }
       .sev-minor { color: #e7d56e; } .sev-info { color: #8b95a5; }
@@ -82,6 +79,18 @@ const html = `<!doctype html>
       #detail { margin-top: 12px; }
       .muted { color: #8b95a5; font-size: 12px; }
       .token { display: flex; gap: 6px; align-items: center; }
+      /* Modal dialog */
+      .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: flex-start; justify-content: center; z-index: 100; overflow-y: auto; padding: 40px 16px; box-sizing: border-box; }
+      .modal-overlay.open { display: flex; }
+      .modal { background: #161a22; border: 1px solid #2a2f3a; border-radius: 10px; padding: 18px 20px; width: 560px; max-width: 100%; }
+      .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+      .modal-head h2 { margin: 0; }
+      .modal .close { background: transparent; border: none; color: #8b95a5; font-size: 20px; cursor: pointer; padding: 0 6px; }
+      .modal form { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+      .modal label { font-size: 12px; color: #8b95a5; display: block; margin-bottom: 2px; }
+      .modal .field { margin-bottom: 10px; }
+      .modal input, .modal select, .modal textarea { width: 100%; box-sizing: border-box; }
+      .modal .result { margin: 8px 0 0; }
     </style>
   </head>
   <body>
@@ -95,102 +104,65 @@ const html = `<!doctype html>
     </header>
     <div class="layout">
       <nav>
-        <a href="#dashboard" data-view="dashboard">Dashboard</a>
-        <a href="#new" data-view="new">New task</a>
         <a href="#schedules" data-view="schedules">Scheduled scans</a>
+        <a href="#dashboard" data-view="dashboard">Dashboard</a>
       </nav>
       <main>
-        <div class="view" id="view-dashboard">
-          <section id="jobs"><h2>Review tasks</h2><div data-loading>Loading…</div></section>
-          <section id="detail"></section>
-        </div>
         <div class="view" id="view-schedules">
-          <section id="schedules"><h2>Scheduled scans</h2><div data-loading>Loading…</div></section>
-          <section>
-            <h2>New scheduled scan</h2>
-            <fieldset>
-              <legend>Daily scan → Feishu</legend>
-              <form id="schedule-form">
-                <div class="field">
-                  <label>Name</label>
-                  <input name="name" placeholder="nightly review" required />
-                </div>
-                <div class="field">
-                  <label>Platform</label>
-                  <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
-                </div>
-                <div class="field">
-                  <label>Repository (owner/repo)</label>
-                  <input name="repoFullName" placeholder="owner/repo" required />
-                </div>
-                <div class="field">
-                  <label>Branches (comma-separated; blank = all branches)</label>
-                  <input name="branches" placeholder="main, develop" />
-                </div>
-                <div class="field">
-                  <label>Time of day (HH:MM, 24h)</label>
-                  <input name="timeOfDay" placeholder="02:00" required />
-                </div>
-                <div class="field">
-                  <label>Timezone (IANA)</label>
-                  <input name="timezone" value="Asia/Shanghai" />
-                </div>
-                <div class="field">
-                  <label>Lookback hours (how far back to scan commits; default 24)</label>
-                  <input name="lookbackHours" type="number" min="1" placeholder="24" />
-                </div>
-                <div class="field">
-                  <label>Review focus / 备注 (optional — what the review should emphasise)</label>
-                  <textarea name="reviewFocus" rows="3" placeholder="例如：重点关注并发安全、SQL 注入、接口兼容性" style="width:100%; box-sizing:border-box; background:#11151c; color:#e6e6e6; border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px; font-size:13px;"></textarea>
-                </div>
-                <div class="field">
-                  <label>Engine (optional)</label>
-                  <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
-                </div>
-                <div class="field">
-                  <label>Feishu webhook URL (blank = use server default FEISHU_WEBHOOK_URL)</label>
-                  <input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" />
-                </div>
-                <button type="submit">Create schedule</button>
-              </form>
-              <p class="muted" id="schedule-result"></p>
-            </fieldset>
-          </section>
+          <div class="view-head">
+            <h2>Scheduled scans</h2>
+            <button id="open-schedule-modal">+ New scheduled scan</button>
+          </div>
+          <section id="schedules"><div data-loading>Loading…</div></section>
         </div>
-        <div class="view" id="view-new">
-          <section>
-            <h2>New review task</h2>
-            <fieldset>
-              <legend>Review a pull request</legend>
-              <form id="task-form">
-                <div class="field">
-                  <label>Platform</label>
-                  <select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select>
-                </div>
-                <div class="field">
-                  <label>Repository (owner/repo)</label>
-                  <input name="repoFullName" placeholder="owner/repo" required />
-                </div>
-                <div class="field">
-                  <label>Clone URL (optional — derived from repo when blank)</label>
-                  <input name="cloneUrl" placeholder="https://github.com/owner/repo.git" />
-                </div>
-                <div class="field">
-                  <label>Pull request number</label>
-                  <input name="prNumber" type="number" min="1" placeholder="123" required />
-                </div>
-                <div class="field">
-                  <label>Engine (optional)</label>
-                  <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
-                </div>
-                <button type="submit">Start review</button>
-              </form>
-              <p class="muted" id="task-result"></p>
-            </fieldset>
-          </section>
+        <div class="view" id="view-dashboard">
+          <div class="view-head">
+            <h2>Review tasks</h2>
+            <button id="open-task-modal">+ New task</button>
+          </div>
+          <section id="jobs"><div data-loading>Loading…</div></section>
+          <section id="detail"></section>
         </div>
       </main>
     </div>
+
+    <!-- New scheduled scan modal -->
+    <div class="modal-overlay" id="schedule-modal" data-modal>
+      <div class="modal">
+        <div class="modal-head"><h2>New scheduled scan</h2><button class="close" data-close>×</button></div>
+        <form id="schedule-form">
+          <div class="field"><label>Name</label><input name="name" placeholder="nightly review" required /></div>
+          <div class="field"><label>Platform</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
+          <div class="field"><label>Repository (owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
+          <div class="field"><label>Branches (comma-separated; blank = all branches)</label><input name="branches" placeholder="main, develop" /></div>
+          <div class="field"><label>Time of day (HH:MM, 24h)</label><input name="timeOfDay" placeholder="02:00" required /></div>
+          <div class="field"><label>Timezone (IANA)</label><input name="timezone" value="Asia/Shanghai" /></div>
+          <div class="field"><label>Lookback hours (how far back to scan commits; default 24)</label><input name="lookbackHours" type="number" min="1" placeholder="24" /></div>
+          <div class="field"><label>Review focus / 备注 (optional — what the review should emphasise)</label><textarea name="reviewFocus" rows="3" placeholder="例如：重点关注并发安全、SQL 注入、接口兼容性"></textarea></div>
+          <div class="field"><label>Engine (optional)</label><select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
+          <div class="field"><label>Feishu webhook URL (blank = use server default FEISHU_WEBHOOK_URL)</label><input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" /></div>
+          <button type="submit">Create schedule</button>
+          <p class="muted result" id="schedule-result"></p>
+        </form>
+      </div>
+    </div>
+
+    <!-- New review task modal -->
+    <div class="modal-overlay" id="task-modal" data-modal>
+      <div class="modal">
+        <div class="modal-head"><h2>New review task</h2><button class="close" data-close>×</button></div>
+        <form id="task-form">
+          <div class="field"><label>Platform</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
+          <div class="field"><label>Repository (owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
+          <div class="field"><label>Clone URL (optional — derived from repo when blank)</label><input name="cloneUrl" placeholder="https://github.com/owner/repo.git" /></div>
+          <div class="field"><label>Pull request number</label><input name="prNumber" type="number" min="1" placeholder="123" required /></div>
+          <div class="field"><label>Engine (optional)</label><select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
+          <button type="submit">Start review</button>
+          <p class="muted result" id="task-result"></p>
+        </form>
+      </div>
+    </div>
+
     <script id="mock-data" type="application/json">${JSON.stringify(MOCK)}</script>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
@@ -224,9 +196,19 @@ const html = `<!doctype html>
         try { return await api(path); } catch { return fallback; }
       }
 
+      // --- modal helpers ---
+      function openModal(id) { document.getElementById(id).classList.add("open"); }
+      function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+      document.getElementById("open-schedule-modal").onclick = () => openModal("schedule-modal");
+      document.getElementById("open-task-modal").onclick = () => openModal("task-modal");
+      document.querySelectorAll("[data-modal]").forEach((ov) => {
+        ov.addEventListener("click", (e) => { if (e.target === ov) ov.classList.remove("open"); });
+        ov.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => ov.classList.remove("open")));
+      });
+
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const view = ["new", "schedules"].includes(name) ? name : "dashboard";
+        const view = name === "dashboard" ? "dashboard" : "schedules";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>
@@ -241,10 +223,9 @@ const html = `<!doctype html>
           return \`<tr class="clickable" data-job="\${esc(j.id)}"><td>#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} finding(s)</td></tr>\`;
         }).join("");
         document.querySelector("#jobs").innerHTML =
-          \`<h2>Review tasks</h2>\` +
-          (jobs.length
+          jobs.length
             ? \`<table><thead><tr><th>Pull request</th><th>Engine</th><th>Status</th><th>Progress</th><th>Findings</th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No review tasks yet. Create one from <a href="#new" style="color:#4c8bf5">New task</a> or via POST /api/tasks.</p>\`);
+            : \`<p class="muted">No review tasks yet. Use <b>+ New task</b> above, or POST /api/tasks.</p>\`;
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
           tr.onclick = () => showJob(tr.getAttribute("data-job"));
         });
@@ -257,9 +238,7 @@ const html = `<!doctype html>
         const findings = (job.findings || []).map((f) =>
           \`<li><span class="sev sev-\${esc(f.severity)}">[\${esc(f.severity)}]</span> <code>\${esc(f.filePath)}\${f.line ? ":" + esc(f.line) : ""}</code> — <b>\${esc(f.title)}</b><br/><span class="muted">\${esc(f.detail || "")}</span>\${f.suggestion ? "<br/>💡 " + esc(f.suggestion) : ""}</li>\`
         ).join("");
-        const retry = job.status === "failed"
-          ? \`<button id="retry">Retry job</button>\`
-          : "";
+        const retry = job.status === "failed" ? \`<button id="retry">Retry job</button>\` : "";
         el.innerHTML =
           \`<h2>Task \${esc(job.id)} \${retry}</h2>\` +
           \`<p class="muted">engine \${esc(job.engine)} · status \${esc(job.status)} · progress \${Number(job.progress)||0}%\${job.error ? " · error: " + esc(job.error) : ""}</p>\` +
@@ -292,10 +271,9 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          out.textContent = "✓ Task " + res.taskId + " (" + res.status + "). Switching to Dashboard…";
           f.reset();
+          closeModal("task-modal");
           await refresh();
-          setTimeout(() => { location.hash = "#dashboard"; }, 800);
         } catch (e) { out.textContent = "✗ " + e.message; }
         finally { btn.disabled = false; btn.textContent = label; }
       };
@@ -321,10 +299,9 @@ const html = `<!doctype html>
           </tr>\`;
         }).join("");
         document.querySelector("#schedules").innerHTML =
-          \`<h2>Scheduled scans</h2>\` +
-          (schedules.length
+          schedules.length
             ? \`<table><thead><tr><th>Name</th><th>Repository</th><th>Branches</th><th>Time</th><th>Deliver</th><th>Last result</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No scheduled scans. The daily scheduler runs only when at least one is configured.</p>\`);
+            : \`<p class="muted">No scheduled scans. Use <b>+ New scheduled scan</b> above. The daily scheduler runs only when at least one is configured.</p>\`;
         document.querySelectorAll('#schedules [data-run]').forEach((b) => {
           b.onclick = async () => {
             b.disabled = true; b.textContent = "Running…";
@@ -377,16 +354,16 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
-          out.textContent = "✓ Schedule created.";
           f.reset(); f.timezone.value = "Asia/Shanghai";
+          closeModal("schedule-modal");
           await refresh();
         } catch (e) { out.textContent = "✗ " + e.message; }
         finally { btn.disabled = false; btn.textContent = label; }
       };
 
       async function refresh() {
-        renderJobs(await load("/api/jobs", MOCK.jobs));
         renderSchedules(await load("/api/schedules", []));
+        renderJobs(await load("/api/jobs", MOCK.jobs));
       }
 
       showView(location.hash.slice(1));

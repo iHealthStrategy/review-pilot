@@ -15,15 +15,19 @@ test("web build emits a static index.html artifact", async () => {
   await run(process.execPath, [resolve(root, "scripts/build.mjs")]);
   const html = await readFile(resolve(dist, "index.html"), "utf8");
   assert.match(html, /ReviewPilot/);
-  // Sidebar nav switches the Dashboard + New task views.
-  assert.match(html, /data-view="dashboard"/);
-  assert.match(html, /data-view="new"/);
-  // Task list + manual new-task form are present.
-  assert.match(html, /id="jobs"/);
-  assert.match(html, /id="task-form"/);
-  // Scheduled-scans view + form.
+  // Sidebar nav switches the Scheduled scans + Dashboard views.
   assert.match(html, /data-view="schedules"/);
+  assert.match(html, /data-view="dashboard"/);
+  // Both creation forms live in modal dialogs opened by "+ New" buttons.
+  assert.match(html, /id="open-schedule-modal"/);
+  assert.match(html, /id="open-task-modal"/);
+  assert.match(html, /id="schedule-modal"[^>]*data-modal/);
+  assert.match(html, /id="task-modal"[^>]*data-modal/);
   assert.match(html, /id="schedule-form"/);
+  assert.match(html, /id="task-form"/);
+  // Task + schedule lists.
+  assert.match(html, /id="jobs"/);
+  assert.match(html, /id="schedules"/);
   // Embedded mock data hydrates the UI standalone and hits the REST API at runtime.
   assert.match(html, /id="mock-data"/);
   assert.match(html, /\/api\/tasks/);
