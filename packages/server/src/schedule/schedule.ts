@@ -44,6 +44,8 @@ export interface ScheduleConfig {
   readonly delivery: DeliveryConfig;
   /** When false, the scheduler skips this config. */
   readonly enabled: boolean;
+  /** True while a run is in progress (set by the scheduler; reset on restart). */
+  readonly running?: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
   /** ISO timestamp of the last successful run start (dedup within a day). */
@@ -80,6 +82,7 @@ export interface UpdateScheduleInput {
   engine?: ReviewEngineKind | null;
   delivery?: DeliveryConfig;
   enabled?: boolean;
+  running?: boolean;
   lastRunAt?: string;
   lastResult?: string;
 }

@@ -90,6 +90,48 @@ test("Scheduler.tick: fires a due config, delivers, records lastRunAt + result",
   assert.equal(sent.length, 1);
 });
 
+test("Scheduler: a schedule can't run concurrently; running flag + reconcile", async () => {
+  const store = new FileScheduleStore();
+  await store.init();
+  const c = await store.create({
+    name: "n", platform: "github", repoFullName: "a/b",
+    timeOfDay: "02:00", delivery: { type: "feishu", webhookUrl: "h" },
+  });
+
+  // A scan that blocks until we release it, so we can observe an in-flight run.
+  let release: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const scan = {
+    scan: async (): Promise<ScanResult> => {
+      await gate;
+      return { repoFullName: "a/b", date: "2026-06-10", branches: [], totalFindings: 0 };
+    },
+  } as unknown as ScheduledScanService;
+  const scheduler = new Scheduler({
+    store, scan, now: () => after,
+    feishuSender: async () => ({ status: 200, text: '{"code":0}' }),
+  });
+
+  const first = scheduler.runConfig(c); // starts, blocks on gate
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(scheduler.isRunning(c.id), true);
+  assert.equal((await store.get(c.id))?.running, true);
+
+  // A second trigger while running is rejected (returns null, no second run).
+  assert.equal(await scheduler.runConfig(c), null);
+
+  release!();
+  await first;
+  assert.equal(scheduler.isRunning(c.id), false);
+  assert.equal((await store.get(c.id))?.running, false);
+
+  // reconcileRunning clears a stale running flag (e.g. left by a crash).
+  await store.update(c.id, { running: true });
+  await scheduler.reconcileRunning();
+  assert.equal((await store.get(c.id))?.running, false);
+  assert.match((await store.get(c.id))?.lastResult ?? "", /中断/);
+});
+
 test("Scheduler.refresh: timer runs only while an enabled config exists", async () => {
   const store = new FileScheduleStore();
   await store.init();

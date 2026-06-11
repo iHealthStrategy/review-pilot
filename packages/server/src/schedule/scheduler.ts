@@ -27,6 +27,9 @@ export interface SchedulerDeps {
  */
 export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
+  /** Ids currently being scanned — guards against concurrent runs of the same
+   * schedule (and auto-clears on restart, so a crash can't leave it stuck). */
+  private readonly running = new Set<string>();
   private readonly now: () => Date;
   private readonly tickMs: number;
   private readonly log: (line: string) => void;
@@ -78,22 +81,52 @@ export class Scheduler {
    * config so the UI can show it.
    */
   async runConfig(config: ScheduleConfig, now: Date = this.now()): Promise<ScanResult | null> {
-    // Stamp lastRunAt up-front so a long run isn't re-fired by the next tick.
-    await this.deps.store.update(config.id, { lastRunAt: now.toISOString() });
+    // Don't start a second run of the same schedule while one is in flight.
+    if (this.running.has(config.id)) {
+      this.log(`schedule ${config.id} already running; skipped`);
+      return null;
+    }
+    this.running.add(config.id);
+    // Mark running + stamp lastRunAt up-front (so a long run isn't re-fired by
+    // the next tick, and the UI can show "running").
+    await this.deps.store.update(config.id, { running: true, lastRunAt: now.toISOString() });
     try {
       const result = await this.deps.scan.scan(config, now);
       const delivery = await this.deliver(config, result);
       const summary =
         `ok: ${result.totalFindings} finding(s) across ${result.branches.length} branch(es)` +
         (delivery.ok ? "" : `; delivery failed: ${delivery.error}`);
-      await this.deps.store.update(config.id, { lastResult: summary });
+      await this.deps.store.update(config.id, { running: false, lastResult: summary });
       this.log(`schedule ${config.id} (${config.repoFullName}) ${summary}`);
       return result;
     } catch (err) {
       const msg = (err as Error).message;
-      await this.deps.store.update(config.id, { lastResult: `error: ${msg}` });
+      await this.deps.store.update(config.id, { running: false, lastResult: `error: ${msg}` });
       this.log(`schedule ${config.id} failed: ${msg}`);
       return null;
+    } finally {
+      this.running.delete(config.id);
+    }
+  }
+
+  /** Whether a run is currently in progress for this schedule. */
+  isRunning(id: string): boolean {
+    return this.running.has(id);
+  }
+
+  /**
+   * Clear any stale `running` flags left by a crash/restart (the in-memory set
+   * is empty after a restart, so a persisted `running:true` can only be stale).
+   * Call once at startup.
+   */
+  async reconcileRunning(): Promise<void> {
+    for (const s of await this.deps.store.list()) {
+      if (s.running && !this.running.has(s.id)) {
+        await this.deps.store.update(s.id, {
+          running: false,
+          lastResult: "中断（服务重启）",
+        });
+      }
     }
   }
 

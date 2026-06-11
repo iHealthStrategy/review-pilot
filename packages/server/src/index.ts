@@ -164,6 +164,8 @@ export function startApp(
   const ready = (async () => {
     await repo.init();
     await scheduleStore.init();
+    // Clear any `running` flags stranded by a previous crash/redeploy.
+    await scheduler.reconcileRunning();
     // Start the daily scheduler only if at least one enabled schedule exists.
     await scheduler.refresh();
     const recovered = config.worker.recoverInterruptedJobsOnStart

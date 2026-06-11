@@ -303,15 +303,18 @@ const html = `<!doctype html>
       function renderSchedules(schedules) {
         const rows = schedules.map((s) => {
           const branches = (s.branches && s.branches.length) ? s.branches.join(", ") : "(all)";
+          const status = s.running
+            ? '<span class="status running">⏳ running</span>'
+            : esc(s.lastResult || "—");
           return \`<tr>
             <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(disabled)</span>'}</td>
             <td><code>\${esc(s.repoFullName)}</code></td>
             <td>\${esc(branches)}</td>
             <td>\${esc(s.timeOfDay)} \${esc(s.timezone)}</td>
             <td>\${esc(s.delivery && s.delivery.type || "")}</td>
-            <td class="muted">\${esc(s.lastResult || "—")}</td>
+            <td class="muted">\${status}</td>
             <td>
-              <button class="secondary" data-run="\${esc(s.id)}">Run now</button>
+              <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "Running…" : "Run now"}</button>
               <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
               <button class="secondary" data-del="\${esc(s.id)}">Delete</button>
             </td>

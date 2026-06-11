@@ -85,7 +85,7 @@ export class MongoScheduleStore implements ScheduleStore {
     const set: Record<string, unknown> = { updatedAt: this.clock() };
     for (const k of [
       "name", "repoFullName", "cloneUrl", "branches", "timeOfDay", "timezone",
-      "lookbackHours", "reviewFocus", "delivery", "enabled", "lastRunAt", "lastResult",
+      "lookbackHours", "reviewFocus", "delivery", "enabled", "running", "lastRunAt", "lastResult",
     ] as const) {
       if (patch[k] !== undefined) set[k] = patch[k];
     }

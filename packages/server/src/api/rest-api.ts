@@ -300,8 +300,11 @@ const ROUTES: Route[] = [
       if (!schedules || !scheduler) throw new HttpError(503, "scheduler not available");
       const config = await schedules.get(params.id!);
       if (!config) throw new HttpError(404, `schedule not found: ${params.id}`);
+      if (scheduler.isRunning(config.id) || config.running) {
+        throw new HttpError(409, "schedule is already running");
+      }
       const result = await scheduler.runConfig(config);
-      return ok({ ran: true, result });
+      return ok({ ran: result !== null, result });
     },
   },
 ];

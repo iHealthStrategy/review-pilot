@@ -94,6 +94,7 @@ export class FileScheduleStore implements ScheduleStore {
       ...(patch.reviewFocus !== undefined ? { reviewFocus: patch.reviewFocus } : {}),
       ...(patch.delivery !== undefined ? { delivery: patch.delivery } : {}),
       ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      ...(patch.running !== undefined ? { running: patch.running } : {}),
       ...(patch.lastRunAt !== undefined ? { lastRunAt: patch.lastRunAt } : {}),
       ...(patch.lastResult !== undefined ? { lastResult: patch.lastResult } : {}),
       updatedAt: this.clock(),

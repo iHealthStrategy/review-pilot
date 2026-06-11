@@ -40,7 +40,7 @@ async function start() {
   const server = startAppServer({ repo, taskService, scheduleStore, scheduler }, 0);
   await new Promise<void>((r) => server.once("listening", () => r()));
   const port = (server.address() as AddressInfo).port;
-  return { server, base: `http://127.0.0.1:${port}`, sent, scheduler };
+  return { server, base: `http://127.0.0.1:${port}`, sent, scheduler, store: scheduleStore };
 }
 
 const body = {
@@ -125,6 +125,22 @@ test("schedules API: POST /:id/run executes now and delivers", async () => {
     assert.equal(sent.length, 1); // delivered to Feishu
   } finally {
     scheduler.stop();
+    server.close();
+  }
+});
+
+test("schedules API: run is rejected (409) while the schedule is already running", async () => {
+  const { server, base, store } = await start();
+  try {
+    const created = await (await fetch(`${base}/api/schedules`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })).json() as { id: string };
+    // Simulate an in-flight run via the persisted running flag.
+    await store.update(created.id, { running: true });
+    const run = await fetch(`${base}/api/schedules/${created.id}/run`, { method: "POST" });
+    assert.equal(run.status, 409);
+  } finally {
     server.close();
   }
 });
