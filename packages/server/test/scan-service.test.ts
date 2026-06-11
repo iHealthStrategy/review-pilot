@@ -100,7 +100,9 @@ test("ScheduledScanService: a branch with no commits today is skipped", async ()
 
 test("ScheduledScanService: enumerates all remote branches when none configured", async () => {
   const git = new FakeGit([
-    [/branch -r/, "origin/HEAD -> origin/main\norigin/main\norigin/dev\n"],
+    // Includes the bare "origin" HEAD pointer (refname:short of origin/HEAD),
+    // which must be dropped so we never query a bogus `origin/origin`.
+    [/branch -r/, "origin\norigin/HEAD -> origin/main\norigin/main\norigin/dev\n"],
     [/log origin\/main/, "aaa\n"],
     [/log origin\/dev/, ""],
     [/diff --name-status/, "M\tsrc/a.ts\n"],
@@ -113,4 +115,6 @@ test("ScheduledScanService: enumerates all remote branches when none configured"
   // main had a commit (1 finding); dev had none (skipped); HEAD pointer ignored.
   assert.equal(result.branches.length, 1);
   assert.equal(result.branches[0]!.branch, "main");
+  // Never queries the bogus origin/origin (the bare "origin" HEAD pointer).
+  assert.ok(!git.calls.some((c) => c.args.join(" ").includes("origin/origin")));
 });

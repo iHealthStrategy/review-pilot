@@ -148,12 +148,15 @@ export class ScheduledScanService {
     const out = (await this.run(dir, [
       "branch", "-r", "--format=%(refname:short)",
     ])).stdout;
+    // Keep only real `origin/<branch>` entries. The remote HEAD pointer shows
+    // up as a bare "origin" (and "origin/HEAD -> origin/main" with some flags),
+    // which must be dropped — otherwise it becomes a bogus `origin/origin` ref.
     return out
       .split("\n")
       .map((s) => s.trim())
-      .filter((s) => s && !s.includes("->") && s !== "origin/HEAD")
-      .map((s) => (s.startsWith("origin/") ? s.slice("origin/".length) : s))
-      .filter((s) => s !== "HEAD");
+      .filter((s) => s.startsWith("origin/") && !s.includes("->"))
+      .map((s) => s.slice("origin/".length))
+      .filter((s) => s && s !== "HEAD");
   }
 
   private async collectDiff(dir: string, range: string): Promise<DiffFile[]> {
