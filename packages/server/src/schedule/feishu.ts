@@ -33,6 +33,10 @@ export function formatScanCard(result: ScanResult): unknown {
     lines.push("\n今日无改动。");
   } else {
     for (const b of result.branches) {
+      if (b.error) {
+        lines.push(`\n**${b.branch}** （${b.commitCount} 次提交）：⚠️ 评审失败（${b.error}）`);
+        continue;
+      }
       lines.push(`\n**${b.branch}** （${b.commitCount} 次提交）：${b.findings.length} 个问题`);
       for (const f of b.findings.slice(0, 10)) {
         const loc = `${f.filePath}${f.line ? ":" + f.line : ""}`;

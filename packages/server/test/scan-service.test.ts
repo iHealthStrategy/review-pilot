@@ -91,6 +91,40 @@ test("ScheduledScanService: clones the provider-resolved (auth) URL when given",
   assert.ok(cloneCall?.args.some((a) => a.includes("x-access-token:TOK@github.com/acme/demo.git")));
 });
 
+test("ScheduledScanService: one branch's review failure doesn't abort the scan", async () => {
+  const git = new FakeGit([
+    [/for-each-ref/, "good\nbad\n"],
+    [/log refs\/remotes\/origin\/good/, "g1\n"],
+    [/log refs\/remotes\/origin\/bad/, "b1\n"],
+    [/diff --name-status/, "M\tsrc/a.ts\n"],
+    [/diff .* -- src\/a\.ts/, "@@ +1 @@\n+z"],
+  ]);
+  // Engine throws for branch "bad" (e.g. unparseable output), succeeds for "good".
+  const engine = {
+    kind: "mock" as const,
+    review: async (ctx: { pullRequest: { sourceBranch: string } }) => {
+      if (ctx.pullRequest.sourceBranch === "bad") throw new Error("output could not be parsed");
+      return [{ filePath: "src/a.ts", severity: "minor" as const, title: "t", detail: "d" }];
+    },
+  };
+  const service = new ScheduledScanService({
+    git,
+    createEngine: () => engine,
+    defaultEngine: "mock",
+    enabledEngines: ["mock"],
+    scan: async () => ["src/a.ts"],
+  });
+  const result = await service.scan({ ...config, branches: [] }, new Date("2026-06-10T20:00:00Z"));
+
+  assert.equal(result.branches.length, 2);
+  const good = result.branches.find((b) => b.branch === "good")!;
+  const bad = result.branches.find((b) => b.branch === "bad")!;
+  assert.equal(good.findings.length, 1);
+  assert.equal(bad.findings.length, 0);
+  assert.match(bad.error ?? "", /could not be parsed/);
+  assert.equal(result.totalFindings, 1); // failed branch contributes 0
+});
+
 test("ScheduledScanService: a branch with no commits today is skipped", async () => {
   const git = new FakeGit([[/log refs\/remotes\/origin\/main/, ""]]); // no commits today
   const result = await makeService(git).scan(config, new Date("2026-06-10T20:00:00Z"));

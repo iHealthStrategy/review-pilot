@@ -41,8 +41,12 @@ export class ExternalCliEngine implements ReviewEngine {
     try {
       return parseFindings(stdout);
     } catch (err) {
+      // Include a short snippet of the raw output so an unparseable response
+      // (prose, refusal, truncation) is diagnosable from logs / the digest.
+      const snippet = stdout.trim().slice(0, 300).replace(/\s+/g, " ");
       throw new Error(
-        `${this.kind} engine output could not be parsed: ${(err as Error).message}`,
+        `${this.kind} engine output could not be parsed: ${(err as Error).message}` +
+          (snippet ? ` | output starts: "${snippet}"` : " | output was empty"),
       );
     }
   }

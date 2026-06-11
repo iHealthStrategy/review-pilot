@@ -16,6 +16,9 @@ export interface BranchScanResult {
   branch: string;
   commitCount: number;
   findings: FindingDraft[];
+  /** Set when this branch's review failed (e.g. engine output unparseable);
+   * other branches still complete. */
+  error?: string;
 }
 
 /** Aggregate result of scanning one schedule config. */
@@ -105,11 +108,23 @@ export class ScheduledScanService {
         await this.run(dir, ["checkout", "--force", ref]);
         const structure = await (this.deps.scan ?? scanStructure)(dir);
         const context = this.buildContext(config, branch, structure, diff);
-        const produced = await engine.review(context);
-        const findings = this.deps.onlyChangedLines
-          ? filterToChangedLines(produced, diff)
-          : produced;
-        results.push({ branch, commitCount: commits.length, findings });
+        // A single branch's review failure (e.g. the engine returns
+        // unparseable output) must not abort the whole multi-branch scan —
+        // record it and move on so the other branches still get reviewed.
+        try {
+          const produced = await engine.review(context);
+          const findings = this.deps.onlyChangedLines
+            ? filterToChangedLines(produced, diff)
+            : produced;
+          results.push({ branch, commitCount: commits.length, findings });
+        } catch (err) {
+          results.push({
+            branch,
+            commitCount: commits.length,
+            findings: [],
+            error: (err as Error).message,
+          });
+        }
       }
 
       return {
