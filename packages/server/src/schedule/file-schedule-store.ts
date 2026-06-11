@@ -97,6 +97,7 @@ export class FileScheduleStore implements ScheduleStore {
       ...(patch.running !== undefined ? { running: patch.running } : {}),
       ...(patch.lastRunAt !== undefined ? { lastRunAt: patch.lastRunAt } : {}),
       ...(patch.lastResult !== undefined ? { lastResult: patch.lastResult } : {}),
+      ...(patch.lastScan !== undefined ? { lastScan: patch.lastScan } : {}),
       updatedAt: this.clock(),
     };
     // engine: null clears the override, a value sets it, undefined leaves it.

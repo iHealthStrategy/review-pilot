@@ -1,4 +1,23 @@
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
+import type { FindingDraft } from "../review/review-engine.js";
+
+/** Per-branch outcome of a daily scan. */
+export interface BranchScanResult {
+  branch: string;
+  commitCount: number;
+  findings: FindingDraft[];
+  /** Set when this branch's review failed; other branches still complete. */
+  error?: string;
+}
+
+/** Aggregate result of scanning one schedule config. */
+export interface ScanResult {
+  repoFullName: string;
+  /** Local date (YYYY-MM-DD in the config timezone) the scan covered. */
+  date: string;
+  branches: BranchScanResult[];
+  totalFindings: number;
+}
 
 /** Where a scheduled scan's results are pushed. (Email is a later addition.) */
 export type DeliveryConfig = {
@@ -52,6 +71,9 @@ export interface ScheduleConfig {
   readonly lastRunAt?: string;
   /** One-line summary of the last run (ok/skip/error) for the UI. */
   readonly lastResult?: string;
+  /** Full result of the most recent run (per-branch findings) for the detail
+   * view. Overwritten each run; absent until the first successful scan. */
+  readonly lastScan?: ScanResult;
 }
 
 export interface CreateScheduleInput {
@@ -85,6 +107,7 @@ export interface UpdateScheduleInput {
   running?: boolean;
   lastRunAt?: string;
   lastResult?: string;
+  lastScan?: ScanResult;
 }
 
 /**

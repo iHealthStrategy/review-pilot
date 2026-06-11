@@ -96,7 +96,11 @@ export class Scheduler {
       const summary =
         `ok: ${result.totalFindings} finding(s) across ${result.branches.length} branch(es)` +
         (delivery.ok ? "" : `; delivery failed: ${delivery.error}`);
-      await this.deps.store.update(config.id, { running: false, lastResult: summary });
+      await this.deps.store.update(config.id, {
+        running: false,
+        lastResult: summary,
+        lastScan: result,
+      });
       this.log(`schedule ${config.id} (${config.repoFullName}) ${summary}`);
       return result;
     } catch (err) {

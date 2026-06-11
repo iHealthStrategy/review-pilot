@@ -6,29 +6,14 @@ import type { DiffFile, DiffFileStatus } from "../providers/git-provider.js";
 import type { CommandRunner } from "../review/command-runner.js";
 import { cloneWithRetry } from "../review/git-clone.js";
 import { filterToChangedLines } from "../review/diff-lines.js";
-import type { FindingDraft, ReviewContext, ReviewEngine } from "../review/review-engine.js";
+import type { ReviewContext, ReviewEngine } from "../review/review-engine.js";
 import { scanStructure } from "../review/structure-scanner.js";
-import type { ScheduleConfig } from "./schedule.js";
+import type { BranchScanResult, ScanResult, ScheduleConfig } from "./schedule.js";
 import { tzDate } from "./tz.js";
 
-/** Per-branch outcome of a daily scan. */
-export interface BranchScanResult {
-  branch: string;
-  commitCount: number;
-  findings: FindingDraft[];
-  /** Set when this branch's review failed (e.g. engine output unparseable);
-   * other branches still complete. */
-  error?: string;
-}
-
-/** Aggregate result of scanning one schedule config. */
-export interface ScanResult {
-  repoFullName: string;
-  /** Local date (YYYY-MM-DD in the config timezone) the scan covered. */
-  date: string;
-  branches: BranchScanResult[];
-  totalFindings: number;
-}
+// Result types live in schedule.ts (so ScheduleConfig.lastScan can reference
+// them without a circular import); re-exported here for existing callers.
+export type { BranchScanResult, ScanResult } from "./schedule.js";
 
 export interface ScanServiceDeps {
   git: CommandRunner;

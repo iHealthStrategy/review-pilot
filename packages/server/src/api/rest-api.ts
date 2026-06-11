@@ -249,7 +249,9 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/schedules$/,
     handler: async (_ctx, _repo, _tasks, schedules) => {
       if (!schedules) throw new HttpError(503, "schedule store not available");
-      return ok(await schedules.list());
+      // Drop the heavy per-run findings blob from the list; GET /:id returns it.
+      const list = await schedules.list();
+      return ok(list.map(({ lastScan: _omit, ...rest }) => rest));
     },
   },
   {

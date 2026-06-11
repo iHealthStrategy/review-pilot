@@ -123,6 +123,16 @@ test("schedules API: POST /:id/run executes now and delivers", async () => {
     assert.equal(out.ran, true);
     assert.equal(out.result.totalFindings, 0);
     assert.equal(sent.length, 1); // delivered to Feishu
+
+    // The full per-branch result is persisted and queryable on the detail
+    // endpoint, but omitted from the (light) list endpoint.
+    const detail = await (await fetch(`${base}/api/schedules/${created.id}`)).json() as {
+      lastScan?: { branches: unknown[] };
+    };
+    assert.ok(detail.lastScan, "detail includes lastScan");
+    assert.equal(detail.lastScan!.branches.length, 1);
+    const list = await (await fetch(`${base}/api/schedules`)).json() as Array<{ lastScan?: unknown }>;
+    assert.equal(list[0]!.lastScan, undefined); // list omits the heavy blob
   } finally {
     scheduler.stop();
     server.close();

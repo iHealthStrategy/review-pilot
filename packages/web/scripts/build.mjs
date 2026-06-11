@@ -163,6 +163,14 @@ const html = `<!doctype html>
       </div>
     </div>
 
+    <!-- Scheduled-scan result detail modal -->
+    <div class="modal-overlay" id="scan-modal" data-modal>
+      <div class="modal" style="width:780px">
+        <div class="modal-head"><h2 id="scan-modal-title">Scan result</h2><button class="close" data-close>×</button></div>
+        <div id="scan-modal-body"></div>
+      </div>
+    </div>
+
     <script id="mock-data" type="application/json">${JSON.stringify(MOCK)}</script>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
@@ -292,6 +300,7 @@ const html = `<!doctype html>
             <td>\${esc(s.delivery && s.delivery.type || "")}</td>
             <td class="muted">\${status}</td>
             <td>
+              <button class="secondary" data-view-id="\${esc(s.id)}">View</button>
               <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "Running…" : "Run now"}</button>
               <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
               <button class="secondary" data-del="\${esc(s.id)}">Delete</button>
@@ -327,6 +336,34 @@ const html = `<!doctype html>
             catch (e) { alert(e.message); }
           };
         });
+        document.querySelectorAll('#schedules [data-view-id]').forEach((b) => {
+          b.onclick = () => showScanDetail(b.getAttribute("data-view-id"));
+        });
+      }
+
+      async function showScanDetail(id) {
+        const s = await load("/api/schedules/" + id, null);
+        const body = document.getElementById("scan-modal-body");
+        document.getElementById("scan-modal-title").textContent =
+          "Scan result · " + (s ? s.name : id);
+        if (!s || !s.lastScan) {
+          body.innerHTML = '<p class="muted">尚无扫描结果（还没成功跑过一次）。</p>';
+          openModal("scan-modal");
+          return;
+        }
+        const r = s.lastScan;
+        const head = \`<p class="muted">\${esc(r.repoFullName)} · \${esc(r.date)} · 共 \${r.totalFindings} 个问题，\${r.branches.length} 个分支</p>\`;
+        const sections = (r.branches || []).map((b) => {
+          if (b.error) {
+            return \`<h3>\${esc(b.branch)} <span class="muted">(\${b.commitCount} commits)</span> — <span class="sev sev-major">⚠️ 评审失败</span></h3><pre>\${esc(b.error)}</pre>\`;
+          }
+          const items = (b.findings || []).map((f) =>
+            \`<li><span class="sev sev-\${esc(f.severity)}">[\${esc(f.severity)}]</span> <code>\${esc(f.filePath)}\${f.line ? ":" + esc(f.line) : ""}</code> — <b>\${esc(f.title)}</b><br/><span class="muted">\${esc(f.detail || "")}</span>\${f.suggestion ? "<br/>💡 " + esc(f.suggestion) : ""}</li>\`
+          ).join("");
+          return \`<h3>\${esc(b.branch)} <span class="muted">(\${b.commitCount} commits)</span> — \${(b.findings||[]).length} 个问题</h3><ul>\${items || "<li class='muted'>无</li>"}</ul>\`;
+        }).join("");
+        body.innerHTML = head + (sections || '<p class="muted">今日无改动。</p>');
+        openModal("scan-modal");
       }
 
       document.getElementById("schedule-form").onsubmit = async (ev) => {
