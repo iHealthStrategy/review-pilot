@@ -140,6 +140,10 @@ const html = `<!doctype html>
                   <input name="lookbackHours" type="number" min="1" placeholder="24" />
                 </div>
                 <div class="field">
+                  <label>Review focus / 备注 (optional — what the review should emphasise)</label>
+                  <textarea name="reviewFocus" rows="3" placeholder="例如：重点关注并发安全、SQL 注入、接口兼容性" style="width:100%; box-sizing:border-box; background:#11151c; color:#e6e6e6; border:1px solid #2a2f3a; border-radius:6px; padding:6px 8px; font-size:13px;"></textarea>
+                </div>
+                <div class="field">
                   <label>Engine (optional)</label>
                   <select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select>
                 </div>
@@ -363,6 +367,7 @@ const html = `<!doctype html>
             delivery: { type: "feishu", webhookUrl: f.webhookUrl.value },
           };
           if (f.lookbackHours.value) payload.lookbackHours = Number(f.lookbackHours.value);
+          if (f.reviewFocus.value.trim()) payload.reviewFocus = f.reviewFocus.value.trim();
           if (f.engine.value) payload.engine = f.engine.value;
           await api("/api/schedules", {
             method: "POST",

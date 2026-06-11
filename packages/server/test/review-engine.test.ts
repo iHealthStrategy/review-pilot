@@ -228,6 +228,12 @@ test("buildReviewPrompt: embeds PR metadata, structure and diff with strict sche
   assert.match(grounded, /Project understanding \(cached\)/);
   assert.match(grounded, /It is a monorepo\./);
 
+  // Reviewer-supplied focus is injected when present, absent otherwise.
+  assert.doesNotMatch(prompt, /Review focus/);
+  const focused = buildReviewPrompt(ctx({ reviewFocus: "concurrency safety and SQL injection" }));
+  assert.match(focused, /Review focus \(requested emphasis\)/);
+  assert.match(focused, /concurrency safety and SQL injection/);
+
   // REVIEW_LANGUAGE adds a directive to localise the finding text.
   assert.doesNotMatch(prompt, /write the "title"/);
   process.env.REVIEW_LANGUAGE = "Chinese";

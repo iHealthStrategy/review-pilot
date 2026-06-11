@@ -34,6 +34,11 @@ export interface ScheduleConfig {
    * covers the previous day's work.
    */
   readonly lookbackHours: number;
+  /**
+   * Free-text note describing what the review should emphasise (e.g. "重点关注
+   * 并发安全和 SQL 注入"). Fed to the engine as review focus. Empty → default review.
+   */
+  readonly reviewFocus?: string;
   /** Engine override; falls back to the server default when empty. */
   readonly engine?: ReviewEngineKind;
   readonly delivery: DeliveryConfig;
@@ -56,6 +61,7 @@ export interface CreateScheduleInput {
   timeOfDay: string;
   timezone?: string;
   lookbackHours?: number;
+  reviewFocus?: string;
   engine?: ReviewEngineKind;
   delivery: DeliveryConfig;
   enabled?: boolean;
@@ -70,6 +76,7 @@ export interface UpdateScheduleInput {
   timeOfDay?: string;
   timezone?: string;
   lookbackHours?: number;
+  reviewFocus?: string;
   engine?: ReviewEngineKind | null;
   delivery?: DeliveryConfig;
   enabled?: boolean;

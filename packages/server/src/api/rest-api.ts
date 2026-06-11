@@ -350,6 +350,7 @@ function parseScheduleCreate(body: unknown): CreateScheduleInput {
     timeOfDay: assertTime(asString(b.timeOfDay, "timeOfDay")),
     ...(typeof b.timezone === "string" && b.timezone ? { timezone: b.timezone } : {}),
     ...(b.lookbackHours !== undefined ? { lookbackHours: asLookbackHours(b.lookbackHours) } : {}),
+    ...(typeof b.reviewFocus === "string" && b.reviewFocus ? { reviewFocus: b.reviewFocus } : {}),
     ...(b.engine ? { engine: asEnum(b.engine, ENGINES, "engine") } : {}),
     delivery: parseDelivery(b.delivery),
     ...(typeof b.enabled === "boolean" ? { enabled: b.enabled } : {}),
@@ -366,6 +367,10 @@ function parseScheduleUpdate(body: unknown): UpdateScheduleInput {
   if (b.timeOfDay !== undefined) patch.timeOfDay = assertTime(asString(b.timeOfDay, "timeOfDay"));
   if (b.timezone !== undefined) patch.timezone = asString(b.timezone, "timezone");
   if (b.lookbackHours !== undefined) patch.lookbackHours = asLookbackHours(b.lookbackHours);
+  if (b.reviewFocus !== undefined) {
+    if (typeof b.reviewFocus !== "string") throw new HttpError(400, "field 'reviewFocus' must be a string");
+    patch.reviewFocus = b.reviewFocus; // "" clears the focus
+  }
   if (b.engine !== undefined) patch.engine = b.engine === null ? null : asEnum(b.engine, ENGINES, "engine");
   if (b.delivery !== undefined) patch.delivery = parseDelivery(b.delivery);
   if (b.enabled !== undefined) {

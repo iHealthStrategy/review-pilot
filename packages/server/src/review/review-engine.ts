@@ -27,6 +27,12 @@ export interface ReviewContext {
   workspaceDir: string;
   /** Cached whole-project understanding to ground the review (optional). */
   projectInsight?: string;
+  /**
+   * Reviewer-supplied emphasis for this review (e.g. "focus on SQL injection
+   * and N+1 queries"). When set, the engine is told to prioritise these points.
+   * Empty/absent → the default general review.
+   */
+  reviewFocus?: string;
 }
 
 /** A produced finding before it is persisted (no id/job yet). */

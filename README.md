@@ -166,6 +166,7 @@ POST /api/schedules
   "timeOfDay": "02:00",                               // 24h, in `timezone`
   "timezone": "Asia/Shanghai",                        // IANA tz
   "lookbackHours": 24,                                // rolling window to scan (default 24)
+  "reviewFocus": "重点关注并发安全与 SQL 注入",          // optional review emphasis (empty = general review)
   "engine": "claude-code",                            // optional; server default otherwise
   "delivery": { "type": "feishu", "webhookUrl": "https://open.feishu.cn/open-apis/bot/v2/hook/…" }
 }
@@ -177,6 +178,10 @@ rolling window, default 24h — NOT "since midnight", so a run shortly after
 midnight still covers the previous day), and pushes one Feishu card summarising
 the findings. `POST /api/schedules/:id/run` triggers a run immediately (for
 testing). Disable a schedule with `PUT {"enabled": false}`.
+
+Set `reviewFocus` to steer the review toward specific concerns (it's injected
+into the engine prompt as requested emphasis); leave it empty for a general
+review.
 
 `delivery.webhookUrl` is optional — leave it empty to use the deploy-wide
 `FEISHU_WEBHOOK_URL` env var as the default push target (configure the

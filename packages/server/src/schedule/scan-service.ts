@@ -141,6 +141,7 @@ export class ScheduledScanService {
       structure,
       diff,
       workspaceDir: "",
+      ...(config.reviewFocus ? { reviewFocus: config.reviewFocus } : {}),
     };
   }
 

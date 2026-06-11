@@ -54,6 +54,16 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     ...(ctx.projectInsight
       ? ["## Project understanding (cached)", ctx.projectInsight, ""]
       : []),
+    ...(ctx.reviewFocus && ctx.reviewFocus.trim()
+      ? [
+          "## Review focus (requested emphasis)",
+          "The requester asked you to pay SPECIAL attention to the following.",
+          "Prioritise findings related to these points (still report other",
+          "serious issues you notice):",
+          ctx.reviewFocus.trim(),
+          "",
+        ]
+      : []),
     "## Repository structure (overview)",
     structure,
     "",
