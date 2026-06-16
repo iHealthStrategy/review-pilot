@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 # Build stage: install workspaces and compile.
-FROM node:20-alpine AS build
+# Debian slim (glibc) so any native node_modules match the glibc runtime stage
+# below (and so the runtime can host code-review-graph's manylinux wheels).
+FROM node:20-slim AS build
 WORKDIR /app
 # Optional npm registry mirror for restricted networks, e.g.:
 #   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ...
@@ -20,20 +22,36 @@ COPY . .
 # it is never shipped in the server image.
 RUN npm run build --workspace=packages/server --workspace=packages/web
 
-# Runtime stage: git is required by the cloner to sync full repositories;
-# the Claude Code CLI is the default external review engine (run with
-# `claude -p` non-interactively; provide ANTHROPIC_API_KEY at runtime).
-FROM node:20-alpine AS runtime
-# Optional Alpine mirror for networks where dl-cdn.alpinelinux.org is slow or
-# unreachable (e.g. behind a corporate proxy / in regions with poor CDN access):
-#   docker build --build-arg ALPINE_MIRROR=mirrors.aliyun.com ...
-ARG ALPINE_MIRROR=
-RUN if [ -n "$ALPINE_MIRROR" ]; then \
-      sed -i "s|dl-cdn.alpinelinux.org|$ALPINE_MIRROR|g" /etc/apk/repositories; \
-    fi \
- && for i in 1 2 3; do apk add --no-cache git && break || { echo "apk retry $i"; sleep 3; }; done
-# Optional npm registry mirror (e.g. https://registry.npmmirror.com) for the
-# global Claude Code CLI install.
+# Runtime stage (Debian slim / glibc): git for the cloner to sync repos, the
+# Claude Code CLI (default review engine, run `claude -p` non-interactively with
+# ANTHROPIC_API_KEY at runtime), and uv + code-review-graph (the structural-
+# context engine). glibc is required: code-review-graph's tree-sitter-language-
+# pack ships manylinux wheels but no musl wheels, so it can't install on alpine
+# without a full C toolchain.
+FROM node:20-slim AS runtime
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+# --- Structural-context engine: uv + code-review-graph ---
+# Copy the static uv/uvx binaries from the official image (no curl/pip needed).
+# uvx is the default CODE_GRAPH_LAUNCHER.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+ENV UV_TOOL_DIR=/opt/uv/tools \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    UV_CACHE_DIR=/opt/uv/cache
+# Optional PyPI mirror for restricted networks:
+#   docker build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple ...
+ARG PIP_INDEX_URL=
+# Install + pre-warm at BUILD time so reviews never hit PyPI at runtime: uvx
+# reuses the installed tool env (and the cached --from env) offline. Failing
+# here is a loud, visible build error rather than a silently-degraded image.
+RUN if [ -n "$PIP_INDEX_URL" ]; then export UV_DEFAULT_INDEX="$PIP_INDEX_URL"; fi \
+ && uv python install 3.12 \
+ && uv tool install --python 3.12 code-review-graph \
+ && uvx code-review-graph --version \
+ && uvx --from code-review-graph python -c "import code_review_graph"
+# --- Claude Code CLI (default external review engine) ---
+# Optional npm registry mirror (e.g. https://registry.npmmirror.com).
 ARG NPM_REGISTRY=
 # Verify the CLI is actually runnable at BUILD time. On restricted networks npm
 # can silently skip the platform-specific binary (optionalDependency), leaving a

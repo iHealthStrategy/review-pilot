@@ -227,7 +227,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       projectInsight: bool(env, "PROJECT_INSIGHT_CACHE", true),
       insightTtlMs: int(env, "PROJECT_INSIGHT_TTL_MS", 604800000),
       onlyChangedLines: bool(env, "ONLY_CHANGED_LINES", false),
-      structuralContext: bool(env, "STRUCTURAL_CONTEXT", false),
+      structuralContext: bool(env, "STRUCTURAL_CONTEXT", true),
       codeGraphLauncher: str(env, "CODE_GRAPH_LAUNCHER", "uvx"),
       codeGraphCacheDir: str(env, "CODE_GRAPH_CACHE_DIR", ""),
       codeGraphTtlMs: int(env, "CODE_GRAPH_TTL_MS", 3600000),

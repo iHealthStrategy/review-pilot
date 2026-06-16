@@ -98,7 +98,8 @@ export class ReviewService {
       // hotspots, test gaps, affected flows) via the shared per-repo base graph.
       // Best-effort: undefined when the graph is unavailable, leaving the
       // review unchanged. Concurrent PRs on the same repo query it in parallel.
-      if (this.deps.config.review.structuralContext) {
+      // Skipped for the mock engine, which ignores the prompt entirely.
+      if (this.deps.config.review.structuralContext && kind !== "mock") {
         const cloneUrl = await provider.cloneUrl({ fullName: repo.fullName });
         context.structuralContext = await ensureStructuralContext(context, {
           cache: this.getGraphCache(),
