@@ -15,7 +15,10 @@ RUN npm ci
 # touching the committed lockfile.
 RUN npm install --no-save mongodb@^6 @anthropic-ai/claude-agent-sdk
 COPY . .
-RUN npm run build
+# Build only the deployable workspaces. The VS Code extension (packages/extension)
+# is a separate dev artifact whose esbuild devDependency isn't installed here, and
+# it is never shipped in the server image.
+RUN npm run build --workspace=packages/server --workspace=packages/web
 
 # Runtime stage: git is required by the cloner to sync full repositories;
 # the Claude Code CLI is the default external review engine (run with
