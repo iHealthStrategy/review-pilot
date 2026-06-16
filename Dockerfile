@@ -1,8 +1,12 @@
 # syntax=docker/dockerfile:1
+# Base image is overridable for China-region builds that can't set a daemon
+# registry-mirror (registry-mirrors only proxy docker.io), e.g.:
+#   --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim
+ARG NODE_IMAGE=node:20-slim
 # Build stage: install workspaces and compile.
 # Debian slim (glibc) so any native node_modules match the glibc runtime stage
 # below (and so the runtime can host code-review-graph's manylinux wheels).
-FROM node:20-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 # Optional npm registry mirror for restricted networks, e.g.:
 #   docker build --build-arg NPM_REGISTRY=https://registry.npmmirror.com ...
@@ -28,24 +32,31 @@ RUN npm run build --workspace=packages/server --workspace=packages/web
 # context engine). glibc is required: code-review-graph's tree-sitter-language-
 # pack ships manylinux wheels but no musl wheels, so it can't install on alpine
 # without a full C toolchain.
-FROM node:20-slim AS runtime
+FROM ${NODE_IMAGE} AS runtime
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # --- Structural-context engine: uv + code-review-graph ---
 # Copy the static uv/uvx binaries from the official image (no curl/pip needed).
-# uvx is the default CODE_GRAPH_LAUNCHER.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+# uvx is the default CODE_GRAPH_LAUNCHER. ghcr.io is slow/blocked in China —
+# override with a mirror, e.g.:
+#   --build-arg UV_IMAGE=ghcr.m.daocloud.io/astral-sh/uv:latest
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+COPY --from=${UV_IMAGE} /uv /uvx /usr/local/bin/
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_CACHE_DIR=/opt/uv/cache
-# Optional PyPI mirror for restricted networks:
-#   docker build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple ...
+# Optional mirrors for restricted networks (China-friendly):
+#   --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+#   --build-arg UV_PYTHON_INSTALL_MIRROR=https://<mirror>   (Python download)
+# The uv-managed Python is fetched from GitHub by default — also slow in China.
 ARG PIP_INDEX_URL=
+ARG UV_PYTHON_INSTALL_MIRROR=
 # Install + pre-warm at BUILD time so reviews never hit PyPI at runtime: uvx
 # reuses the installed tool env (and the cached --from env) offline. Failing
 # here is a loud, visible build error rather than a silently-degraded image.
 RUN if [ -n "$PIP_INDEX_URL" ]; then export UV_DEFAULT_INDEX="$PIP_INDEX_URL"; fi \
+ && if [ -n "$UV_PYTHON_INSTALL_MIRROR" ]; then export UV_PYTHON_INSTALL_MIRROR; fi \
  && uv python install 3.12 \
  && uv tool install --python 3.12 code-review-graph \
  && uvx code-review-graph --version \
