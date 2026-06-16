@@ -11,6 +11,7 @@ import { type Cloner, GitCloner } from "./review/cloner.js";
 import { ProcessCommandRunner } from "./review/command-runner.js";
 import { createReviewEngine } from "./review/engine-factory.js";
 import { ReviewService } from "./review/review-service.js";
+import { GraphCacheService } from "./review/graph-cache.js";
 import { ScheduledScanService } from "./schedule/scan-service.js";
 import { createScheduleStore } from "./schedule/schedule-store-factory.js";
 import { Scheduler } from "./schedule/scheduler.js";
@@ -106,6 +107,16 @@ export function startApp(
     branchReview,
   });
 
+  // Shared per-repo base-graph cache for structural context, used by BOTH the
+  // PR-review path and the scheduled scans (built/refreshed once per repo,
+  // queried read-only — concurrent reviews/scans share it without rebuilding).
+  const graphCache = new GraphCacheService({
+    cacheRoot: config.review.codeGraphCacheDir || "./data/graph-cache",
+    launcher: config.review.codeGraphLauncher,
+    ttlMs: config.review.codeGraphTtlMs,
+    timeoutMs: config.worker.engineTimeoutMs,
+  });
+
   // Scheduled daily scans: per-branch review of the day's changes + delivery.
   const scheduleStore = createScheduleStore(config);
   const scanService = new ScheduledScanService({
@@ -118,6 +129,8 @@ export function startApp(
     // Token-injected clone URL (via the provider) so private repos can be cloned.
     resolveCloneUrl: (platform, fullName) =>
       providerFor(platform).cloneUrl({ fullName }),
+    graphCache,
+    structuralContext: config.review.structuralContext,
   });
   const scheduler = new Scheduler({
     store: scheduleStore,
@@ -136,6 +149,7 @@ export function startApp(
       new GitCloner(new ProcessCommandRunner(), {
         workspaceRoot: config.workspaceDir,
       }),
+    graphCache,
   });
   const worker = new Worker(repo, reviewService, providerFor, {
     inlineComments: config.worker.inlineComments,

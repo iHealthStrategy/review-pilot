@@ -4,6 +4,9 @@ import { MockReviewEngine } from "../src/review/mock-engine.js";
 import type { CommandResult, CommandRunner } from "../src/review/command-runner.js";
 import { ScheduledScanService } from "../src/schedule/scan-service.js";
 import type { ScheduleConfig } from "../src/schedule/schedule.js";
+import type { ReviewContext, ReviewEngine } from "../src/review/review-engine.js";
+import type { BaseGraphRef, GraphCacheService } from "../src/review/graph-cache.js";
+import type { StructuralContext } from "../src/review/structural-context.js";
 
 /** Fake git: matches on the joined args, returns canned stdout, records calls. */
 class FakeGit implements CommandRunner {
@@ -42,6 +45,68 @@ function makeService(git: FakeGit) {
     scan: async () => ["src/mod.ts", "README.md"],
   });
 }
+
+/** Captures the context handed to the engine (to inspect structuralContext). */
+class CapturingEngine implements ReviewEngine {
+  readonly kind = "claude-code" as const;
+  captured?: ReviewContext;
+  async review(ctx: ReviewContext) {
+    this.captured = ctx;
+    return [];
+  }
+}
+
+/** Fake cache: one base graph, query returns a fixed StructuralContext. */
+class FakeGraphCache {
+  queryArgs?: { files: string[]; ranges: Map<string, Array<[number, number]>> };
+  async ensureBaseGraph(): Promise<BaseGraphRef> {
+    return { srcRoot: "/cache/src", dataDir: "/cache/graph" };
+  }
+  async query(
+    _ref: BaseGraphRef,
+    files: string[],
+    ranges: Map<string, Array<[number, number]>>,
+  ): Promise<StructuralContext> {
+    this.queryArgs = { files, ranges };
+    return {
+      riskScore: 0.7,
+      summary: "s",
+      reviewPriorities: [
+        { name: "doStuff", kind: "Function", filePath: "/cache/src/src/mod.ts", lineStart: 1, riskScore: 0.7 },
+      ],
+      testGaps: [],
+      affectedFlows: [],
+    };
+  }
+}
+
+test("ScheduledScanService: injects structural context into each branch review", async () => {
+  const git = new FakeGit([
+    [/log refs\/remotes\/origin\/main/, "ccc222\n"],
+    [/diff --name-status/, "M\tsrc/mod.ts\n"],
+    [/diff .* -- src\/mod\.ts/, "@@ -1 +1,2 @@\n+y\n ctx"],
+  ]);
+  const engine = new CapturingEngine();
+  const cache = new FakeGraphCache();
+  const service = new ScheduledScanService({
+    git,
+    createEngine: () => engine,
+    defaultEngine: "claude-code",
+    enabledEngines: ["claude-code"],
+    scan: async () => ["src/mod.ts"],
+    graphCache: cache as unknown as GraphCacheService,
+    structuralContext: true,
+  });
+
+  await service.scan(config, new Date("2026-06-10T20:00:00Z"));
+
+  assert.ok(engine.captured?.structuralContext, "branch review should carry structural context");
+  assert.match(engine.captured!.structuralContext!, /Structural context/);
+  assert.match(engine.captured!.structuralContext!, /doStuff — src\/mod\.ts:1/);
+  // The branch's changed file + ranges were passed to the read-only query.
+  assert.deepEqual(cache.queryArgs?.files, ["src/mod.ts"]);
+  assert.deepEqual(cache.queryArgs?.ranges.get("src/mod.ts"), [[1, 1]]);
+});
 
 test("ScheduledScanService: reviews today's aggregate diff per branch", async () => {
   const git = new FakeGit([

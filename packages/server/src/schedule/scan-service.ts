@@ -5,8 +5,10 @@ import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import type { DiffFile, DiffFileStatus } from "../providers/git-provider.js";
 import type { CommandRunner } from "../review/command-runner.js";
 import { cloneWithRetry } from "../review/git-clone.js";
-import { filterToChangedLines } from "../review/diff-lines.js";
+import { changedRanges, filterToChangedLines } from "../review/diff-lines.js";
+import type { GraphCacheService } from "../review/graph-cache.js";
 import type { ReviewContext, ReviewEngine } from "../review/review-engine.js";
+import { renderStructuralContext } from "../review/structural-context.js";
 import { scanStructure } from "../review/structure-scanner.js";
 import type { BranchScanResult, ScanResult, ScheduleConfig } from "./schedule.js";
 import { tzDate } from "./tz.js";
@@ -30,6 +32,10 @@ export interface ScanServiceDeps {
    * cloneUrl when omitted.
    */
   resolveCloneUrl?: (platform: Platform, repoFullName: string) => Promise<string>;
+  /** Shared base-graph cache for structural context (omit/disable → skipped). */
+  graphCache?: GraphCacheService;
+  /** Enrich each branch review with structural context from the base graph. */
+  structuralContext?: boolean;
 }
 
 /**
@@ -75,6 +81,19 @@ export class ScheduledScanService {
         ? config.branches
         : await this.remoteBranches(dir);
 
+      // Structural context: ONE shared base graph per repo (the default branch),
+      // queried read-only for every branch. Built/refreshed once and reused
+      // across daily scans. Best-effort — null disables enrichment for this run.
+      const baseGraph =
+        this.deps.structuralContext && this.deps.graphCache
+          ? await this.deps.graphCache.ensureBaseGraph({
+              platform: config.platform,
+              fullName: config.repoFullName,
+              cloneUrl,
+              baseBranch: await this.defaultBranch(dir),
+            })
+          : null;
+
       const results: BranchScanResult[] = [];
       for (const branch of branches) {
         // Use the FULL ref so the branch name can't be ambiguous (e.g. a branch
@@ -93,6 +112,14 @@ export class ScheduledScanService {
         await this.run(dir, ["checkout", "--force", ref]);
         const structure = await (this.deps.scan ?? scanStructure)(dir);
         const context = this.buildContext(config, branch, structure, diff);
+        if (baseGraph && this.deps.graphCache) {
+          const sc = await this.deps.graphCache.query(
+            baseGraph,
+            diff.map((d) => d.path),
+            changedRanges(diff),
+          );
+          if (sc) context.structuralContext = renderStructuralContext(sc, baseGraph.srcRoot);
+        }
         // A single branch's review failure (e.g. the engine returns
         // unparseable output) must not abort the whole multi-branch scan —
         // record it and move on so the other branches still get reviewed.
@@ -159,6 +186,15 @@ export class ScheduledScanService {
       .split("\n")
       .map((s) => s.trim())
       .filter((s) => s && s !== "HEAD");
+  }
+
+  /** Repo default branch (origin/HEAD target), or "main" when undetermined. */
+  private async defaultBranch(dir: string): Promise<string> {
+    const res = await this.deps.git.run("git", [
+      "-C", dir, "rev-parse", "--abbrev-ref", "origin/HEAD",
+    ]);
+    const name = res.code === 0 ? res.stdout.trim().replace(/^origin\//, "") : "";
+    return name || "main";
   }
 
   private async collectDiff(dir: string, range: string): Promise<DiffFile[]> {
