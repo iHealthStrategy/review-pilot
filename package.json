@@ -9,7 +9,8 @@
   },
   "workspaces": [
     "packages/server",
-    "packages/web"
+    "packages/web",
+    "packages/extension"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

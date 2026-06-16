@@ -1,0 +1,162 @@
+{
+  "name": "reviewpilot-vscode",
+  "displayName": "ReviewPilot",
+  "version": "0.1.0",
+  "description": "Local AI code review for the current project — runs the ReviewPilot engine on your working changes / branch diff / whole project and lists findings you can click to jump to and fix. Works in VS Code and Cursor.",
+  "publisher": "reviewpilot",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reviewpilot/reviewpilot"
+  },
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18.18"
+  },
+  "categories": ["Linters", "Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "reviewpilot.review",
+        "title": "Review Project",
+        "category": "ReviewPilot",
+        "icon": "$(search)"
+      },
+      {
+        "command": "reviewpilot.clear",
+        "title": "Clear Findings",
+        "category": "ReviewPilot",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "reviewpilot.openFinding",
+        "title": "Open Finding",
+        "category": "ReviewPilot"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "reviewpilot",
+          "title": "ReviewPilot",
+          "icon": "$(checklist)"
+        }
+      ]
+    },
+    "views": {
+      "reviewpilot": [
+        {
+          "id": "reviewpilotFindings",
+          "name": "Findings",
+          "icon": "$(checklist)",
+          "contextualTitle": "ReviewPilot Findings"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "reviewpilotFindings",
+        "contents": "No findings yet.\n[Review Project](command:reviewpilot.review)\nChoose a scope (working changes, branch diff, or whole project) when prompted."
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "reviewpilot.review",
+          "when": "view == reviewpilotFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "reviewpilot.clear",
+          "when": "view == reviewpilotFindings",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "reviewpilot.openFinding",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ReviewPilot",
+      "properties": {
+        "reviewpilot.engine": {
+          "type": "string",
+          "enum": ["claude-code", "cursor", "codex", "claude-agent", "mock"],
+          "default": "claude-code",
+          "description": "Review engine to run locally. claude-code/cursor/codex invoke the matching CLI; claude-agent uses the Claude Agent SDK (needs ANTHROPIC_API_KEY); mock is a credential-free no-op for testing the UI."
+        },
+        "reviewpilot.command": {
+          "type": "string",
+          "default": "",
+          "description": "Override the executable for the selected CLI engine (e.g. an absolute path to `claude`). Empty = use the engine's default command."
+        },
+        "reviewpilot.args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Override the arguments passed to the CLI engine before the prompt. Empty = use the engine's default args."
+        },
+        "reviewpilot.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model name passed to the engine when supported (e.g. for claude-agent). Empty = engine default."
+        },
+        "reviewpilot.timeoutMs": {
+          "type": "number",
+          "default": 600000,
+          "description": "Hard timeout for a single review invocation, in milliseconds. 0 = no timeout."
+        },
+        "reviewpilot.defaultMode": {
+          "type": "string",
+          "enum": ["working", "branch", "full"],
+          "default": "working",
+          "description": "Default scope pre-selected when you run Review Project. working = uncommitted changes vs HEAD; branch = current branch vs a base branch; full = the whole project."
+        },
+        "reviewpilot.baseBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "Default base branch used by the 'branch' review scope."
+        },
+        "reviewpilot.onlyChangedLines": {
+          "type": "boolean",
+          "default": false,
+          "description": "For working/branch scopes, keep only findings that fall on lines the diff actually changed (noise reduction)."
+        },
+        "reviewpilot.reviewFocus": {
+          "type": "string",
+          "default": "",
+          "description": "Optional emphasis for the review (e.g. 'focus on SQL injection and N+1 queries')."
+        },
+        "reviewpilot.structuralContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "For working/branch scopes, enrich the prompt with code-review-graph structural analysis (risk-scored hotspots, test gaps, affected flows). Best-effort: skipped silently if the graph tool is unavailable."
+        },
+        "reviewpilot.crgLauncher": {
+          "type": "string",
+          "default": "uvx",
+          "description": "Launcher that exposes the `code-review-graph` package on PATH (e.g. 'uvx', or an absolute path to a wrapper). Used only when structuralContext is enabled."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "tsc --noEmit -p tsconfig.json && node --test --import tsx test/*.test.ts",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.21.5",
+    "tsx": "^4.16.2",
+    "typescript": "^5.4.5"
+  }
+}

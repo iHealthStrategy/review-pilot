@@ -1,5 +1,7 @@
 node_modules/
 dist/
+out/
+*.vsix
 *.tsbuildinfo
 .env
 .env.local
@@ -12,3 +14,5 @@ data/
 # Local tooling / agent state (not part of the project)
 .orchestrator/
 .claude/
+# Added by code-review-graph
+.code-review-graph/
