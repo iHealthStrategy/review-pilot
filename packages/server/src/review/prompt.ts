@@ -64,6 +64,7 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
           "",
         ]
       : []),
+    ...(ctx.structuralContext ? [ctx.structuralContext, ""] : []),
     "## Repository structure (overview)",
     structure,
     "",

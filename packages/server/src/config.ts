@@ -45,6 +45,18 @@ export interface AppConfig {
     readonly insightTtlMs: number;
     /** Keep only findings on lines the PR changed (noise reduction). */
     readonly onlyChangedLines: boolean;
+    /**
+     * Enrich the prompt with code-review-graph structural analysis (risk-scored
+     * hotspots, test gaps, affected flows). Requires the `code-review-graph`
+     * package reachable via {@link codeGraphLauncher}; best-effort otherwise.
+     */
+    readonly structuralContext: boolean;
+    /** Launcher exposing the `code-review-graph` package on PATH (e.g. "uvx"). */
+    readonly codeGraphLauncher: string;
+    /** Root dir for the per-repo base-graph cache (empty → ./data/graph-cache). */
+    readonly codeGraphCacheDir: string;
+    /** Rebuild a repo's cached base graph once older than this (ms). */
+    readonly codeGraphTtlMs: number;
   };
   readonly github: {
     readonly apiBase: string;
@@ -215,6 +227,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       projectInsight: bool(env, "PROJECT_INSIGHT_CACHE", true),
       insightTtlMs: int(env, "PROJECT_INSIGHT_TTL_MS", 604800000),
       onlyChangedLines: bool(env, "ONLY_CHANGED_LINES", false),
+      structuralContext: bool(env, "STRUCTURAL_CONTEXT", false),
+      codeGraphLauncher: str(env, "CODE_GRAPH_LAUNCHER", "uvx"),
+      codeGraphCacheDir: str(env, "CODE_GRAPH_CACHE_DIR", ""),
+      codeGraphTtlMs: int(env, "CODE_GRAPH_TTL_MS", 3600000),
     },
     github: {
       apiBase: str(env, "GITHUB_API_BASE", "https://api.github.com"),

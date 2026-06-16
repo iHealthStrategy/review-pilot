@@ -28,6 +28,12 @@ export interface ReviewContext {
   /** Cached whole-project understanding to ground the review (optional). */
   projectInsight?: string;
   /**
+   * Pre-rendered structural-context section (risk-scored hotspots, test gaps,
+   * affected flows) from the code-review-graph. Injected verbatim into the
+   * prompt when present. Absent → review relies on the diff + structure only.
+   */
+  structuralContext?: string;
+  /**
    * Reviewer-supplied emphasis for this review (e.g. "focus on SQL injection
    * and N+1 queries"). When set, the engine is told to prioritise these points.
    * Empty/absent → the default general review.

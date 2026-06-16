@@ -43,6 +43,27 @@ export function changedLines(diff: DiffFile[]): ChangedLines {
 }
 
 /**
+ * Collapse each file's added line numbers into compact, inclusive `[start, end]`
+ * ranges (consecutive lines merged). This is the shape the code-review-graph
+ * `analyze_changes` API wants for mapping a diff onto graph nodes — and it lets
+ * us feed PR ranges to a graph built from the BASE branch (no git in the loop).
+ */
+export function changedRanges(diff: DiffFile[]): Map<string, Array<[number, number]>> {
+  const out = new Map<string, Array<[number, number]>>();
+  for (const [path, lineSet] of changedLines(diff).byFile) {
+    const sorted = [...lineSet].sort((a, b) => a - b);
+    const ranges: Array<[number, number]> = [];
+    for (const line of sorted) {
+      const last = ranges[ranges.length - 1];
+      if (last && line === last[1] + 1) last[1] = line;
+      else ranges.push([line, line]);
+    }
+    if (ranges.length) out.set(path, ranges);
+  }
+  return out;
+}
+
+/**
  * Keep only findings that concern the PR's actual change: a finding with a line
  * is kept when that line was added; a line-less finding is kept when its file
  * is part of the diff. Cuts noise from issues in untouched code.
