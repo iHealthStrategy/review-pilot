@@ -116,6 +116,14 @@ export interface AppConfig {
   readonly sessionSecret: string;
   /** Session token lifetime in ms (default 7 days). */
   readonly sessionTtlMs: number;
+  /**
+   * Built-in admin configured from the environment — NOT stored in the DB and
+   * needs no maintenance. Enabled only when `adminPassword` is set. Logs in as a
+   * permanent admin (break-glass / bootstrap). When enabled, self-registered
+   * users start as read-only viewers (this admin upgrades them).
+   */
+  readonly adminEmail: string;
+  readonly adminPassword: string;
   /** Directory of the built Web UI to serve; empty uses the bundled default. */
   readonly webDistDir: string;
   readonly workspaceDir: string;
@@ -271,6 +279,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     sessionSecret: str(env, "SESSION_SECRET", ""),
     sessionTtlMs: int(env, "SESSION_TTL_MS", 604800000),
+    adminEmail: str(env, "ADMIN_EMAIL", "admin@reviewpilot.local"),
+    adminPassword: str(env, "ADMIN_PASSWORD", ""),
     webDistDir: str(env, "WEB_DIST_DIR", ""),
     workspaceDir: str(env, "WORKSPACE_DIR", "./.workspace"),
   };

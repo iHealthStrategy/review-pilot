@@ -21,6 +21,13 @@ import {
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
+import {
+  type EnvAdmin,
+  ENV_ADMIN_ID,
+  envAdminFrom,
+  isEnvAdminEmail,
+  matchesEnvAdmin,
+} from "../auth/env-admin.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
 import type {
   CreateScheduleInput,
@@ -50,6 +57,13 @@ interface ApiResult {
 interface AuthConfig {
   secret: string;
   sessionTtlMs: number;
+  /** Built-in env-configured admin (not in the DB), or null when disabled. */
+  envAdmin: EnvAdmin | null;
+}
+
+/** Public user view for the env admin (synthetic; no DB timestamps). */
+function envAdminUser(admin: EnvAdmin) {
+  return { id: admin.id, email: admin.email, role: "admin" as const, createdAt: "", updatedAt: "" };
 }
 
 type Handler = (
@@ -157,11 +171,17 @@ const ROUTES: Route[] = [
       if (password.length < 8) {
         throw new HttpError(400, "field 'password' must be at least 8 characters");
       }
+      if (isEnvAdminEmail(auth.envAdmin, email)) {
+        throw new HttpError(409, "email is reserved");
+      }
       if (await repo.getUserByEmail(email)) {
         throw new HttpError(409, "email already registered");
       }
-      // First user bootstraps as admin; everyone after starts read-only.
-      const role: UserRole = (await repo.countUsers()) === 0 ? "admin" : "viewer";
+      // Bootstrap admin: only when there is NO env admin and this is the first
+      // user. With an env admin configured, self-registered users start as
+      // read-only viewers (the env admin upgrades them).
+      const role: UserRole =
+        !auth.envAdmin && (await repo.countUsers()) === 0 ? "admin" : "viewer";
       const user = await repo.createUser({
         email,
         passwordHash: hashPassword(password),
@@ -178,6 +198,15 @@ const ROUTES: Route[] = [
       const b = (body ?? {}) as Record<string, unknown>;
       const email = normalizeEmail(b.email);
       const password = asString(b.password, "password");
+      // The env admin is checked first and short-circuits the DB lookup.
+      if (matchesEnvAdmin(auth.envAdmin, email, password)) {
+        const token = signSession({ sub: ENV_ADMIN_ID, role: "admin" }, auth.secret, auth.sessionTtlMs);
+        return ok({ token, user: envAdminUser(auth.envAdmin!) });
+      }
+      if (isEnvAdminEmail(auth.envAdmin, email)) {
+        // Reserved email: only the env password is valid; never fall through.
+        throw new HttpError(401, "invalid email or password");
+      }
       const user = await repo.getUserByEmail(email);
       if (!user || !verifyPassword(password, user.passwordHash)) {
         throw new HttpError(401, "invalid email or password");
@@ -189,8 +218,11 @@ const ROUTES: Route[] = [
   {
     method: "GET",
     pattern: /^\/api\/auth\/me$/,
-    handler: async ({ principal }, repo) => {
+    handler: async ({ principal, auth }, repo) => {
       const p = requirePrincipal(principal);
+      if (p.userId === ENV_ADMIN_ID && auth.envAdmin) {
+        return ok({ user: envAdminUser(auth.envAdmin), via: p.via });
+      }
       const user = await repo.getUserById(p.userId);
       if (!user) throw new HttpError(401, "unauthorized");
       return ok({ user: publicUser(user), via: p.via });
@@ -217,6 +249,12 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/tokens$/,
     handler: async ({ principal, body }, repo) => {
       const p = requirePrincipal(principal);
+      if (p.userId === ENV_ADMIN_ID) {
+        throw new HttpError(
+          400,
+          "the bootstrap admin can't own personal tokens; create a regular user for automation",
+        );
+      }
       const name = asString((body as Record<string, unknown>)?.name, "name");
       const gen = generateApiToken();
       const rec = await repo.createApiToken({
@@ -575,6 +613,10 @@ export interface ApiOptions {
   sessionSecret?: string;
   /** Session token lifetime in ms (default 7 days). */
   sessionTtlMs?: number;
+  /** Built-in admin email (env-configured; not in the DB). */
+  adminEmail?: string;
+  /** Built-in admin password; when set, the env admin is enabled. */
+  adminPassword?: string;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
   /** Required for the /api/schedules routes. */
@@ -588,6 +630,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const auth: AuthConfig = {
     secret,
     sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
+    envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminPassword ?? ""),
   };
   const tasks = options.taskService;
   const schedules = options.scheduleStore;
@@ -600,7 +643,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
       res.end(JSON.stringify(body));
     };
     // Resolve the caller (session JWT or PAT). No header → null (fast path).
-    const principal = await resolvePrincipal(req.headers.authorization, repo, secret);
+    const principal = await resolvePrincipal(req.headers.authorization, repo, secret, auth.envAdmin);
     // Enforce RBAC only when a signing secret is configured (auth enabled).
     if (secret) {
       const need = requiredRole(method, parsed.pathname);

@@ -1,5 +1,6 @@
 import type { UserRole } from "../domain/entities.js";
 import type { Repository } from "../persistence/repository.js";
+import { type EnvAdmin, ENV_ADMIN_ID } from "./env-admin.js";
 import { verifySession } from "./session.js";
 import { hashApiToken, looksLikeApiToken } from "./tokens.js";
 
@@ -49,6 +50,7 @@ export async function resolvePrincipal(
   authorization: string | undefined,
   repo: Repository,
   secret: string,
+  envAdmin: EnvAdmin | null = null,
   now: number = Date.now(),
 ): Promise<Principal | null> {
   if (!authorization) return null;
@@ -67,6 +69,10 @@ export async function resolvePrincipal(
 
   const claims = verifySession(credential, secret, now);
   if (!claims) return null;
+  // The env admin is not in the database; resolve it from config alone.
+  if (envAdmin && claims.sub === ENV_ADMIN_ID) {
+    return { userId: ENV_ADMIN_ID, role: "admin", via: "session" };
+  }
   const user = await repo.getUserById(claims.sub);
   if (!user) return null;
   return { userId: user.id, role: user.role, via: "session" };

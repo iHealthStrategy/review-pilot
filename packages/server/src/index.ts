@@ -165,6 +165,8 @@ export function startApp(
       taskService,
       ...(config.sessionSecret ? { sessionSecret: config.sessionSecret } : {}),
       sessionTtlMs: config.sessionTtlMs,
+      adminEmail: config.adminEmail,
+      ...(config.adminPassword ? { adminPassword: config.adminPassword } : {}),
       webDistDir: config.webDistDir,
       scheduleStore,
       scheduler,

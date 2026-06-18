@@ -50,6 +50,10 @@ services:
       # stable & shared across replicas. The first user to register is admin.
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_TTL_MS: ${SESSION_TTL_MS:-604800000}
+      # Built-in admin from env (not in the DB). Set ADMIN_PASSWORD to enable a
+      # permanent bootstrap/break-glass admin login.
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@reviewpilot.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Provide tokens to enable real GitHub/GitLab integration (read PRs +
       # write back comments/checks).
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

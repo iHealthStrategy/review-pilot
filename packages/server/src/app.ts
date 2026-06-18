@@ -18,6 +18,9 @@ export interface AppDeps {
   sessionSecret?: string;
   /** Session token lifetime (ms). */
   sessionTtlMs?: number;
+  /** Built-in env-configured admin (email + password); password enables it. */
+  adminEmail?: string;
+  adminPassword?: string;
   /** Override directory for the built Web UI (defaults to bundled location). */
   webDistDir?: string;
   /** Backs the /api/schedules routes (scheduled scans). */
@@ -36,6 +39,8 @@ export function createAppHandler(deps: AppDeps) {
   const api = createApiHandler(deps.repo, {
     ...(deps.sessionSecret ? { sessionSecret: deps.sessionSecret } : {}),
     ...(deps.sessionTtlMs !== undefined ? { sessionTtlMs: deps.sessionTtlMs } : {}),
+    ...(deps.adminEmail !== undefined ? { adminEmail: deps.adminEmail } : {}),
+    ...(deps.adminPassword ? { adminPassword: deps.adminPassword } : {}),
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),

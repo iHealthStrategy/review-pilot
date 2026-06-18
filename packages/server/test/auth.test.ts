@@ -13,6 +13,7 @@ const SECRET = "test-session-secret";
 
 async function withAuthApi(
   run: (base: string, repo: Repository) => Promise<void>,
+  opts: { adminEmail?: string; adminPassword?: string } = {},
 ): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
@@ -22,7 +23,7 @@ async function withAuthApi(
     defaultEngine: "mock",
     enabledEngines: ["mock"],
   });
-  const server = startAppServer({ repo, taskService, sessionSecret: SECRET }, 0);
+  const server = startAppServer({ repo, taskService, sessionSecret: SECRET, ...opts }, 0);
   await new Promise<void>((r) => server.once("listening", () => r()));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
@@ -49,6 +50,16 @@ async function register(base: string, email: string, password: string) {
 }
 
 const PROJECT = { name: "p", platform: "github", defaultEngine: "mock", enabledEngines: ["mock"] };
+const ENV_ADMIN = { adminEmail: "root@corp.com", adminPassword: "rootpassword1" };
+
+async function login(base: string, email: string, password: string) {
+  const res = await fetch(`${base}/api/auth/login`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ email, password }),
+  });
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as any };
+}
 
 test("register: first user is admin, subsequent users are viewers", () =>
   withAuthApi(async (base) => {
@@ -200,3 +211,41 @@ test("personal access tokens: create, authenticate with, and revoke", () =>
       401,
     );
   }));
+
+test("env admin: logs in as a permanent admin without any DB user", () =>
+  withAuthApi(async (base, repo) => {
+    assert.equal(await repo.countUsers(), 0, "env admin is not stored in the DB");
+    const bad = await login(base, ENV_ADMIN.adminEmail, "wrong-password");
+    assert.equal(bad.status, 401);
+
+    const good = await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword);
+    assert.equal(good.status, 200);
+    assert.equal(good.body.user.role, "admin");
+    const token = good.body.token as string;
+
+    // Full admin powers (e.g. user administration) and still no DB user created.
+    assert.equal((await fetch(`${base}/api/users`, { headers: authHeaders(token) })).status, 200);
+    assert.equal((await fetch(`${base}/api/auth/me`, { headers: authHeaders(token) })).status, 200);
+    assert.equal(await repo.countUsers(), 0);
+  }, ENV_ADMIN));
+
+test("env admin: reserves its email and demotes the first registered user to viewer", () =>
+  withAuthApi(async (base) => {
+    // Reserved email cannot be registered.
+    assert.equal((await register(base, ENV_ADMIN.adminEmail, "password1")).status, 409);
+    // With an env admin present, the first self-registered user is a viewer.
+    const first = await register(base, "first@x.com", "password1");
+    assert.equal(first.status, 201);
+    assert.equal(first.body.user.role, "viewer");
+  }, ENV_ADMIN));
+
+test("env admin: cannot mint personal tokens (it has no DB row)", () =>
+  withAuthApi(async (base) => {
+    const token = (await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword)).body.token;
+    const res = await fetch(`${base}/api/tokens`, {
+      method: "POST",
+      headers: authHeaders(token),
+      body: JSON.stringify({ name: "ci" }),
+    });
+    assert.equal(res.status, 400);
+  }, ENV_ADMIN));

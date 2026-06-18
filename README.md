@@ -136,6 +136,12 @@ tokens) and sends it as `Authorization: Bearer rpat_…`. **Set `SESSION_SECRET`
 (long, random, stable across replicas) for any internet-exposed deployment** —
 it guards the task ingress. Leaving it empty disables auth (dev only).
 
+Set `ADMIN_PASSWORD` (and optionally `ADMIN_EMAIL`, default
+`admin@reviewpilot.local`) to enable a **built-in admin configured from the
+environment** — not stored in the database and needing no maintenance, giving a
+permanent bootstrap / break-glass admin login. When it is enabled, self-
+registered users start as read-only viewers (the env admin upgrades them).
+
 ### Result callback (branch-diff mode)
 
 When a branch-mode task finishes, the service POSTs a JSON body to `callback.url`
@@ -438,7 +444,7 @@ engines that can't explore (e.g. `mock`).
 | Git platform   | `GITHUB_*`, `GITLAB_*`                       | unset (mock) |
 | Worker         | `RECOVER_INTERRUPTED_JOBS_ON_START`, `INLINE_COMMENTS`, `PUBLISH_CHECK_RUN`, `FAIL_ON_SEVERITY`, `ONLY_CHANGED_LINES` | `true`/`false`/—/`false` |
 | Scheduled scans| `SCHEDULE_STORE_FILE` (non-mongo drivers; mongo uses a `schedules` collection) | `./.reviewpilot/schedules.json` |
-| Auth/UI        | `SESSION_SECRET`, `SESSION_TTL_MS`, `WEB_DIST_DIR` | unset (no auth) |
+| Auth/UI        | `SESSION_SECRET`, `SESSION_TTL_MS`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `WEB_DIST_DIR` | unset (no auth) |
 
 > Persistence: `mock` (in-memory) and `file` run with zero dependencies.
 > `mongo` is live via the official `mongodb` driver (loaded lazily; installed in
