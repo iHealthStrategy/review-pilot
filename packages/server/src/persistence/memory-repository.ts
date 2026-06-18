@@ -1,4 +1,5 @@
 import type {
+  ApiToken,
   Finding,
   JobStatus,
   Platform,
@@ -7,14 +8,18 @@ import type {
   Repo,
   RepoInsight,
   ReviewJob,
+  User,
+  UserRole,
 } from "../domain/entities.js";
 import { assertTransition } from "../domain/state-machine.js";
 import {
   type AddFindingInput,
   type Clock,
+  type CreateApiTokenInput,
   type CreateProjectInput,
   type CreateRepoInput,
   type CreateReviewJobInput,
+  type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
   type Repository,
@@ -35,6 +40,10 @@ export interface MemorySnapshot {
   findings: Record<string, Finding>;
   /** Cached per-repo project understanding, keyed by repoId. */
   repoInsights: Record<string, RepoInsight>;
+  /** Registered users, keyed by id. */
+  users: Record<string, User>;
+  /** Personal access tokens, keyed by id. */
+  apiTokens: Record<string, ApiToken>;
 }
 
 function emptySnapshot(): MemorySnapshot {
@@ -45,6 +54,8 @@ function emptySnapshot(): MemorySnapshot {
     reviewJobs: {},
     findings: {},
     repoInsights: {},
+    users: {},
+    apiTokens: {},
   };
 }
 
@@ -327,6 +338,86 @@ export class MemoryRepository implements Repository {
     this.data.repoInsights[input.repoId] = insight;
     await this.persist();
     return insight;
+  }
+
+  async createUser(input: CreateUserInput): Promise<User> {
+    const now = this.clock();
+    const user: User = {
+      id: this.idGen("usr"),
+      email: input.email,
+      passwordHash: input.passwordHash,
+      role: input.role,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.data.users[user.id] = user;
+    await this.persist();
+    return user;
+  }
+
+  async getUserById(id: string): Promise<User | null> {
+    return this.data.users[id] ?? null;
+  }
+
+  async getUserByEmail(email: string): Promise<User | null> {
+    return Object.values(this.data.users).find((u) => u.email === email) ?? null;
+  }
+
+  async listUsers(): Promise<User[]> {
+    return Object.values(this.data.users);
+  }
+
+  async countUsers(): Promise<number> {
+    return Object.keys(this.data.users).length;
+  }
+
+  async updateUserRole(id: string, role: UserRole): Promise<User> {
+    const user = this.data.users[id];
+    if (!user) throw new EntityNotFoundError("User", id);
+    const next: User = { ...user, role, updatedAt: this.clock() };
+    this.data.users[id] = next;
+    await this.persist();
+    return next;
+  }
+
+  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
+    const token: ApiToken = {
+      id: this.idGen("tok"),
+      userId: input.userId,
+      name: input.name,
+      tokenHash: input.tokenHash,
+      prefix: input.prefix,
+      createdAt: this.clock(),
+    };
+    this.data.apiTokens[token.id] = token;
+    await this.persist();
+    return token;
+  }
+
+  async listApiTokensByUser(userId: string): Promise<ApiToken[]> {
+    return Object.values(this.data.apiTokens).filter((t) => t.userId === userId);
+  }
+
+  async getApiTokenByHash(tokenHash: string): Promise<ApiToken | null> {
+    return (
+      Object.values(this.data.apiTokens).find((t) => t.tokenHash === tokenHash) ?? null
+    );
+  }
+
+  async deleteApiToken(id: string, userId: string): Promise<void> {
+    const token = this.data.apiTokens[id];
+    if (token && token.userId === userId) {
+      delete this.data.apiTokens[id];
+      await this.persist();
+    }
+  }
+
+  async touchApiToken(id: string, at: string): Promise<void> {
+    const token = this.data.apiTokens[id];
+    if (token) {
+      this.data.apiTokens[id] = { ...token, lastUsedAt: at };
+      await this.persist();
+    }
   }
 
   async close(): Promise<void> {

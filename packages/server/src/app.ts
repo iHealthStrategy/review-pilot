@@ -14,8 +14,10 @@ import { createStaticHandler, resolveWebDistDir } from "./web/static-server.js";
 export interface AppDeps {
   repo: Repository;
   taskService: TaskService;
-  /** Bearer token guarding the /api surface; empty/omitted disables auth. */
-  apiToken?: string;
+  /** Session-token signing secret guarding the /api surface; empty disables auth. */
+  sessionSecret?: string;
+  /** Session token lifetime (ms). */
+  sessionTtlMs?: number;
   /** Override directory for the built Web UI (defaults to bundled location). */
   webDistDir?: string;
   /** Backs the /api/schedules routes (scheduled scans). */
@@ -32,7 +34,8 @@ export interface AppDeps {
  */
 export function createAppHandler(deps: AppDeps) {
   const api = createApiHandler(deps.repo, {
-    apiToken: deps.apiToken,
+    ...(deps.sessionSecret ? { sessionSecret: deps.sessionSecret } : {}),
+    ...(deps.sessionTtlMs !== undefined ? { sessionTtlMs: deps.sessionTtlMs } : {}),
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),

@@ -108,8 +108,14 @@ export interface AppConfig {
      */
     readonly feishuWebhookUrl: string;
   };
-  /** Bearer token required for the management API/UI; empty disables auth. */
-  readonly apiToken: string;
+  /**
+   * Signing secret for session tokens. When set, the management API/UI requires
+   * a logged-in user (or a personal access token); empty disables auth (dev only).
+   * Must be a stable, shared value across replicas so sessions survive restarts.
+   */
+  readonly sessionSecret: string;
+  /** Session token lifetime in ms (default 7 days). */
+  readonly sessionTtlMs: number;
   /** Directory of the built Web UI to serve; empty uses the bundled default. */
   readonly webDistDir: string;
   readonly workspaceDir: string;
@@ -263,7 +269,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       storeFile: str(env, "SCHEDULE_STORE_FILE", "./.reviewpilot/schedules.json"),
       feishuWebhookUrl: str(env, "FEISHU_WEBHOOK_URL", ""),
     },
-    apiToken: str(env, "API_TOKEN", ""),
+    sessionSecret: str(env, "SESSION_SECRET", ""),
+    sessionTtlMs: int(env, "SESSION_TTL_MS", 604800000),
     webDistDir: str(env, "WEB_DIST_DIR", ""),
     workspaceDir: str(env, "WORKSPACE_DIR", "./.workspace"),
   };

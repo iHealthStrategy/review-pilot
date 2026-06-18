@@ -4,8 +4,23 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import type { Platform, ReviewEngineKind } from "../domain/entities.js";
+import type {
+  ApiToken,
+  Platform,
+  ReviewEngineKind,
+  User,
+  UserRole,
+} from "../domain/entities.js";
 import { EntityNotFoundError, type Repository } from "../persistence/repository.js";
+import {
+  type Principal,
+  requiredRole,
+  resolvePrincipal,
+  roleAtLeast,
+} from "../auth/authorize.js";
+import { hashPassword, verifyPassword } from "../auth/password.js";
+import { signSession } from "../auth/session.js";
+import { generateApiToken } from "../auth/tokens.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
 import type {
   CreateScheduleInput,
@@ -31,8 +46,21 @@ interface ApiResult {
   body: unknown;
 }
 
+/** Signing config threaded into auth handlers via the request context. */
+interface AuthConfig {
+  secret: string;
+  sessionTtlMs: number;
+}
+
 type Handler = (
-  ctx: { params: Record<string, string>; body: unknown; query: URLSearchParams },
+  ctx: {
+    params: Record<string, string>;
+    body: unknown;
+    query: URLSearchParams;
+    /** The authenticated caller, or null (absent/invalid credential, or auth off). */
+    principal: Principal | null;
+    auth: AuthConfig;
+  },
   repo: Repository,
   tasks: TaskService | undefined,
   schedules: ScheduleStore | undefined,
@@ -85,7 +113,146 @@ function parseCallback(v: unknown): { url: string; headers?: Record<string, stri
   return Object.keys(headers).length ? { url, headers } : { url };
 }
 
+const ROLES: readonly UserRole[] = ["viewer", "member", "admin"];
+const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/** Lowercase + trim so email is a stable, case-insensitive identity key. */
+function normalizeEmail(v: unknown): string {
+  return asString(v, "email").trim().toLowerCase();
+}
+function isEmail(s: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+}
+
+/** API-safe user view — never leaks the password hash. */
+function publicUser(u: User) {
+  return { id: u.id, email: u.email, role: u.role, createdAt: u.createdAt, updatedAt: u.updatedAt };
+}
+/** API-safe token view — never leaks the token hash. */
+function publicToken(t: ApiToken) {
+  return {
+    id: t.id,
+    name: t.name,
+    prefix: t.prefix,
+    createdAt: t.createdAt,
+    ...(t.lastUsedAt ? { lastUsedAt: t.lastUsedAt } : {}),
+  };
+}
+
+function requirePrincipal(principal: Principal | null): Principal {
+  if (!principal) throw new HttpError(401, "unauthorized");
+  return principal;
+}
+
 const ROUTES: Route[] = [
+  // --- Authentication & account ---
+  {
+    method: "POST",
+    pattern: /^\/api\/auth\/register$/,
+    handler: async ({ body, auth }, repo) => {
+      const b = (body ?? {}) as Record<string, unknown>;
+      const email = normalizeEmail(b.email);
+      const password = asString(b.password, "password");
+      if (!isEmail(email)) throw new HttpError(400, "field 'email' must be a valid email");
+      if (password.length < 8) {
+        throw new HttpError(400, "field 'password' must be at least 8 characters");
+      }
+      if (await repo.getUserByEmail(email)) {
+        throw new HttpError(409, "email already registered");
+      }
+      // First user bootstraps as admin; everyone after starts read-only.
+      const role: UserRole = (await repo.countUsers()) === 0 ? "admin" : "viewer";
+      const user = await repo.createUser({
+        email,
+        passwordHash: hashPassword(password),
+        role,
+      });
+      const token = signSession({ sub: user.id, role: user.role }, auth.secret, auth.sessionTtlMs);
+      return ok({ token, user: publicUser(user) }, 201);
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/auth\/login$/,
+    handler: async ({ body, auth }, repo) => {
+      const b = (body ?? {}) as Record<string, unknown>;
+      const email = normalizeEmail(b.email);
+      const password = asString(b.password, "password");
+      const user = await repo.getUserByEmail(email);
+      if (!user || !verifyPassword(password, user.passwordHash)) {
+        throw new HttpError(401, "invalid email or password");
+      }
+      const token = signSession({ sub: user.id, role: user.role }, auth.secret, auth.sessionTtlMs);
+      return ok({ token, user: publicUser(user) });
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/auth\/me$/,
+    handler: async ({ principal }, repo) => {
+      const p = requirePrincipal(principal);
+      const user = await repo.getUserById(p.userId);
+      if (!user) throw new HttpError(401, "unauthorized");
+      return ok({ user: publicUser(user), via: p.via });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/auth\/logout$/,
+    // Stateless: the client discards its token. Endpoint exists for symmetry.
+    handler: async () => ok({ ok: true }),
+  },
+  // --- Personal access tokens (self-service) ---
+  {
+    method: "GET",
+    pattern: /^\/api\/tokens$/,
+    handler: async ({ principal }, repo) => {
+      const p = requirePrincipal(principal);
+      const tokens = await repo.listApiTokensByUser(p.userId);
+      return ok(tokens.map(publicToken));
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/tokens$/,
+    handler: async ({ principal, body }, repo) => {
+      const p = requirePrincipal(principal);
+      const name = asString((body as Record<string, unknown>)?.name, "name");
+      const gen = generateApiToken();
+      const rec = await repo.createApiToken({
+        userId: p.userId,
+        name,
+        tokenHash: gen.tokenHash,
+        prefix: gen.prefix,
+      });
+      // The plaintext secret is returned exactly once, here.
+      return ok({ ...publicToken(rec), token: gen.secret }, 201);
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/api\/tokens\/(?<id>[^/]+)$/,
+    handler: async ({ principal, params }, repo) => {
+      const p = requirePrincipal(principal);
+      await repo.deleteApiToken(params.id!, p.userId);
+      return ok({ ok: true });
+    },
+  },
+  // --- User administration (admin only; gated in createApiHandler) ---
+  {
+    method: "GET",
+    pattern: /^\/api\/users$/,
+    handler: async (_ctx, repo) => ok((await repo.listUsers()).map(publicUser)),
+  },
+  {
+    method: "PATCH",
+    pattern: /^\/api\/users\/(?<id>[^/]+)\/role$/,
+    handler: async ({ params, body }, repo) => {
+      const role = asEnum((body as Record<string, unknown>)?.role, ROLES, "role");
+      const user = await repo.updateUserRole(params.id!, role);
+      return ok(publicUser(user));
+    },
+  },
   {
     method: "GET",
     pattern: /^\/api\/health$/,
@@ -401,8 +568,13 @@ function readBody(req: IncomingMessage): Promise<string> {
  * stored per-project, so nothing secret is returned here.
  */
 export interface ApiOptions {
-  /** When set, every route except /api/health requires `Bearer <token>`. */
-  apiToken?: string;
+  /**
+   * Session-token signing secret. When set, the API enforces auth (per-route
+   * role via RBAC); when empty, auth is OFF (open) — used by unit tests.
+   */
+  sessionSecret?: string;
+  /** Session token lifetime in ms (default 7 days). */
+  sessionTtlMs?: number;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
   /** Required for the /api/schedules routes. */
@@ -411,13 +583,12 @@ export interface ApiOptions {
   scheduler?: Scheduler;
 }
 
-function authorized(req: IncomingMessage, token: string): boolean {
-  const header = req.headers.authorization;
-  return header === `Bearer ${token}`;
-}
-
 export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
-  const token = options.apiToken ?? "";
+  const secret = options.sessionSecret ?? "";
+  const auth: AuthConfig = {
+    secret,
+    sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
+  };
   const tasks = options.taskService;
   const schedules = options.scheduleStore;
   const scheduler = options.scheduler;
@@ -428,10 +599,21 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
       res.writeHead(status, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
     };
-    // Bearer auth (health stays open for liveness probes).
-    if (token && parsed.pathname !== "/api/health" && !authorized(req, token)) {
-      send(401, { error: "unauthorized" });
-      return;
+    // Resolve the caller (session JWT or PAT). No header → null (fast path).
+    const principal = await resolvePrincipal(req.headers.authorization, repo, secret);
+    // Enforce RBAC only when a signing secret is configured (auth enabled).
+    if (secret) {
+      const need = requiredRole(method, parsed.pathname);
+      if (need !== "public") {
+        if (!principal) {
+          send(401, { error: "unauthorized" });
+          return;
+        }
+        if (!roleAtLeast(principal.role, need)) {
+          send(403, { error: `forbidden: requires '${need}'` });
+          return;
+        }
+      }
     }
     const route = ROUTES.find(
       (r) => r.method === method && r.pattern.test(parsed.pathname),
@@ -449,7 +631,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
         body = raw ? JSON.parse(raw) : {};
       }
       const result = await route.handler(
-        { params, body, query: parsed.searchParams },
+        { params, body, query: parsed.searchParams, principal, auth },
         repo,
         tasks,
         schedules,

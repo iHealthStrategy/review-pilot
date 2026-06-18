@@ -163,7 +163,8 @@ export function startApp(
     {
       repo,
       taskService,
-      apiToken: config.apiToken,
+      ...(config.sessionSecret ? { sessionSecret: config.sessionSecret } : {}),
+      sessionTtlMs: config.sessionTtlMs,
       webDistDir: config.webDistDir,
       scheduleStore,
       scheduler,
@@ -189,7 +190,7 @@ export function startApp(
       port: config.port,
       db: config.db.driver,
       engine: config.review.defaultEngine,
-      auth: config.apiToken ? "on" : "off",
+      auth: config.sessionSecret ? "on" : "off",
       recoveredJobs: recovered,
       schedules: (await scheduleStore.list()).length,
     });

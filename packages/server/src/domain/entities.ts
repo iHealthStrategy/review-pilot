@@ -105,6 +105,41 @@ export interface RepoInsight {
   readonly updatedAt: string;
 }
 
+/**
+ * Access level of a user. Ranked: viewer < member < admin.
+ *  - `viewer`: read-only (all GET endpoints). Default for self-registration.
+ *  - `member`: viewer + may create/edit/run (mutating endpoints).
+ *  - `admin`:  member + manage users (upgrade roles). The first registered
+ *    user is bootstrapped to admin so there is always someone who can upgrade.
+ */
+export type UserRole = "viewer" | "member" | "admin";
+
+/** A registered account. `passwordHash` never leaves the persistence layer. */
+export interface User {
+  readonly id: string;
+  readonly email: string;
+  /** scrypt hash, encoded `<saltHex>:<hashHex>`. Never serialized to the API. */
+  readonly passwordHash: string;
+  readonly role: UserRole;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/**
+ * A personal access token a user mints for API/automation use. Only the SHA-256
+ * `tokenHash` is stored; the plaintext secret is shown once at creation. `prefix`
+ * is the leading, non-secret part kept for display (e.g. `rpat_ab12cd`).
+ */
+export interface ApiToken {
+  readonly id: string;
+  readonly userId: string;
+  readonly name: string;
+  readonly tokenHash: string;
+  readonly prefix: string;
+  readonly createdAt: string;
+  readonly lastUsedAt?: string;
+}
+
 /** A structured review result item (the "issue list + suggestion"). */
 export interface Finding {
   readonly id: string;

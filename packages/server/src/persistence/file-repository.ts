@@ -34,6 +34,8 @@ export class FileRepository extends MemoryRepository {
         reviewJobs: parsed.reviewJobs ?? {},
         findings: parsed.findings ?? {},
         repoInsights: parsed.repoInsights ?? {},
+        users: parsed.users ?? {},
+        apiTokens: parsed.apiTokens ?? {},
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {

@@ -274,4 +274,44 @@ export function runRepositoryContract(
     assert.equal(info?.line, undefined);
     await repo.close();
   });
+
+  test(`${name}: users — create, fetch by id/email, count, role update`, async () => {
+    const repo = await makeRepo();
+    assert.equal(await repo.countUsers(), 0);
+    const u = await repo.createUser({ email: "a@x.com", passwordHash: "h1", role: "admin" });
+    assert.equal(u.role, "admin");
+    assert.equal((await repo.getUserById(u.id))?.email, "a@x.com");
+    assert.equal((await repo.getUserByEmail("a@x.com"))?.id, u.id);
+    assert.equal(await repo.getUserByEmail("missing@x.com"), null);
+    assert.equal(await repo.countUsers(), 1);
+    const upgraded = await repo.updateUserRole(u.id, "member");
+    assert.equal(upgraded.role, "member");
+    assert.equal((await repo.getUserById(u.id))?.role, "member");
+    await repo.close();
+  });
+
+  test(`${name}: api tokens — create, lookup by hash, list, owner-scoped revoke`, async () => {
+    const repo = await makeRepo();
+    const u = await repo.createUser({ email: "t@x.com", passwordHash: "h", role: "member" });
+    const tok = await repo.createApiToken({
+      userId: u.id,
+      name: "ci",
+      tokenHash: "hash-1",
+      prefix: "rpat_ab12",
+    });
+    assert.equal((await repo.getApiTokenByHash("hash-1"))?.id, tok.id);
+    assert.equal(await repo.getApiTokenByHash("nope"), null);
+    assert.deepEqual((await repo.listApiTokensByUser(u.id)).map((t) => t.id), [tok.id]);
+
+    await repo.touchApiToken(tok.id, "2026-01-01T00:00:00Z");
+    assert.equal((await repo.getApiTokenByHash("hash-1"))?.lastUsedAt, "2026-01-01T00:00:00Z");
+
+    // Revoke is scoped to the owner: a different user's delete is a no-op.
+    await repo.deleteApiToken(tok.id, "someone-else");
+    assert.ok(await repo.getApiTokenByHash("hash-1"));
+    await repo.deleteApiToken(tok.id, u.id);
+    assert.equal(await repo.getApiTokenByHash("hash-1"), null);
+    assert.equal((await repo.listApiTokensByUser(u.id)).length, 0);
+    await repo.close();
+  });
 }

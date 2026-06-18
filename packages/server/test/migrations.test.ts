@@ -12,6 +12,8 @@ test("migrations: DDL creates every entity table", () => {
     "review_jobs",
     "findings",
     "repo_insights",
+    "users",
+    "api_tokens",
   ]) {
     assert.match(ddl, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}\\b`));
   }
@@ -23,13 +25,17 @@ test("migrations: runner applies all then is idempotent", async () => {
   const client = new FakeSqlClient("sqlite");
   client.queueAll([]); // no migrations applied yet
   const ran = await runMigrations(client);
-  assert.deepEqual(ran, ["0001_init", "0002_repo_insights"]);
+  assert.deepEqual(ran, ["0001_init", "0002_repo_insights", "0003_users_tokens"]);
   // _migrations ledger + each migration body were exec'd.
   assert.ok(client.execs.some((s) => /_migrations/.test(s)));
   assert.ok(client.execs.some((s) => /CREATE TABLE IF NOT EXISTS projects/.test(s)));
 
   // Second run: ledger reports them already applied → nothing runs.
-  client.queueAll([{ id: "0001_init" }, { id: "0002_repo_insights" }]);
+  client.queueAll([
+    { id: "0001_init" },
+    { id: "0002_repo_insights" },
+    { id: "0003_users_tokens" },
+  ]);
   const ran2 = await runMigrations(client);
   assert.deepEqual(ran2, []);
 });

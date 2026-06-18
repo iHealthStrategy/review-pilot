@@ -1,4 +1,5 @@
 import type {
+  ApiToken,
   Finding,
   JobStatus,
   Platform,
@@ -10,14 +11,18 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  User,
+  UserRole,
 } from "../../domain/entities.js";
 import { assertTransition } from "../../domain/state-machine.js";
 import {
   type AddFindingInput,
   type Clock,
+  type CreateApiTokenInput,
   type CreateProjectInput,
   type CreateRepoInput,
   type CreateReviewJobInput,
+  type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
   type Repository,
@@ -37,6 +42,8 @@ const COLLECTIONS = {
   reviewJobs: "review_jobs",
   findings: "findings",
   repoInsights: "repo_insights",
+  users: "users",
+  apiTokens: "api_tokens",
 } as const;
 
 /** Drop `undefined` values so optional fields round-trip as absent, not null. */
@@ -131,6 +138,31 @@ function toRepoInsight(d: MongoDoc): RepoInsight {
   };
 }
 
+function toUser(d: MongoDoc): User {
+  return {
+    id: d.id as string,
+    email: d.email as string,
+    passwordHash: d.passwordHash as string,
+    role: d.role as UserRole,
+    createdAt: d.createdAt as string,
+    updatedAt: d.updatedAt as string,
+  };
+}
+function toApiToken(d: MongoDoc): ApiToken {
+  const token: ApiToken = {
+    id: d.id as string,
+    userId: d.userId as string,
+    name: d.name as string,
+    tokenHash: d.tokenHash as string,
+    prefix: d.prefix as string,
+    createdAt: d.createdAt as string,
+  };
+  return {
+    ...token,
+    ...(d.lastUsedAt != null ? { lastUsedAt: d.lastUsedAt as string } : {}),
+  };
+}
+
 export interface MongoRepositoryOptions {
   clock?: Clock;
   idGen?: IdGen;
@@ -173,6 +205,11 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.reviewJobs).createIndex({ pullRequestId: 1 });
     await this.col(COLLECTIONS.findings).createIndex({ reviewJobId: 1 });
     await this.col(COLLECTIONS.repoInsights).createIndex({ repoId: 1 }, { unique: true });
+    await this.col(COLLECTIONS.users).createIndex({ id: 1 }, { unique: true });
+    await this.col(COLLECTIONS.users).createIndex({ email: 1 }, { unique: true });
+    await this.col(COLLECTIONS.apiTokens).createIndex({ id: 1 }, { unique: true });
+    await this.col(COLLECTIONS.apiTokens).createIndex({ tokenHash: 1 }, { unique: true });
+    await this.col(COLLECTIONS.apiTokens).createIndex({ userId: 1 });
   }
 
   async createProject(input: CreateProjectInput): Promise<Project> {
@@ -454,6 +491,85 @@ export class MongoRepository implements Repository {
     const res = await col.updateOne({ repoId: input.repoId }, { $set: { ...insight } });
     if (res.matched === 0) await col.insertOne({ ...insight });
     return insight;
+  }
+
+  async createUser(input: CreateUserInput): Promise<User> {
+    const now = this.clock();
+    const user: User = {
+      id: this.idGen("usr"),
+      email: input.email,
+      passwordHash: input.passwordHash,
+      role: input.role,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.col(COLLECTIONS.users).insertOne({ ...user });
+    return user;
+  }
+
+  async getUserById(id: string): Promise<User | null> {
+    const d = await this.col(COLLECTIONS.users).findOne({ id });
+    return d ? toUser(d) : null;
+  }
+
+  async getUserByEmail(email: string): Promise<User | null> {
+    const d = await this.col(COLLECTIONS.users).findOne({ email });
+    return d ? toUser(d) : null;
+  }
+
+  async listUsers(): Promise<User[]> {
+    const docs = await this.col(COLLECTIONS.users).find(
+      {},
+      { sort: { field: "createdAt", dir: 1 } },
+    );
+    return docs.map(toUser);
+  }
+
+  async countUsers(): Promise<number> {
+    const docs = await this.col(COLLECTIONS.users).find({});
+    return docs.length;
+  }
+
+  async updateUserRole(id: string, role: UserRole): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.col(COLLECTIONS.users).updateOne({ id }, { $set: { role, updatedAt } });
+    return { ...user, role, updatedAt };
+  }
+
+  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
+    const token: ApiToken = {
+      id: this.idGen("tok"),
+      userId: input.userId,
+      name: input.name,
+      tokenHash: input.tokenHash,
+      prefix: input.prefix,
+      createdAt: this.clock(),
+    };
+    await this.col(COLLECTIONS.apiTokens).insertOne({ ...token });
+    return token;
+  }
+
+  async listApiTokensByUser(userId: string): Promise<ApiToken[]> {
+    const docs = await this.col(COLLECTIONS.apiTokens).find(
+      { userId },
+      { sort: { field: "createdAt", dir: 1 } },
+    );
+    return docs.map(toApiToken);
+  }
+
+  async getApiTokenByHash(tokenHash: string): Promise<ApiToken | null> {
+    const d = await this.col(COLLECTIONS.apiTokens).findOne({ tokenHash });
+    return d ? toApiToken(d) : null;
+  }
+
+  async deleteApiToken(id: string, userId: string): Promise<void> {
+    await this.col(COLLECTIONS.apiTokens).deleteOne({ id, userId });
+  }
+
+  async touchApiToken(id: string, at: string): Promise<void> {
+    await this.col(COLLECTIONS.apiTokens).updateOne({ id }, { $set: { lastUsedAt: at } });
   }
 
   async close(): Promise<void> {

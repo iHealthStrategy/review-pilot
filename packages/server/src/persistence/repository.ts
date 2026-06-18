@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  ApiToken,
   Finding,
   JobStatus,
   Platform,
@@ -11,6 +12,8 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  User,
+  UserRole,
 } from "../domain/entities.js";
 
 /** Monotonic-ish clock returning ISO timestamps; injectable for tests. */
@@ -73,6 +76,21 @@ export interface UpsertRepoInsightInput {
   repoId: string;
   summary: string;
   headSha: string;
+}
+
+export interface CreateUserInput {
+  email: string;
+  /** Pre-hashed (scrypt) — the repository never sees plaintext passwords. */
+  passwordHash: string;
+  role: UserRole;
+}
+
+export interface CreateApiTokenInput {
+  userId: string;
+  name: string;
+  /** SHA-256 of the secret; the plaintext is never persisted. */
+  tokenHash: string;
+  prefix: string;
 }
 
 /** Mutable fields that may accompany a job state transition. */
@@ -141,6 +159,24 @@ export interface Repository {
   getRepoInsight(repoId: string): Promise<RepoInsight | null>;
   /** Create-or-replace the cached understanding for a repo. */
   upsertRepoInsight(input: UpsertRepoInsightInput): Promise<RepoInsight>;
+
+  // --- Users & API tokens (multi-user auth) ---
+  createUser(input: CreateUserInput): Promise<User>;
+  getUserById(id: string): Promise<User | null>;
+  getUserByEmail(email: string): Promise<User | null>;
+  listUsers(): Promise<User[]>;
+  /** Total user count — used to bootstrap the first user as admin. */
+  countUsers(): Promise<number>;
+  updateUserRole(id: string, role: UserRole): Promise<User>;
+
+  createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
+  listApiTokensByUser(userId: string): Promise<ApiToken[]>;
+  /** Resolve a presented token to its record by SHA-256 hash (auth path). */
+  getApiTokenByHash(tokenHash: string): Promise<ApiToken | null>;
+  /** Revoke a token, scoped to its owner so users can't delete others'. */
+  deleteApiToken(id: string, userId: string): Promise<void>;
+  /** Best-effort lastUsedAt stamp on a successful token auth. */
+  touchApiToken(id: string, at: string): Promise<void>;
 
   /** Release resources (close DB handle / flush file). */
   close(): Promise<void>;

@@ -1,4 +1,5 @@
 import type {
+  ApiToken,
   Finding,
   JobStatus,
   Platform,
@@ -10,14 +11,18 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  User,
+  UserRole,
 } from "../../domain/entities.js";
 import { assertTransition } from "../../domain/state-machine.js";
 import {
   type AddFindingInput,
   type Clock,
+  type CreateApiTokenInput,
   type CreateProjectInput,
   type CreateRepoInput,
   type CreateReviewJobInput,
+  type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
   type Repository,
@@ -173,6 +178,45 @@ function toFinding(r: FindingRow): Finding {
     detail: r.detail,
     suggestion: r.suggestion ?? undefined,
     category: r.category ?? undefined,
+  };
+}
+
+interface UserRow {
+  id: string;
+  email: string;
+  password_hash: string;
+  role: string;
+  created_at: string;
+  updated_at: string;
+}
+function toUser(r: UserRow): User {
+  return {
+    id: r.id,
+    email: r.email,
+    passwordHash: r.password_hash,
+    role: r.role as UserRole,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+interface ApiTokenRow {
+  id: string;
+  user_id: string;
+  name: string;
+  token_hash: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+function toApiToken(r: ApiTokenRow): ApiToken {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    name: r.name,
+    tokenHash: r.token_hash,
+    prefix: r.prefix,
+    createdAt: r.created_at,
+    lastUsedAt: r.last_used_at ?? undefined,
   };
 }
 
@@ -610,6 +654,112 @@ export class SqlRepository implements Repository {
       );
     }
     return insight;
+  }
+
+  async createUser(input: CreateUserInput): Promise<User> {
+    const now = this.clock();
+    const user: User = {
+      id: this.idGen("usr"),
+      email: input.email,
+      passwordHash: input.passwordHash,
+      role: input.role,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.client.run(
+      `INSERT INTO users (id, email, password_hash, role, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 6)})`,
+      [user.id, user.email, user.passwordHash, user.role, user.createdAt, user.updatedAt],
+    );
+    return user;
+  }
+
+  async getUserById(id: string): Promise<User | null> {
+    const row = await this.client.get<UserRow>(
+      `SELECT * FROM users WHERE id = ${this.ph(1)}`,
+      [id],
+    );
+    return row ? toUser(row) : null;
+  }
+
+  async getUserByEmail(email: string): Promise<User | null> {
+    const row = await this.client.get<UserRow>(
+      `SELECT * FROM users WHERE email = ${this.ph(1)}`,
+      [email],
+    );
+    return row ? toUser(row) : null;
+  }
+
+  async listUsers(): Promise<User[]> {
+    const rows = await this.client.all<UserRow>(
+      "SELECT * FROM users ORDER BY created_at",
+    );
+    return rows.map(toUser);
+  }
+
+  async countUsers(): Promise<number> {
+    const row = await this.client.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM users",
+    );
+    return Number(row?.n ?? 0);
+  }
+
+  async updateUserRole(id: string, role: UserRole): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.client.run(
+      `UPDATE users SET role = ${this.ph(1)}, updated_at = ${this.ph(2)} WHERE id = ${this.ph(3)}`,
+      [role, updatedAt, id],
+    );
+    return { ...user, role, updatedAt };
+  }
+
+  async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {
+    const token: ApiToken = {
+      id: this.idGen("tok"),
+      userId: input.userId,
+      name: input.name,
+      tokenHash: input.tokenHash,
+      prefix: input.prefix,
+      createdAt: this.clock(),
+    };
+    await this.client.run(
+      `INSERT INTO api_tokens (id, user_id, name, token_hash, prefix, created_at, last_used_at)
+       VALUES (${placeholderList(this.client.dialect, 7)})`,
+      [token.id, token.userId, token.name, token.tokenHash, token.prefix, token.createdAt, null],
+    );
+    return token;
+  }
+
+  async listApiTokensByUser(userId: string): Promise<ApiToken[]> {
+    const rows = await this.client.all<ApiTokenRow>(
+      `SELECT * FROM api_tokens WHERE user_id = ${this.ph(1)} ORDER BY created_at`,
+      [userId],
+    );
+    return rows.map(toApiToken);
+  }
+
+  async getApiTokenByHash(tokenHash: string): Promise<ApiToken | null> {
+    const row = await this.client.get<ApiTokenRow>(
+      `SELECT * FROM api_tokens WHERE token_hash = ${this.ph(1)}`,
+      [tokenHash],
+    );
+    return row ? toApiToken(row) : null;
+  }
+
+  async deleteApiToken(id: string, userId: string): Promise<void> {
+    await this.client.run(
+      `DELETE FROM api_tokens WHERE id = ${this.ph(1)} AND user_id = ${this.ph(2)}`,
+      [id, userId],
+    );
+  }
+
+  async touchApiToken(id: string, at: string): Promise<void> {
+    await this.client.run(
+      `UPDATE api_tokens SET last_used_at = ${this.ph(1)} WHERE id = ${this.ph(2)}`,
+      [at, id],
+    );
   }
 
   async close(): Promise<void> {

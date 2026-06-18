@@ -12,7 +12,10 @@ import { TaskService } from "../src/trigger/trigger-service.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
-async function startServer(repo: Repository, opts: { apiToken?: string; webDistDir?: string }) {
+async function startServer(
+  repo: Repository,
+  opts: { sessionSecret?: string; webDistDir?: string },
+) {
   const taskService = new TaskService({
     repo,
     providerFor: (_p: Platform) => new SpyProvider(),
@@ -25,19 +28,28 @@ async function startServer(repo: Repository, opts: { apiToken?: string; webDistD
   return { server, base: `http://127.0.0.1:${port}` };
 }
 
-test("app: bearer auth gates /api but leaves health open", async () => {
+test("app: auth gates /api (session token) but leaves health open", async () => {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
-  const { server, base } = await startServer(repo, { apiToken: "secret" });
+  const { server, base } = await startServer(repo, { sessionSecret: "secret" });
   try {
+    // No credential → 401; health probe stays open.
     assert.equal((await fetch(`${base}/api/projects`)).status, 401);
     assert.equal((await fetch(`${base}/api/health`)).status, 200);
+    // Register the first user (bootstrapped to admin) → returns a session token.
+    const reg = await fetch(`${base}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "a@b.com", password: "password1" }),
+    });
+    assert.equal(reg.status, 201);
+    const { token } = (await reg.json()) as { token: string };
     const ok = await fetch(`${base}/api/projects`, {
-      headers: { authorization: "Bearer secret" },
+      headers: { authorization: `Bearer ${token}` },
     });
     assert.equal(ok.status, 200);
     const wrong = await fetch(`${base}/api/projects`, {
-      headers: { authorization: "Bearer nope" },
+      headers: { authorization: "Bearer not.a.token" },
     });
     assert.equal(wrong.status, 401);
   } finally {
