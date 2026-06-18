@@ -45,8 +45,11 @@ services:
       SCHEDULE_STORE_FILE: ${SCHEDULE_STORE_FILE:-./.reviewpilot/schedules.json}
       # Default Feishu webhook for scheduled-scan delivery (per-schedule override wins).
       FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
-      # Bearer token guarding the API (incl. POST /api/tasks) + Web UI.
-      API_TOKEN: ${API_TOKEN:-}
+      # Multi-user auth: signing secret for session tokens. When set, the API +
+      # Web UI require a logged-in user or a personal access token. Keep it
+      # stable & shared across replicas. The first user to register is admin.
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_TTL_MS: ${SESSION_TTL_MS:-604800000}
       # Provide tokens to enable real GitHub/GitLab integration (read PRs +
       # write back comments/checks).
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}

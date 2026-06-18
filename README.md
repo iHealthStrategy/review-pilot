@@ -83,7 +83,7 @@ and pass the connection string (with credentials) as an environment variable:
 DB_DRIVER=mongo
 MONGODB_URI=mongodb+srv://user:pass@cluster0.example.mongodb.net/?retryWrites=true&w=majority
 MONGODB_DB=reviewpilot
-API_TOKEN=<a strong secret>      # guards the management API + Web UI
+SESSION_SECRET=<a long random secret>   # enables multi-user auth (login + tokens)
 ```
 
 On startup the service creates its indexes and **requeues any job left
@@ -127,10 +127,14 @@ A single server (`packages/server/src/app.ts`) dispatches by path prefix:
 - `GET /api/health` — open liveness probe.
 - `GET /` and other non-API paths — the static **Web UI** dashboard.
 
-When `API_TOKEN` is set, every `/api` route except `/api/health` requires an
-`Authorization: Bearer <token>` header (the Web UI prompts for and stores the
-token). **Set a strong `API_TOKEN` for any internet-exposed deployment** — it is
-the only thing guarding the task ingress.
+When `SESSION_SECRET` is set, the API + Web UI require **multi-user auth**. Users
+register with email + password and log in; reads need any account, writes need
+`member`+, and user management needs `admin`. The **first** user to register is
+bootstrapped as `admin` and can upgrade others (default new users are read-only
+`viewer`). For automation, a user mints a **personal access token** (Account →
+tokens) and sends it as `Authorization: Bearer rpat_…`. **Set `SESSION_SECRET`
+(long, random, stable across replicas) for any internet-exposed deployment** —
+it guards the task ingress. Leaving it empty disables auth (dev only).
 
 ### Result callback (branch-diff mode)
 
@@ -333,7 +337,8 @@ write back comments/checks, then feed it reviews over `POST /api/tasks` (see
    refreshed); the installation is resolved per repo unless you pin
    `GITHUB_APP_INSTALLATION_ID`.
 2. **Expose + protect.** Put the service behind HTTPS and set a strong
-   `API_TOKEN`; callers pass it as `Authorization: Bearer <token>`.
+   `SESSION_SECRET`. Register the first (admin) user, then create a personal
+   access token for automation; callers pass it as `Authorization: Bearer rpat_…`.
 3. **Send tasks.** POST each PR to `https://<host>/api/tasks` (see HTTP surface).
    No per-repo registration is needed — the task is self-contained. The simplest
    path is the **service action** below.
@@ -357,7 +362,7 @@ jobs:
       - uses: iHealthStrategy/review-pilot/service@v1
         with:
           service-url: ${{ secrets.REVIEWPILOT_URL }}    # https://<host>
-          api-token: ${{ secrets.REVIEWPILOT_TOKEN }}    # matches the service API_TOKEN
+          api-token: ${{ secrets.REVIEWPILOT_TOKEN }}    # a personal access token (rpat_…)
           github-token: ${{ github.token }}
 ```
 
@@ -433,7 +438,7 @@ engines that can't explore (e.g. `mock`).
 | Git platform   | `GITHUB_*`, `GITLAB_*`                       | unset (mock) |
 | Worker         | `RECOVER_INTERRUPTED_JOBS_ON_START`, `INLINE_COMMENTS`, `PUBLISH_CHECK_RUN`, `FAIL_ON_SEVERITY`, `ONLY_CHANGED_LINES` | `true`/`false`/—/`false` |
 | Scheduled scans| `SCHEDULE_STORE_FILE` (non-mongo drivers; mongo uses a `schedules` collection) | `./.reviewpilot/schedules.json` |
-| Auth/UI        | `API_TOKEN`, `WEB_DIST_DIR`                  | unset (no auth) |
+| Auth/UI        | `SESSION_SECRET`, `SESSION_TTL_MS`, `WEB_DIST_DIR` | unset (no auth) |
 
 > Persistence: `mock` (in-memory) and `file` run with zero dependencies.
 > `mongo` is live via the official `mongodb` driver (loaded lazily; installed in

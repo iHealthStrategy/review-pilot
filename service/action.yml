@@ -10,7 +10,7 @@ inputs:
     description: "Base URL of the ReviewPilot service (e.g. https://review.example.com). No trailing slash."
     required: true
   api-token:
-    description: "Bearer token for the service management API (API_TOKEN on the server). Leave empty if auth is disabled."
+    description: "A personal access token (rpat_…) for a member+ user on the service, sent as a bearer credential. Leave empty if auth is disabled."
     required: false
     default: ""
   github-token:
