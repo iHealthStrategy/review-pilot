@@ -3,6 +3,13 @@
 # registry-mirror (registry-mirrors only proxy docker.io), e.g.:
 #   --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim
 ARG NODE_IMAGE=node:20-slim
+# uv/uvx binaries come from a NAMED stage (not COPY --from=$ARG, which the
+# legacy non-BuildKit builder can't expand). Override the source image for
+# China-region builds, e.g.:
+#   --build-arg UV_IMAGE=ghcr.m.daocloud.io/astral-sh/uv:latest
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
+FROM ${UV_IMAGE} AS uv
+
 # Build stage: install workspaces and compile.
 # Debian slim (glibc) so any native node_modules match the glibc runtime stage
 # below (and so the runtime can host code-review-graph's manylinux wheels).
@@ -37,12 +44,10 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # --- Structural-context engine: uv + code-review-graph ---
-# Copy the static uv/uvx binaries from the official image (no curl/pip needed).
-# uvx is the default CODE_GRAPH_LAUNCHER. ghcr.io is slow/blocked in China —
-# override with a mirror, e.g.:
-#   --build-arg UV_IMAGE=ghcr.m.daocloud.io/astral-sh/uv:latest
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:latest
-COPY --from=${UV_IMAGE} /uv /uvx /usr/local/bin/
+# uvx is the default CODE_GRAPH_LAUNCHER; the static binaries come from the `uv`
+# stage above (override its source via --build-arg UV_IMAGE). Referencing the
+# stage NAME keeps this working on the legacy builder too.
+COPY --from=uv /uv /uvx /usr/local/bin/
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_CACHE_DIR=/opt/uv/cache
