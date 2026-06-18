@@ -50,7 +50,8 @@ RUN apt-get update \
 COPY --from=uv /uv /uvx /usr/local/bin/
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
-    UV_CACHE_DIR=/opt/uv/cache
+    UV_CACHE_DIR=/opt/uv/cache \
+    UV_HTTP_TIMEOUT=300
 # Optional mirrors for restricted networks (China-friendly):
 #   --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 #   --build-arg UV_PYTHON_INSTALL_MIRROR=https://<mirror>   (Python download)
