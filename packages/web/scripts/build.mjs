@@ -121,6 +121,7 @@ const html = `<!doctype html>
         <a href="#schedules" data-view="schedules">Scheduled scans</a>
         <a href="#dashboard" data-view="dashboard">Dashboard</a>
         <a href="#account" data-view="account">Account</a>
+        <a href="#integrations" data-view="integrations">API &amp; MCP</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">Users</a>
       </nav>
       <main>
@@ -145,6 +146,10 @@ const html = `<!doctype html>
             <button id="open-token-modal">+ New token</button>
           </div>
           <section id="tokens"><div data-loading>Loading…</div></section>
+        </div>
+        <div class="view" id="view-integrations">
+          <div class="view-head"><h2>API &amp; MCP 接入说明</h2></div>
+          <section id="integrations"></section>
         </div>
         <div class="view" id="view-users">
           <div class="view-head"><h2>Users</h2></div>
@@ -333,7 +338,7 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const valid = ["schedules", "dashboard", "account", "users"];
+        const valid = ["schedules", "dashboard", "account", "integrations", "users"];
         const view = valid.includes(name) ? name : "schedules";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
@@ -341,6 +346,7 @@ const html = `<!doctype html>
           a.classList.toggle("active", a.getAttribute("data-view") === view));
         if (view === "account") renderTokens();
         if (view === "users") renderUsers();
+        if (view === "integrations") renderIntegrations();
       }
       window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
@@ -556,6 +562,36 @@ const html = `<!doctype html>
         } catch (e) { out.textContent = "✗ " + e.message; }
         finally { btn.disabled = false; }
       };
+
+      // --- Integrations: API & MCP docs ---
+      function renderIntegrations() {
+        const o = esc(location.origin);
+        document.querySelector("#integrations").innerHTML = \`
+          <p class="muted">用你在 <b>Account</b> 页创建的个人访问令牌(<code>rpat_…</code>)调用 REST API 或接入 MCP。令牌继承你的角色:viewer 只读,写操作(新建任务、触发扫描)需 member+(由管理员升级)。令牌只在创建时显示一次。</p>
+
+          <h3>REST API</h3>
+          <p class="muted">Base URL <code>\${o}</code> · 认证头 <code>Authorization: Bearer rpat_…</code> · 健康检查 <code>GET /api/health</code> 免鉴权。</p>
+          <pre># 触发一次 PR 评审(member+)
+curl -X POST \${o}/api/tasks -H "Authorization: Bearer rpat_…" -H "Content-Type: application/json" -d '{"platform":"github","repoFullName":"owner/repo","prNumber":123}'
+
+# 列出定时扫描 / 评审任务(任意已登录用户)
+curl \${o}/api/schedules -H "Authorization: Bearer rpat_…"
+curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
+
+          <h3>MCP(Model Context Protocol)</h3>
+          <p class="muted">Streamable HTTP 端点:<code>POST \${o}/mcp</code>(JSON-RPC 2.0,用同一个 <code>rpat_…</code> 鉴权)。在支持远程 MCP 的客户端(Claude Code、Cursor 等)里配置:</p>
+          <pre>{
+  "mcpServers": {
+    "reviewpilot": {
+      "type": "http",
+      "url": "\${o}/mcp",
+      "headers": { "Authorization": "Bearer rpat_…" }
+    }
+  }
+}</pre>
+          <p class="muted">可用工具(按你的角色过滤):<code>whoami</code>、<code>list_schedules</code>、<code>list_jobs</code>、<code>get_job</code>(只读);<code>create_review_task</code>、<code>run_schedule</code>(member+)。</p>
+        \`;
+      }
 
       // --- Users (admin only) ---
       async function renderUsers() {
