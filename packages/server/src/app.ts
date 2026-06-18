@@ -5,6 +5,9 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApiHandler } from "./api/rest-api.js";
+import { resolvePrincipal } from "./auth/authorize.js";
+import { envAdminFrom } from "./auth/env-admin.js";
+import { handleMcp } from "./mcp/mcp-server.js";
 import type { Repository } from "./persistence/repository.js";
 import type { ScheduleStore } from "./schedule/schedule.js";
 import type { Scheduler } from "./schedule/scheduler.js";
@@ -46,8 +49,31 @@ export function createAppHandler(deps: AppDeps) {
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
   });
   const serveStatic = createStaticHandler(resolveWebDistDir(deps.webDistDir ?? ""));
+  // MCP endpoint auth: resolve the bearer credential (PAT or session) the same
+  // way the REST API does, so every user drives MCP with their own token.
+  const secret = deps.sessionSecret ?? "";
+  const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "");
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
+    if (path === "/mcp") {
+      if ((req.method ?? "GET") !== "POST") {
+        res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });
+        res.end(JSON.stringify({ error: "use POST for the MCP endpoint" }));
+        return;
+      }
+      const principal = await resolvePrincipal(req.headers.authorization, deps.repo, secret, envAdmin);
+      if (!principal) {
+        res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
+        res.end(JSON.stringify({ error: "unauthorized: provide a personal access token" }));
+        return;
+      }
+      return handleMcp(req, res, {
+        repo: deps.repo,
+        taskService: deps.taskService,
+        ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
+        ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
+      }, principal);
+    }
     if (path.startsWith("/api")) return api(req, res);
     return serveStatic(path, res);
   };
