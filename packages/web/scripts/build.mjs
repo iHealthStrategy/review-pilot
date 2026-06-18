@@ -4,14 +4,15 @@ import { fileURLToPath } from "node:url";
 
 /**
  * Build the task-driven Web UI. Emits a single static `dist/index.html` with a
- * left sidebar switching two views:
+ * login/register gate, then a left sidebar switching views:
  *   - Scheduled scans (default): the daily-scan schedules list; "+ New scheduled
  *     scan" opens a modal form.
- *   - Dashboard: the review tasks (jobs) list + detail; "+ New task" opens a
- *     modal form that POSTs a self-contained review task.
- * It hydrates from the server REST API at runtime (`/api/jobs`, `/api/schedules`,
- * `/api/tasks`), sends the configured bearer token, and falls back to embedded
- * mock data so the built artifact renders standalone with no server.
+ *   - Dashboard: the review tasks (jobs) list + detail.
+ *   - Account: the signed-in user's personal access tokens (for API/automation).
+ *   - Users (admins only): list users and change their role.
+ * It hydrates from the server REST API at runtime, authenticating with a session
+ * token obtained at login (sent as `Authorization: Bearer <jwt>`). Write actions
+ * are hidden for read-only (viewer) accounts.
  */
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const distDir = resolve(root, "dist");
@@ -67,6 +68,9 @@ const html = `<!doctype html>
       .running { background: #3a3416; color: #e7d56e; }
       .failed { background: #3a1616; color: #e76e6e; }
       .pending { background: #232833; color: #8b95a5; }
+      .role-admin { background: #3a2a16; color: #e7a16e; }
+      .role-member { background: #16391f; color: #6ee787; }
+      .role-viewer { background: #232833; color: #8b95a5; }
       .bar { background: #232833; border-radius: 6px; height: 8px; width: 120px; overflow: hidden; }
       .bar > i { display: block; height: 100%; background: #4c8bf5; }
       input, select, button, textarea { background: #11151c; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
@@ -76,9 +80,10 @@ const html = `<!doctype html>
       .sev-critical { color: #e76e6e; } .sev-major { color: #e7a16e; }
       .sev-minor { color: #e7d56e; } .sev-info { color: #8b95a5; }
       pre { background: #11151c; border: 1px solid #232833; border-radius: 6px; padding: 10px; overflow: auto; font-size: 12px; }
+      code { word-break: break-all; }
       #detail { margin-top: 12px; }
       .muted { color: #8b95a5; font-size: 12px; }
-      .token { display: flex; gap: 6px; align-items: center; }
+      .token { display: flex; gap: 10px; align-items: center; }
       /* Modal dialog */
       .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; align-items: flex-start; justify-content: center; z-index: 100; overflow-y: auto; padding: 40px 16px; box-sizing: border-box; }
       .modal-overlay.open { display: flex; }
@@ -91,21 +96,32 @@ const html = `<!doctype html>
       .modal .field { margin-bottom: 10px; }
       .modal input, .modal select, .modal textarea { width: 100%; box-sizing: border-box; }
       .modal .result { margin: 8px 0 0; }
+      /* Auth gate */
+      .auth-gate { position: fixed; inset: 0; background: #0f1115; display: none; align-items: center; justify-content: center; z-index: 200; }
+      .auth-gate.open { display: flex; }
+      .auth-card { width: 360px; background: #161a22; border: 1px solid #2a2f3a; border-radius: 10px; padding: 24px; }
+      .auth-card h2 { text-transform: none; color: #e6e6e6; font-size: 20px; margin: 0 0 16px; }
+      .auth-card .field { margin-bottom: 12px; }
+      .auth-card label { font-size: 12px; color: #8b95a5; display: block; margin-bottom: 4px; }
+      .auth-card input { width: 100%; box-sizing: border-box; }
+      .auth-card button { width: 100%; margin-top: 4px; }
     </style>
   </head>
   <body>
     <header>
       <h1>🤖 ReviewPilot — continuous code review</h1>
-      <div class="token">
-        <span class="muted">API token</span>
-        <input id="token" type="password" placeholder="bearer token (if required)" style="width:220px" />
-        <button class="secondary" id="save-token">Save</button>
+      <div class="token" id="userbar" style="display:none">
+        <span class="muted" id="user-email"></span>
+        <span class="status" id="user-role"></span>
+        <button class="secondary" id="logout">Logout</button>
       </div>
     </header>
     <div class="layout">
       <nav>
         <a href="#schedules" data-view="schedules">Scheduled scans</a>
         <a href="#dashboard" data-view="dashboard">Dashboard</a>
+        <a href="#account" data-view="account">Account</a>
+        <a href="#users" data-view="users" id="nav-users" style="display:none">Users</a>
       </nav>
       <main>
         <div class="view" id="view-schedules">
@@ -123,7 +139,32 @@ const html = `<!doctype html>
           <section id="jobs"><div data-loading>Loading…</div></section>
           <section id="detail"></section>
         </div>
+        <div class="view" id="view-account">
+          <div class="view-head">
+            <h2>Personal access tokens</h2>
+            <button id="open-token-modal">+ New token</button>
+          </div>
+          <section id="tokens"><div data-loading>Loading…</div></section>
+        </div>
+        <div class="view" id="view-users">
+          <div class="view-head"><h2>Users</h2></div>
+          <section id="users"><div data-loading>Loading…</div></section>
+        </div>
       </main>
+    </div>
+
+    <!-- Login / register gate -->
+    <div class="auth-gate" id="auth-gate">
+      <div class="auth-card">
+        <h2 id="auth-title">Sign in</h2>
+        <form id="auth-form">
+          <div class="field"><label>Email</label><input type="email" id="auth-email" autocomplete="username" required /></div>
+          <div class="field"><label>Password (min 8 chars)</label><input type="password" id="auth-password" autocomplete="current-password" minlength="8" required /></div>
+          <button type="submit" id="auth-submit">Sign in</button>
+          <p class="muted result" id="auth-result"></p>
+          <p class="muted"><span id="auth-switch-text">No account?</span> <a href="#" id="auth-switch" style="color:#4c8bf5">Register</a></p>
+        </form>
+      </div>
     </div>
 
     <!-- New scheduled scan modal -->
@@ -163,6 +204,18 @@ const html = `<!doctype html>
       </div>
     </div>
 
+    <!-- New personal access token modal -->
+    <div class="modal-overlay" id="token-modal" data-modal>
+      <div class="modal">
+        <div class="modal-head"><h2>New personal access token</h2><button class="close" data-close>×</button></div>
+        <form id="token-form">
+          <div class="field"><label>Name</label><input name="name" placeholder="ci / my-laptop" required /></div>
+          <button type="submit">Create token</button>
+          <p class="muted result" id="token-result"></p>
+        </form>
+      </div>
+    </div>
+
     <!-- Scheduled-scan result detail modal -->
     <div class="modal-overlay" id="scan-modal" data-modal>
       <div class="modal" style="width:780px">
@@ -176,16 +229,15 @@ const html = `<!doctype html>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
       const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-      // --- auth: token persisted in localStorage, sent as Bearer header ---
-      const tokenInput = document.getElementById("token");
-      tokenInput.value = localStorage.getItem("rp_token") || "";
-      document.getElementById("save-token").onclick = () => {
-        localStorage.setItem("rp_token", tokenInput.value);
-        refresh();
-      };
+      // --- session auth: JWT in localStorage, sent as Bearer header ---
+      let me = null;
+      function token() { return localStorage.getItem("rp_session") || ""; }
+      function setToken(t) { if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
+      function canWrite() { return me && (me.role === "member" || me.role === "admin"); }
+      function isAdmin() { return me && me.role === "admin"; }
       function headers(extra) {
         const h = Object.assign({}, extra || {});
-        const t = localStorage.getItem("rp_token");
+        const t = token();
         if (t) h["Authorization"] = "Bearer " + t;
         return h;
       }
@@ -193,6 +245,7 @@ const html = `<!doctype html>
         const o = Object.assign({}, opts || {});
         o.headers = headers(o.headers);
         const res = await fetch(path, o);
+        if (res.status === 401) { setToken(""); me = null; applyMe(); showAuth(); throw new Error("unauthorized"); }
         if (!res.ok) {
           let detail = "";
           try { detail = (await res.json()).error || ""; } catch {}
@@ -204,11 +257,75 @@ const html = `<!doctype html>
         try { return await api(path); } catch { return fallback; }
       }
 
+      // --- auth gate (login / register) ---
+      const gate = document.getElementById("auth-gate");
+      let authMode = "login";
+      function showAuth() { gate.classList.add("open"); }
+      function hideAuth() { gate.classList.remove("open"); }
+      function setAuthMode(m) {
+        authMode = m;
+        document.getElementById("auth-title").textContent = m === "login" ? "Sign in" : "Create account";
+        document.getElementById("auth-submit").textContent = m === "login" ? "Sign in" : "Register";
+        document.getElementById("auth-switch-text").textContent = m === "login" ? "No account?" : "Have an account?";
+        document.getElementById("auth-switch").textContent = m === "login" ? "Register" : "Sign in";
+        document.getElementById("auth-result").textContent = "";
+      }
+      document.getElementById("auth-switch").onclick = (e) => {
+        e.preventDefault();
+        setAuthMode(authMode === "login" ? "register" : "login");
+      };
+      document.getElementById("auth-form").onsubmit = async (e) => {
+        e.preventDefault();
+        const email = document.getElementById("auth-email").value.trim();
+        const password = document.getElementById("auth-password").value;
+        const out = document.getElementById("auth-result");
+        out.textContent = "";
+        try {
+          const res = await fetch("/api/auth/" + (authMode === "login" ? "login" : "register"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+          setToken(data.token);
+          me = data.user;
+          hideAuth();
+          applyMe();
+          showView(location.hash.slice(1));
+          refresh();
+        } catch (err) { out.textContent = "✗ " + err.message; }
+      };
+      document.getElementById("logout").onclick = () => {
+        setToken(""); me = null; applyMe(); showAuth();
+      };
+
+      // Reflect the signed-in user: header badge, admin-only nav, write controls.
+      function applyMe() {
+        const bar = document.getElementById("userbar");
+        if (me) {
+          bar.style.display = "";
+          document.getElementById("user-email").textContent = me.email;
+          const rb = document.getElementById("user-role");
+          rb.textContent = me.role;
+          rb.className = "status role-" + me.role;
+          document.getElementById("nav-users").style.display = isAdmin() ? "" : "none";
+          document.getElementById("open-schedule-modal").style.display = canWrite() ? "" : "none";
+          document.getElementById("open-task-modal").style.display = canWrite() ? "" : "none";
+        } else {
+          bar.style.display = "none";
+        }
+      }
+
       // --- modal helpers ---
       function openModal(id) { document.getElementById(id).classList.add("open"); }
       function closeModal(id) { document.getElementById(id).classList.remove("open"); }
       document.getElementById("open-schedule-modal").onclick = () => openModal("schedule-modal");
       document.getElementById("open-task-modal").onclick = () => openModal("task-modal");
+      document.getElementById("open-token-modal").onclick = () => {
+        document.getElementById("token-result").textContent = "";
+        openModal("token-modal");
+      };
       document.querySelectorAll("[data-modal]").forEach((ov) => {
         ov.addEventListener("click", (e) => { if (e.target === ov) ov.classList.remove("open"); });
         ov.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => ov.classList.remove("open")));
@@ -216,11 +333,14 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const view = name === "dashboard" ? "dashboard" : "schedules";
+        const valid = ["schedules", "dashboard", "account", "users"];
+        const view = valid.includes(name) ? name : "schedules";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>
           a.classList.toggle("active", a.getAttribute("data-view") === view));
+        if (view === "account") renderTokens();
+        if (view === "users") renderUsers();
       }
       window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
@@ -233,7 +353,7 @@ const html = `<!doctype html>
         document.querySelector("#jobs").innerHTML =
           jobs.length
             ? \`<table><thead><tr><th>Pull request</th><th>Engine</th><th>Status</th><th>Progress</th><th>Findings</th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No review tasks yet. Use <b>+ New task</b> above, or POST /api/tasks.</p>\`;
+            : \`<p class="muted">No review tasks yet.\${canWrite() ? " Use <b>+ New task</b> above, or POST /api/tasks." : ""}</p>\`;
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
           tr.onclick = () => showJob(tr.getAttribute("data-job"));
         });
@@ -246,7 +366,7 @@ const html = `<!doctype html>
         const findings = (job.findings || []).map((f) =>
           \`<li><span class="sev sev-\${esc(f.severity)}">[\${esc(f.severity)}]</span> <code>\${esc(f.filePath)}\${f.line ? ":" + esc(f.line) : ""}</code> — <b>\${esc(f.title)}</b><br/><span class="muted">\${esc(f.detail || "")}</span>\${f.suggestion ? "<br/>💡 " + esc(f.suggestion) : ""}</li>\`
         ).join("");
-        const retry = job.status === "failed" ? \`<button id="retry">Retry job</button>\` : "";
+        const retry = (job.status === "failed" && canWrite()) ? \`<button id="retry">Retry job</button>\` : "";
         el.innerHTML =
           \`<h2>Task \${esc(job.id)} \${retry}</h2>\` +
           \`<p class="muted">engine \${esc(job.engine)} · status \${esc(job.status)} · progress \${Number(job.progress)||0}%\${job.error ? " · error: " + esc(job.error) : ""}</p>\` +
@@ -274,7 +394,7 @@ const html = `<!doctype html>
           };
           if (f.cloneUrl.value) payload.cloneUrl = f.cloneUrl.value;
           if (f.engine.value) payload.engine = f.engine.value;
-          const res = await api("/api/tasks", {
+          await api("/api/tasks", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -292,6 +412,10 @@ const html = `<!doctype html>
           const status = s.running
             ? '<span class="status running">⏳ running</span>'
             : esc(s.lastResult || "—");
+          const writeActions = canWrite() ? \`
+              <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "Running…" : "Run now"}</button>
+              <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
+              <button class="secondary" data-del="\${esc(s.id)}">Delete</button>\` : "";
           return \`<tr>
             <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(disabled)</span>'}</td>
             <td><code>\${esc(s.repoFullName)}</code></td>
@@ -300,17 +424,14 @@ const html = `<!doctype html>
             <td>\${esc(s.delivery && s.delivery.type || "")}</td>
             <td class="muted">\${status}</td>
             <td>
-              <button class="secondary" data-view-id="\${esc(s.id)}">View</button>
-              <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "Running…" : "Run now"}</button>
-              <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
-              <button class="secondary" data-del="\${esc(s.id)}">Delete</button>
+              <button class="secondary" data-view-id="\${esc(s.id)}">View</button>\${writeActions}
             </td>
           </tr>\`;
         }).join("");
         document.querySelector("#schedules").innerHTML =
           schedules.length
             ? \`<table><thead><tr><th>Name</th><th>Repository</th><th>Branches</th><th>Time</th><th>Deliver</th><th>Last result</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No scheduled scans. Use <b>+ New scheduled scan</b> above. The daily scheduler runs only when at least one is configured.</p>\`;
+            : \`<p class="muted">No scheduled scans.\${canWrite() ? " Use <b>+ New scheduled scan</b> above." : ""} The daily scheduler runs only when at least one is configured.</p>\`;
         document.querySelectorAll('#schedules [data-run]').forEach((b) => {
           b.onclick = async () => {
             b.disabled = true; b.textContent = "Running…";
@@ -398,14 +519,89 @@ const html = `<!doctype html>
         finally { btn.disabled = false; btn.textContent = label; }
       };
 
+      // --- Account: personal access tokens ---
+      async function renderTokens() {
+        const tokens = await load("/api/tokens", []);
+        const rows = tokens.map((t) =>
+          \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "never used")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">Revoke</button></td></tr>\`
+        ).join("");
+        document.querySelector("#tokens").innerHTML =
+          tokens.length
+            ? \`<table><thead><tr><th>Name</th><th>Prefix</th><th>Last used</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">No tokens yet. Create one to call the API as yourself — send it as <code>Authorization: Bearer rpat_…</code>.</p>\`;
+        document.querySelectorAll('#tokens [data-revoke]').forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm("Revoke this token? Anything using it will stop working.")) return;
+            try { await api("/api/tokens/" + b.getAttribute("data-revoke"), { method: "DELETE" }); renderTokens(); }
+            catch (e) { alert(e.message); }
+          };
+        });
+      }
+
+      document.getElementById("token-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const out = document.getElementById("token-result");
+        const btn = f.querySelector('button[type="submit"]');
+        btn.disabled = true; out.textContent = "";
+        try {
+          const r = await api("/api/tokens", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: f.name.value }),
+          });
+          out.innerHTML = "✓ Copy now — shown only once:<br/><code>" + esc(r.token) + "</code>";
+          f.reset();
+          renderTokens();
+        } catch (e) { out.textContent = "✗ " + e.message; }
+        finally { btn.disabled = false; }
+      };
+
+      // --- Users (admin only) ---
+      async function renderUsers() {
+        if (!isAdmin()) { document.querySelector("#users").innerHTML = '<p class="muted">Admins only.</p>'; return; }
+        const users = await load("/api/users", []);
+        const roleOpts = (sel) => ["viewer", "member", "admin"]
+          .map((r) => \`<option value="\${r}"\${r === sel ? " selected" : ""}>\${r}</option>\`).join("");
+        const rows = users.map((u) =>
+          \`<tr><td>\${esc(u.email)}</td><td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td><td class="muted">\${esc(u.createdAt)}</td></tr>\`
+        ).join("");
+        document.querySelector("#users").innerHTML =
+          \`<table><thead><tr><th>Email</th><th>Role</th><th>Created</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+        document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
+          sel.onchange = async () => {
+            try {
+              await api("/api/users/" + sel.getAttribute("data-role-for") + "/role", {
+                method: "PATCH", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ role: sel.value }),
+              });
+            } catch (e) { alert(e.message); renderUsers(); }
+          };
+        });
+      }
+
       async function refresh() {
+        if (!me) return;
         renderSchedules(await load("/api/schedules", []));
         renderJobs(await load("/api/jobs", MOCK.jobs));
       }
 
-      showView(location.hash.slice(1));
-      refresh();
-      setInterval(refresh, 5000);
+      async function init() {
+        setAuthMode("login");
+        if (token()) {
+          try { me = (await api("/api/auth/me")).user; } catch { me = null; }
+        }
+        applyMe();
+        if (me) {
+          hideAuth();
+          showView(location.hash.slice(1));
+          refresh();
+        } else {
+          showAuth();
+        }
+      }
+      init();
+      setInterval(() => { if (me) refresh(); }, 5000);
     </script>
   </body>
 </html>
