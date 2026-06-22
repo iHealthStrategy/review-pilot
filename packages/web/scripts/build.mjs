@@ -110,44 +110,44 @@ const html = `<!doctype html>
   </head>
   <body>
     <header>
-      <h1>🤖 ReviewPilot — continuous code review</h1>
+      <h1>🤖 ReviewPilot — 持续代码评审</h1>
       <div class="token" id="userbar" style="display:none">
         <span class="muted" id="user-email"></span>
         <span class="status" id="user-role"></span>
-        <button class="secondary" id="logout">Logout</button>
+        <button class="secondary" id="logout">退出登录</button>
       </div>
     </header>
     <div class="layout">
       <nav>
-        <a href="#schedules" data-view="schedules">Scheduled scans</a>
-        <a href="#dashboard" data-view="dashboard">Dashboard</a>
-        <a href="#account" data-view="account">Account</a>
+        <a href="#schedules" data-view="schedules">定时扫描</a>
+        <a href="#dashboard" data-view="dashboard">仪表盘</a>
+        <a href="#account" data-view="account">账户</a>
         <a href="#usage" data-view="usage">Token 用量</a>
-        <a href="#integrations" data-view="integrations">API &amp; MCP</a>
-        <a href="#users" data-view="users" id="nav-users" style="display:none">Users</a>
+        <a href="#integrations" data-view="integrations">API 与 MCP</a>
+        <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
       </nav>
       <main>
         <div class="view" id="view-schedules">
           <div class="view-head">
-            <h2>Scheduled scans</h2>
-            <button id="open-schedule-modal">+ New scheduled scan</button>
+            <h2>定时扫描</h2>
+            <button id="open-schedule-modal">+ 新建定时扫描</button>
           </div>
-          <section id="schedules"><div data-loading>Loading…</div></section>
+          <section id="schedules"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-dashboard">
           <div class="view-head">
-            <h2>Review tasks</h2>
-            <button id="open-task-modal">+ New task</button>
+            <h2>评审任务</h2>
+            <button id="open-task-modal">+ 新建任务</button>
           </div>
-          <section id="jobs"><div data-loading>Loading…</div></section>
+          <section id="jobs"><div data-loading>加载中…</div></section>
           <section id="detail"></section>
         </div>
         <div class="view" id="view-account">
           <div class="view-head">
-            <h2>Personal access tokens</h2>
-            <button id="open-token-modal">+ New token</button>
+            <h2>个人访问令牌</h2>
+            <button id="open-token-modal">+ 新建令牌</button>
           </div>
-          <section id="tokens"><div data-loading>Loading…</div></section>
+          <section id="tokens"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-usage">
           <div class="view-head">
@@ -158,15 +158,15 @@ const html = `<!doctype html>
               <button class="secondary" data-bucket="month">月</button>
             </div>
           </div>
-          <section id="usage"><div data-loading>Loading…</div></section>
+          <section id="usage"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-integrations">
           <div class="view-head"><h2>API &amp; MCP 接入说明</h2></div>
           <section id="integrations"></section>
         </div>
         <div class="view" id="view-users">
-          <div class="view-head"><h2>Users</h2></div>
-          <section id="users"><div data-loading>Loading…</div></section>
+          <div class="view-head"><h2>用户管理</h2></div>
+          <section id="users"><div data-loading>加载中…</div></section>
         </div>
       </main>
     </div>
@@ -174,13 +174,13 @@ const html = `<!doctype html>
     <!-- Login / register gate -->
     <div class="auth-gate" id="auth-gate">
       <div class="auth-card">
-        <h2 id="auth-title">Sign in</h2>
+        <h2 id="auth-title">登录</h2>
         <form id="auth-form">
-          <div class="field"><label>Email</label><input type="email" id="auth-email" autocomplete="username" required /></div>
-          <div class="field"><label>Password (min 8 chars)</label><input type="password" id="auth-password" autocomplete="current-password" minlength="8" required /></div>
-          <button type="submit" id="auth-submit">Sign in</button>
+          <div class="field"><label>邮箱</label><input type="email" id="auth-email" autocomplete="username" required /></div>
+          <div class="field"><label>密码(至少 8 位)</label><input type="password" id="auth-password" autocomplete="current-password" minlength="8" required /></div>
+          <button type="submit" id="auth-submit">登录</button>
           <p class="muted result" id="auth-result"></p>
-          <p class="muted"><span id="auth-switch-text">No account?</span> <a href="#" id="auth-switch" style="color:#4c8bf5">Register</a></p>
+          <p class="muted"><span id="auth-switch-text">还没有账户?</span> <a href="#" id="auth-switch" style="color:#4c8bf5">注册</a></p>
         </form>
       </div>
     </div>
@@ -188,19 +188,19 @@ const html = `<!doctype html>
     <!-- New scheduled scan modal -->
     <div class="modal-overlay" id="schedule-modal" data-modal>
       <div class="modal">
-        <div class="modal-head"><h2>New scheduled scan</h2><button class="close" data-close>×</button></div>
+        <div class="modal-head"><h2>新建定时扫描</h2><button class="close" data-close>×</button></div>
         <form id="schedule-form">
-          <div class="field"><label>Name</label><input name="name" placeholder="nightly review" required /></div>
-          <div class="field"><label>Platform</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
-          <div class="field"><label>Repository (owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
-          <div class="field"><label>Branches (comma-separated; blank = all branches)</label><input name="branches" placeholder="main, develop" /></div>
-          <div class="field"><label>Time of day (HH:MM, 24h)</label><input name="timeOfDay" placeholder="02:00" required /></div>
-          <div class="field"><label>Timezone (IANA)</label><input name="timezone" value="Asia/Shanghai" /></div>
-          <div class="field"><label>Lookback hours (how far back to scan commits; default 24)</label><input name="lookbackHours" type="number" min="1" placeholder="24" /></div>
-          <div class="field"><label>Review focus / 备注 (optional — what the review should emphasise)</label><textarea name="reviewFocus" rows="3" placeholder="例如：重点关注并发安全、SQL 注入、接口兼容性"></textarea></div>
-          <div class="field"><label>Engine (optional)</label><select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
-          <div class="field"><label>Feishu webhook URL (blank = use server default FEISHU_WEBHOOK_URL)</label><input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" /></div>
-          <button type="submit">Create schedule</button>
+          <div class="field"><label>名称</label><input name="name" placeholder="每日评审" required /></div>
+          <div class="field"><label>平台</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
+          <div class="field"><label>仓库(owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
+          <div class="field"><label>分支(逗号分隔;留空 = 全部分支)</label><input name="branches" placeholder="main, develop" /></div>
+          <div class="field"><label>执行时间(HH:MM,24 小时制)</label><input name="timeOfDay" placeholder="02:00" required /></div>
+          <div class="field"><label>时区(IANA)</label><input name="timezone" value="Asia/Shanghai" /></div>
+          <div class="field"><label>回溯小时数(扫描多久以前的提交;默认 24)</label><input name="lookbackHours" type="number" min="1" placeholder="24" /></div>
+          <div class="field"><label>评审重点 / 备注(可选 —— 希望评审重点关注什么)</label><textarea name="reviewFocus" rows="3" placeholder="例如：重点关注并发安全、SQL 注入、接口兼容性"></textarea></div>
+          <div class="field"><label>引擎(可选)</label><select name="engine"><option value="">(服务端默认)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
+          <div class="field"><label>飞书 Webhook URL(留空 = 用服务端默认 FEISHU_WEBHOOK_URL)</label><input name="webhookUrl" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" /></div>
+          <button type="submit">创建定时扫描</button>
           <p class="muted result" id="schedule-result"></p>
         </form>
       </div>
@@ -209,14 +209,14 @@ const html = `<!doctype html>
     <!-- New review task modal -->
     <div class="modal-overlay" id="task-modal" data-modal>
       <div class="modal">
-        <div class="modal-head"><h2>New review task</h2><button class="close" data-close>×</button></div>
+        <div class="modal-head"><h2>新建评审任务</h2><button class="close" data-close>×</button></div>
         <form id="task-form">
-          <div class="field"><label>Platform</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
-          <div class="field"><label>Repository (owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
-          <div class="field"><label>Clone URL (optional — derived from repo when blank)</label><input name="cloneUrl" placeholder="https://github.com/owner/repo.git" /></div>
-          <div class="field"><label>Pull request number</label><input name="prNumber" type="number" min="1" placeholder="123" required /></div>
-          <div class="field"><label>Engine (optional)</label><select name="engine"><option value="">(server default)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
-          <button type="submit">Start review</button>
+          <div class="field"><label>平台</label><select name="platform">${PLATFORMS.map((p) => `<option>${p}</option>`).join("")}</select></div>
+          <div class="field"><label>仓库(owner/repo)</label><input name="repoFullName" placeholder="owner/repo" required /></div>
+          <div class="field"><label>Clone URL(可选 —— 留空则由仓库推导)</label><input name="cloneUrl" placeholder="https://github.com/owner/repo.git" /></div>
+          <div class="field"><label>Pull Request 编号</label><input name="prNumber" type="number" min="1" placeholder="123" required /></div>
+          <div class="field"><label>引擎(可选)</label><select name="engine"><option value="">(服务端默认)</option>${ENGINES.map((e) => `<option>${e}</option>`).join("")}</select></div>
+          <button type="submit">开始评审</button>
           <p class="muted result" id="task-result"></p>
         </form>
       </div>
@@ -225,10 +225,10 @@ const html = `<!doctype html>
     <!-- New personal access token modal -->
     <div class="modal-overlay" id="token-modal" data-modal>
       <div class="modal">
-        <div class="modal-head"><h2>New personal access token</h2><button class="close" data-close>×</button></div>
+        <div class="modal-head"><h2>新建个人访问令牌</h2><button class="close" data-close>×</button></div>
         <form id="token-form">
-          <div class="field"><label>Name</label><input name="name" placeholder="ci / my-laptop" required /></div>
-          <button type="submit">Create token</button>
+          <div class="field"><label>名称</label><input name="name" placeholder="ci / my-laptop" required /></div>
+          <button type="submit">创建令牌</button>
           <p class="muted result" id="token-result"></p>
         </form>
       </div>
@@ -237,7 +237,7 @@ const html = `<!doctype html>
     <!-- Scheduled-scan result detail modal -->
     <div class="modal-overlay" id="scan-modal" data-modal>
       <div class="modal" style="width:780px">
-        <div class="modal-head"><h2 id="scan-modal-title">Scan result</h2><button class="close" data-close>×</button></div>
+        <div class="modal-head"><h2 id="scan-modal-title">扫描结果</h2><button class="close" data-close>×</button></div>
         <div id="scan-modal-body"></div>
       </div>
     </div>
@@ -249,6 +249,7 @@ const html = `<!doctype html>
 
       // --- session auth: JWT in localStorage, sent as Bearer header ---
       let me = null;
+      const ROLE_LABEL = { viewer: "游客(只读)", member: "成员(可写)", admin: "管理员" };
       function token() { return localStorage.getItem("rp_session") || ""; }
       function setToken(t) { if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
       function canWrite() { return me && (me.role === "member" || me.role === "admin"); }
@@ -282,10 +283,10 @@ const html = `<!doctype html>
       function hideAuth() { gate.classList.remove("open"); }
       function setAuthMode(m) {
         authMode = m;
-        document.getElementById("auth-title").textContent = m === "login" ? "Sign in" : "Create account";
-        document.getElementById("auth-submit").textContent = m === "login" ? "Sign in" : "Register";
-        document.getElementById("auth-switch-text").textContent = m === "login" ? "No account?" : "Have an account?";
-        document.getElementById("auth-switch").textContent = m === "login" ? "Register" : "Sign in";
+        document.getElementById("auth-title").textContent = m === "login" ? "登录" : "创建账户";
+        document.getElementById("auth-submit").textContent = m === "login" ? "登录" : "注册";
+        document.getElementById("auth-switch-text").textContent = m === "login" ? "还没有账户?" : "已有账户?";
+        document.getElementById("auth-switch").textContent = m === "login" ? "注册" : "登录";
         document.getElementById("auth-result").textContent = "";
       }
       document.getElementById("auth-switch").onclick = (e) => {
@@ -325,7 +326,7 @@ const html = `<!doctype html>
           bar.style.display = "";
           document.getElementById("user-email").textContent = me.email;
           const rb = document.getElementById("user-role");
-          rb.textContent = me.role;
+          rb.textContent = ROLE_LABEL[me.role] || me.role;
           rb.className = "status role-" + me.role;
           document.getElementById("nav-users").style.display = isAdmin() ? "" : "none";
           document.getElementById("open-schedule-modal").style.display = canWrite() ? "" : "none";
@@ -368,12 +369,12 @@ const html = `<!doctype html>
         const rows = jobs.map((j) => {
           const pr = j.pullRequest || {};
           const findings = (j.findings || []).length;
-          return \`<tr class="clickable" data-job="\${esc(j.id)}"><td>#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} finding(s)</td></tr>\`;
+          return \`<tr class="clickable" data-job="\${esc(j.id)}"><td>#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} 个问题</td></tr>\`;
         }).join("");
         document.querySelector("#jobs").innerHTML =
           jobs.length
-            ? \`<table><thead><tr><th>Pull request</th><th>Engine</th><th>Status</th><th>Progress</th><th>Findings</th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No review tasks yet.\${canWrite() ? " Use <b>+ New task</b> above, or POST /api/tasks." : ""}</p>\`;
+            ? \`<table><thead><tr><th>Pull Request</th><th>引擎</th><th>状态</th><th>进度</th><th>问题数</th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">暂无评审任务。\${canWrite() ? "点上方 <b>+ 新建任务</b>,或 POST /api/tasks。" : ""}</p>\`;
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
           tr.onclick = () => showJob(tr.getAttribute("data-job"));
         });
@@ -386,12 +387,12 @@ const html = `<!doctype html>
         const findings = (job.findings || []).map((f) =>
           \`<li><span class="sev sev-\${esc(f.severity)}">[\${esc(f.severity)}]</span> <code>\${esc(f.filePath)}\${f.line ? ":" + esc(f.line) : ""}</code> — <b>\${esc(f.title)}</b><br/><span class="muted">\${esc(f.detail || "")}</span>\${f.suggestion ? "<br/>💡 " + esc(f.suggestion) : ""}</li>\`
         ).join("");
-        const retry = (job.status === "failed" && canWrite()) ? \`<button id="retry">Retry job</button>\` : "";
+        const retry = (job.status === "failed" && canWrite()) ? \`<button id="retry">重试任务</button>\` : "";
         el.innerHTML =
-          \`<h2>Task \${esc(job.id)} \${retry}</h2>\` +
-          \`<p class="muted">engine \${esc(job.engine)} · status \${esc(job.status)} · progress \${Number(job.progress)||0}%\${job.error ? " · error: " + esc(job.error) : ""}</p>\` +
-          \`<h3>Findings (\${(job.findings||[]).length})</h3><ul>\${findings || "<li class='muted'>none</li>"}</ul>\` +
-          \`<h3>Logs</h3><pre>\${(job.logs||[]).map(esc).join("\\n") || "(none)"}</pre>\`;
+          \`<h2>任务 \${esc(job.id)} \${retry}</h2>\` +
+          \`<p class="muted">引擎 \${esc(job.engine)} · 状态 \${esc(job.status)} · 进度 \${Number(job.progress)||0}%\${job.error ? " · 错误: " + esc(job.error) : ""}</p>\` +
+          \`<h3>问题(\${(job.findings||[]).length})</h3><ul>\${findings || "<li class='muted'>无</li>"}</ul>\` +
+          \`<h3>日志</h3><pre>\${(job.logs||[]).map(esc).join("\\n") || "(无)"}</pre>\`;
         const rb = document.getElementById("retry");
         if (rb) rb.onclick = async () => {
           try { await api("/api/jobs/" + id + "/retry", { method: "POST" }); refresh(); }
@@ -405,7 +406,7 @@ const html = `<!doctype html>
         const out = document.getElementById("task-result");
         const btn = f.querySelector('button[type="submit"]');
         const label = btn.textContent;
-        btn.disabled = true; btn.textContent = "Starting…"; out.textContent = "";
+        btn.disabled = true; btn.textContent = "提交中…"; out.textContent = "";
         try {
           const payload = {
             platform: f.platform.value,
@@ -428,35 +429,35 @@ const html = `<!doctype html>
 
       function renderSchedules(schedules) {
         const rows = schedules.map((s) => {
-          const branches = (s.branches && s.branches.length) ? s.branches.join(", ") : "(all)";
+          const branches = (s.branches && s.branches.length) ? s.branches.join(", ") : "(全部)";
           const status = s.running
-            ? '<span class="status running">⏳ running</span>'
+            ? '<span class="status running">⏳ 运行中</span>'
             : esc(s.lastResult || "—");
           const writeActions = canWrite() ? \`
-              <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "Running…" : "Run now"}</button>
-              <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "Disable" : "Enable"}</button>
-              <button class="secondary" data-del="\${esc(s.id)}">Delete</button>\` : "";
+              <button class="secondary" data-run="\${esc(s.id)}"\${s.running ? " disabled" : ""}>\${s.running ? "运行中…" : "立即运行"}</button>
+              <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "停用" : "启用"}</button>
+              <button class="secondary" data-del="\${esc(s.id)}">删除</button>\` : "";
           return \`<tr>
-            <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(disabled)</span>'}</td>
+            <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(已停用)</span>'}</td>
             <td><code>\${esc(s.repoFullName)}</code></td>
             <td>\${esc(branches)}</td>
             <td>\${esc(s.timeOfDay)} \${esc(s.timezone)}</td>
             <td>\${esc(s.delivery && s.delivery.type || "")}</td>
             <td class="muted">\${status}</td>
             <td>
-              <button class="secondary" data-view-id="\${esc(s.id)}">View</button>\${writeActions}
+              <button class="secondary" data-view-id="\${esc(s.id)}">查看</button>\${writeActions}
             </td>
           </tr>\`;
         }).join("");
         document.querySelector("#schedules").innerHTML =
           schedules.length
-            ? \`<table><thead><tr><th>Name</th><th>Repository</th><th>Branches</th><th>Time</th><th>Deliver</th><th>Last result</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No scheduled scans.\${canWrite() ? " Use <b>+ New scheduled scan</b> above." : ""} The daily scheduler runs only when at least one is configured.</p>\`;
+            ? \`<table><thead><tr><th>名称</th><th>仓库</th><th>分支</th><th>时间</th><th>推送</th><th>上次结果</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">暂无定时扫描。\${canWrite() ? "点上方 <b>+ 新建定时扫描</b>。" : ""}至少配置一个后,每日调度才会运行。</p>\`;
         document.querySelectorAll('#schedules [data-run]').forEach((b) => {
           b.onclick = async () => {
-            b.disabled = true; b.textContent = "Running…";
+            b.disabled = true; b.textContent = "运行中…";
             try { await api("/api/schedules/" + b.getAttribute("data-run") + "/run", { method: "POST" }); await refresh(); }
-            catch (e) { alert(e.message); b.disabled = false; b.textContent = "Run now"; }
+            catch (e) { alert(e.message); b.disabled = false; b.textContent = "立即运行"; }
           };
         });
         document.querySelectorAll('#schedules [data-toggle]').forEach((b) => {
@@ -472,7 +473,7 @@ const html = `<!doctype html>
         });
         document.querySelectorAll('#schedules [data-del]').forEach((b) => {
           b.onclick = async () => {
-            if (!confirm("Delete this schedule?")) return;
+            if (!confirm("确定删除该定时扫描?")) return;
             try { await api("/api/schedules/" + b.getAttribute("data-del"), { method: "DELETE" }); await refresh(); }
             catch (e) { alert(e.message); }
           };
@@ -513,7 +514,7 @@ const html = `<!doctype html>
         const out = document.getElementById("schedule-result");
         const btn = f.querySelector('button[type="submit"]');
         const label = btn.textContent;
-        btn.disabled = true; btn.textContent = "Creating…"; out.textContent = "";
+        btn.disabled = true; btn.textContent = "创建中…"; out.textContent = "";
         try {
           const payload = {
             name: f.name.value,
@@ -543,15 +544,15 @@ const html = `<!doctype html>
       async function renderTokens() {
         const tokens = await load("/api/tokens", []);
         const rows = tokens.map((t) =>
-          \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "never used")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">Revoke</button></td></tr>\`
+          \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "从未使用")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">吊销</button></td></tr>\`
         ).join("");
         document.querySelector("#tokens").innerHTML =
           tokens.length
-            ? \`<table><thead><tr><th>Name</th><th>Prefix</th><th>Last used</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">No tokens yet. Create one to call the API as yourself — send it as <code>Authorization: Bearer rpat_…</code>.</p>\`;
+            ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+            : \`<p class="muted">暂无令牌。创建一个即可以你的身份调用 API —— 以 <code>Authorization: Bearer rpat_…</code> 发送。</p>\`;
         document.querySelectorAll('#tokens [data-revoke]').forEach((b) => {
           b.onclick = async () => {
-            if (!confirm("Revoke this token? Anything using it will stop working.")) return;
+            if (!confirm("确定吊销该令牌?使用它的调用将立即失效。")) return;
             try { await api("/api/tokens/" + b.getAttribute("data-revoke"), { method: "DELETE" }); renderTokens(); }
             catch (e) { alert(e.message); }
           };
@@ -570,7 +571,7 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: f.name.value }),
           });
-          out.innerHTML = "✓ Copy now — shown only once:<br/><code>" + esc(r.token) + "</code>";
+          out.innerHTML = "✓ 立即复制 —— 仅显示这一次:<br/><code>" + esc(r.token) + "</code>";
           f.reset();
           renderTokens();
         } catch (e) { out.textContent = "✗ " + e.message; }
@@ -638,15 +639,15 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
 
       // --- Users (admin only) ---
       async function renderUsers() {
-        if (!isAdmin()) { document.querySelector("#users").innerHTML = '<p class="muted">Admins only.</p>'; return; }
+        if (!isAdmin()) { document.querySelector("#users").innerHTML = '<p class="muted">仅管理员可见。</p>'; return; }
         const users = await load("/api/users", []);
         const roleOpts = (sel) => ["viewer", "member", "admin"]
-          .map((r) => \`<option value="\${r}"\${r === sel ? " selected" : ""}>\${r}</option>\`).join("");
+          .map((r) => \`<option value="\${r}"\${r === sel ? " selected" : ""}>\${ROLE_LABEL[r]}</option>\`).join("");
         const rows = users.map((u) =>
           \`<tr><td>\${esc(u.email)}</td><td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td><td class="muted">\${esc(u.createdAt)}</td></tr>\`
         ).join("");
         document.querySelector("#users").innerHTML =
-          \`<table><thead><tr><th>Email</th><th>Role</th><th>Created</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+          \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
         document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
           sel.onchange = async () => {
             try {
