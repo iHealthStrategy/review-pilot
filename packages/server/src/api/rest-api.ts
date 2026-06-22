@@ -21,6 +21,7 @@ import {
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
+import { type Bucket, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import {
   type EnvAdmin,
   ENV_ADMIN_ID,
@@ -289,6 +290,21 @@ const ROUTES: Route[] = [
       const role = asEnum((body as Record<string, unknown>)?.role, ROLES, "role");
       const user = await repo.updateUserRole(params.id!, role);
       return ok(publicUser(user));
+    },
+  },
+  // --- Token usage (per-task LLM consumption, by day/week/month) ---
+  {
+    method: "GET",
+    pattern: /^\/api\/usage$/,
+    handler: async ({ query }, repo) => {
+      const raw = query.get("bucket");
+      const bucket: Bucket = raw === "week" || raw === "month" ? raw : "day";
+      const source = query.get("source");
+      const events = await repo.listTokenUsage({
+        since: defaultSince(bucket),
+        ...(source === "schedule" || source === "task" ? { source } : {}),
+      });
+      return ok({ bucket, rows: aggregateUsage(events, bucket) });
     },
   },
   {

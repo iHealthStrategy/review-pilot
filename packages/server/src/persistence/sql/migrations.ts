@@ -115,6 +115,25 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
     `,
   },
+  {
+    id: "0004_token_usage",
+    up: () => `
+      CREATE TABLE IF NOT EXISTS token_usage (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_label TEXT NOT NULL,
+        engine TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        total_tokens INTEGER NOT NULL,
+        estimated INTEGER NOT NULL,
+        at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_token_usage_at ON token_usage(at);
+      CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source, source_id);
+    `,
+  },
 ];
 
 /**

@@ -8,6 +8,7 @@ import type {
   Repo,
   RepoInsight,
   ReviewJob,
+  TokenUsage,
   User,
   UserRole,
 } from "../domain/entities.js";
@@ -22,9 +23,11 @@ import {
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type TokenUsageFilter,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -44,6 +47,8 @@ export interface MemorySnapshot {
   users: Record<string, User>;
   /** Personal access tokens, keyed by id. */
   apiTokens: Record<string, ApiToken>;
+  /** Token-usage records, keyed by id. */
+  tokenUsage: Record<string, TokenUsage>;
 }
 
 function emptySnapshot(): MemorySnapshot {
@@ -56,6 +61,7 @@ function emptySnapshot(): MemorySnapshot {
     repoInsights: {},
     users: {},
     apiTokens: {},
+    tokenUsage: {},
   };
 }
 
@@ -418,6 +424,35 @@ export class MemoryRepository implements Repository {
       this.data.apiTokens[id] = { ...token, lastUsedAt: at };
       await this.persist();
     }
+  }
+
+  async recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage> {
+    const usage: TokenUsage = {
+      id: this.idGen("use"),
+      source: input.source,
+      sourceId: input.sourceId,
+      sourceLabel: input.sourceLabel,
+      engine: input.engine,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      totalTokens: input.inputTokens + input.outputTokens,
+      estimated: input.estimated,
+      at: input.at ?? this.clock(),
+    };
+    this.data.tokenUsage[usage.id] = usage;
+    await this.persist();
+    return usage;
+  }
+
+  async listTokenUsage(filter: TokenUsageFilter = {}): Promise<TokenUsage[]> {
+    return Object.values(this.data.tokenUsage)
+      .filter((u) => {
+        if (filter.source && u.source !== filter.source) return false;
+        if (filter.sourceId && u.sourceId !== filter.sourceId) return false;
+        if (filter.since && u.at < filter.since) return false;
+        return true;
+      })
+      .sort((a, b) => (a.at < b.at ? 1 : -1));
   }
 
   async close(): Promise<void> {

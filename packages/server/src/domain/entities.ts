@@ -140,6 +140,29 @@ export interface ApiToken {
   readonly lastUsedAt?: string;
 }
 
+/** What a token-usage record is attributed to. */
+export type UsageSource = "schedule" | "task";
+
+/**
+ * One LLM token-usage record, emitted per review run (per branch for scans).
+ * `estimated` marks counts derived from text length (chars/4) rather than
+ * reported by the engine. Aggregated by day/week/month for the usage view.
+ */
+export interface TokenUsage {
+  readonly id: string;
+  readonly source: UsageSource;
+  /** Schedule id (scans) or repo full name (ad-hoc tasks). */
+  readonly sourceId: string;
+  /** Human-facing label (schedule name or repo). */
+  readonly sourceLabel: string;
+  readonly engine: ReviewEngineKind;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+  readonly estimated: boolean;
+  readonly at: string;
+}
+
 /** A structured review result item (the "issue list + suggestion"). */
 export interface Finding {
   readonly id: string;

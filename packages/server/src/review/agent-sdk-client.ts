@@ -48,6 +48,15 @@ export class ClaudeAgentSdkClient implements AgentSdkClient {
         const m = message as any;
         if (m?.type === "result") {
           if (typeof m.result === "string") resultText = m.result;
+          const u = m.usage;
+          if (u && opts.onUsage) {
+            // Cache reads/writes are input-side tokens; sum them in.
+            const input =
+              (u.input_tokens ?? 0) +
+              (u.cache_read_input_tokens ?? 0) +
+              (u.cache_creation_input_tokens ?? 0);
+            opts.onUsage({ inputTokens: input, outputTokens: u.output_tokens ?? 0 });
+          }
         } else if (m?.type === "assistant") {
           assistantText += extractText(m);
         }

@@ -108,6 +108,41 @@ test("ScheduledScanService: injects structural context into each branch review",
   assert.deepEqual(cache.queryArgs?.ranges.get("src/mod.ts"), [[1, 1]]);
 });
 
+class UsageEngine implements ReviewEngine {
+  readonly kind = "claude-agent" as const;
+  lastUsage = { inputTokens: 100, outputTokens: 20, totalTokens: 120, estimated: false };
+  async review(_ctx: ReviewContext) {
+    return [];
+  }
+}
+
+test("ScheduledScanService: records per-branch token usage (source=schedule)", async () => {
+  const git = new FakeGit([
+    [/log refs\/remotes\/origin\/main/, "ccc222\n"],
+    [/diff --name-status/, "M\tsrc/mod.ts\n"],
+    [/diff .* -- src\/mod\.ts/, "@@ -1 +1 @@\n+y"],
+  ]);
+  const recorded: Array<Record<string, unknown>> = [];
+  const service = new ScheduledScanService({
+    git,
+    createEngine: () => new UsageEngine(),
+    defaultEngine: "claude-agent",
+    enabledEngines: ["claude-agent"],
+    scan: async () => ["src/mod.ts"],
+    recordUsage: (u) => {
+      recorded.push(u as unknown as Record<string, unknown>);
+    },
+  });
+
+  await service.scan(config, new Date("2026-06-10T20:00:00Z"));
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]!.source, "schedule");
+  assert.equal(recorded[0]!.sourceId, config.id);
+  assert.equal(recorded[0]!.inputTokens, 100);
+  assert.equal(recorded[0]!.estimated, false);
+});
+
 test("ScheduledScanService: reviews today's aggregate diff per branch", async () => {
   const git = new FakeGit([
     [/log refs\/remotes\/origin\/main/, "ccc222\nbbb111\n"], // two commits (newest first)

@@ -71,6 +71,7 @@ const html = `<!doctype html>
       .role-admin { background: #3a2a16; color: #e7a16e; }
       .role-member { background: #16391f; color: #6ee787; }
       .role-viewer { background: #232833; color: #8b95a5; }
+      .active-bucket { background: #1f6feb; border-color: #1f6feb; color: #fff; }
       .bar { background: #232833; border-radius: 6px; height: 8px; width: 120px; overflow: hidden; }
       .bar > i { display: block; height: 100%; background: #4c8bf5; }
       input, select, button, textarea { background: #11151c; color: #e6e6e6; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
@@ -121,6 +122,7 @@ const html = `<!doctype html>
         <a href="#schedules" data-view="schedules">Scheduled scans</a>
         <a href="#dashboard" data-view="dashboard">Dashboard</a>
         <a href="#account" data-view="account">Account</a>
+        <a href="#usage" data-view="usage">Token 用量</a>
         <a href="#integrations" data-view="integrations">API &amp; MCP</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">Users</a>
       </nav>
@@ -146,6 +148,17 @@ const html = `<!doctype html>
             <button id="open-token-modal">+ New token</button>
           </div>
           <section id="tokens"><div data-loading>Loading…</div></section>
+        </div>
+        <div class="view" id="view-usage">
+          <div class="view-head">
+            <h2>Token 用量</h2>
+            <div id="usage-buckets">
+              <button class="secondary" data-bucket="day">日</button>
+              <button class="secondary" data-bucket="week">周</button>
+              <button class="secondary" data-bucket="month">月</button>
+            </div>
+          </div>
+          <section id="usage"><div data-loading>Loading…</div></section>
         </div>
         <div class="view" id="view-integrations">
           <div class="view-head"><h2>API &amp; MCP 接入说明</h2></div>
@@ -338,7 +351,7 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const valid = ["schedules", "dashboard", "account", "integrations", "users"];
+        const valid = ["schedules", "dashboard", "account", "usage", "integrations", "users"];
         const view = valid.includes(name) ? name : "schedules";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
@@ -347,6 +360,7 @@ const html = `<!doctype html>
         if (view === "account") renderTokens();
         if (view === "users") renderUsers();
         if (view === "integrations") renderIntegrations();
+        if (view === "usage") renderUsage();
       }
       window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
@@ -562,6 +576,35 @@ const html = `<!doctype html>
         } catch (e) { out.textContent = "✗ " + e.message; }
         finally { btn.disabled = false; }
       };
+
+      // --- Token usage (per configured task; day/week/month) ---
+      let usageBucket = "day";
+      document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) => {
+        b.onclick = () => { usageBucket = b.getAttribute("data-bucket"); renderUsage(); };
+      });
+      async function renderUsage() {
+        document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) =>
+          b.classList.toggle("active-bucket", b.getAttribute("data-bucket") === usageBucket));
+        const data = await load("/api/usage?bucket=" + usageBucket, { rows: [] });
+        const rows = data.rows || [];
+        const fmt = (n) => Number(n || 0).toLocaleString();
+        const section = (title, src) => {
+          const list = rows.filter((r) => r.source === src);
+          const total = list.reduce((s, r) => s + (r.totalTokens || 0), 0);
+          if (!list.length) {
+            return \`<h3>\${title} <span class="muted">合计 0 tokens</span></h3><p class="muted">暂无用量数据。</p>\`;
+          }
+          const trs = list.map((r) =>
+            \`<tr><td>\${esc(r.bucket)}</td><td>\${esc(r.sourceLabel)}</td><td>\${fmt(r.inputTokens)}</td><td>\${fmt(r.outputTokens)}</td><td><b>\${fmt(r.totalTokens)}</b></td><td>\${r.runs}</td><td>\${r.estimated ? '<span class="muted">估算</span>' : "实际"}</td></tr>\`
+          ).join("");
+          return \`<h3>\${title} <span class="muted">合计 \${fmt(total)} tokens</span></h3>
+            <table><thead><tr><th>周期</th><th>任务</th><th>输入</th><th>输出</th><th>合计</th><th>次数</th><th>类型</th></tr></thead><tbody>\${trs}</tbody></table>\`;
+        };
+        document.querySelector("#usage").innerHTML =
+          \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计;"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
+          + section("定时扫描 (schedules)", "schedule")
+          + section("临时任务 (tasks)", "task");
+      }
 
       // --- Integrations: API & MCP docs ---
       function renderIntegrations() {

@@ -97,6 +97,7 @@ export function startApp(
     enabledEngines: config.review.enabledEngines,
     workspaceRoot: config.workspaceDir,
     onlyChangedLines: config.review.onlyChangedLines,
+    recordUsage: (u) => void repo.recordTokenUsage(u).catch(() => {}),
   });
 
   const taskService = new TaskService({
@@ -131,6 +132,7 @@ export function startApp(
       providerFor(platform).cloneUrl({ fullName }),
     graphCache,
     structuralContext: config.review.structuralContext,
+    recordUsage: (u) => void repo.recordTokenUsage(u).catch(() => {}),
   });
   const scheduler = new Scheduler({
     store: scheduleStore,

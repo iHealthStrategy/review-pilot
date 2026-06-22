@@ -11,6 +11,8 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  TokenUsage,
+  UsageSource,
   User,
   UserRole,
 } from "../../domain/entities.js";
@@ -25,9 +27,11 @@ import {
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type TokenUsageFilter,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -217,6 +221,32 @@ function toApiToken(r: ApiTokenRow): ApiToken {
     prefix: r.prefix,
     createdAt: r.created_at,
     lastUsedAt: r.last_used_at ?? undefined,
+  };
+}
+interface TokenUsageRow {
+  id: string;
+  source: string;
+  source_id: string;
+  source_label: string;
+  engine: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated: number;
+  at: string;
+}
+function toTokenUsage(r: TokenUsageRow): TokenUsage {
+  return {
+    id: r.id,
+    source: r.source as UsageSource,
+    sourceId: r.source_id,
+    sourceLabel: r.source_label,
+    engine: r.engine as ReviewEngineKind,
+    inputTokens: r.input_tokens,
+    outputTokens: r.output_tokens,
+    totalTokens: r.total_tokens,
+    estimated: !!r.estimated,
+    at: r.at,
   };
 }
 
@@ -760,6 +790,62 @@ export class SqlRepository implements Repository {
       `UPDATE api_tokens SET last_used_at = ${this.ph(1)} WHERE id = ${this.ph(2)}`,
       [at, id],
     );
+  }
+
+  async recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage> {
+    const usage: TokenUsage = {
+      id: this.idGen("use"),
+      source: input.source,
+      sourceId: input.sourceId,
+      sourceLabel: input.sourceLabel,
+      engine: input.engine,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      totalTokens: input.inputTokens + input.outputTokens,
+      estimated: input.estimated,
+      at: input.at ?? this.clock(),
+    };
+    await this.client.run(
+      `INSERT INTO token_usage
+         (id, source, source_id, source_label, engine, input_tokens, output_tokens, total_tokens, estimated, at)
+       VALUES (${placeholderList(this.client.dialect, 10)})`,
+      [
+        usage.id,
+        usage.source,
+        usage.sourceId,
+        usage.sourceLabel,
+        usage.engine,
+        usage.inputTokens,
+        usage.outputTokens,
+        usage.totalTokens,
+        usage.estimated ? 1 : 0,
+        usage.at,
+      ],
+    );
+    return usage;
+  }
+
+  async listTokenUsage(filter: TokenUsageFilter = {}): Promise<TokenUsage[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.source) {
+      params.push(filter.source);
+      clauses.push(`source = ${this.ph(params.length)}`);
+    }
+    if (filter.sourceId) {
+      params.push(filter.sourceId);
+      clauses.push(`source_id = ${this.ph(params.length)}`);
+    }
+    if (filter.since) {
+      params.push(filter.since);
+      clauses.push(`at >= ${this.ph(params.length)}`);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.client.all<TokenUsageRow>(
+      `SELECT * FROM token_usage${where} ORDER BY at DESC`,
+      params,
+    );
+    return rows.map(toTokenUsage);
   }
 
   async close(): Promise<void> {

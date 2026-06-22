@@ -45,12 +45,30 @@ export interface ReviewContext {
 export type FindingDraft = AddFindingInput;
 
 /**
+ * LLM token usage for one review run. `estimated` is true when derived from
+ * text length (chars/4) rather than reported by the engine.
+ */
+export interface UsageCounts {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  estimated: boolean;
+}
+
+/** chars/4 approximation, used when an engine doesn't report real usage. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
  * Pluggable review engine. The default is the credential-free mock; Cursor /
  * Claude Code / Codex are CLI-backed adapters selected by configuration.
  */
 export interface ReviewEngine {
   readonly kind: ReviewEngineKind;
   review(ctx: ReviewContext): Promise<FindingDraft[]>;
+  /** Token usage of the most recent {@link review} call, when known. */
+  lastUsage?: UsageCounts;
   /**
    * Produce a concise whole-project understanding summary (plain text) by
    * exploring the synced checkout. Optional: only agentic engines that can read

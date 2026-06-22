@@ -3,6 +3,7 @@ import type {
   FindingDraft,
   ReviewContext,
   ReviewEngine,
+  UsageCounts,
 } from "./review-engine.js";
 
 /**
@@ -16,8 +17,11 @@ import type {
  */
 export class MockReviewEngine implements ReviewEngine {
   readonly kind: ReviewEngineKind = "mock";
+  /** Mock calls no LLM; report zero (estimated) so usage stats stay honest. */
+  lastUsage?: UsageCounts = undefined;
 
   async review(ctx: ReviewContext): Promise<FindingDraft[]> {
+    this.lastUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0, estimated: true };
     const total = ctx.structure.length;
     const known = new Set(ctx.structure);
     return ctx.diff.map((file): FindingDraft => {

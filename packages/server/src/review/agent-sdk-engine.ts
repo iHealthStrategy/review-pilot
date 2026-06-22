@@ -1,6 +1,18 @@
 import type { ReviewEngineKind } from "../domain/entities.js";
 import { buildProjectSummaryPrompt, buildReviewPrompt, parseFindings } from "./prompt.js";
-import type { FindingDraft, ReviewContext, ReviewEngine } from "./review-engine.js";
+import {
+  estimateTokens,
+  type FindingDraft,
+  type ReviewContext,
+  type ReviewEngine,
+  type UsageCounts,
+} from "./review-engine.js";
+
+/** Real token usage reported by the SDK's result message. */
+export interface SdkUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 /** Options for one agentic review run. */
 export interface AgentSdkRunOptions {
@@ -16,6 +28,8 @@ export interface AgentSdkRunOptions {
    */
   allowedTools?: string[];
   timeoutMs?: number;
+  /** Called with real token usage when the SDK reports it (result message). */
+  onUsage?: (usage: SdkUsage) => void;
 }
 
 /**
@@ -46,6 +60,7 @@ const DEFAULT_READONLY_TOOLS = ["Read", "Grep", "Glob"];
  */
 export class AgentSdkEngine implements ReviewEngine {
   readonly kind: ReviewEngineKind = "claude-agent";
+  lastUsage?: UsageCounts;
 
   constructor(
     private readonly client: AgentSdkClient,
@@ -54,14 +69,30 @@ export class AgentSdkEngine implements ReviewEngine {
 
   async review(ctx: ReviewContext): Promise<FindingDraft[]> {
     const prompt = buildReviewPrompt(ctx);
+    let real: SdkUsage | undefined;
     const output = await this.client.run({
       prompt,
       cwd: ctx.workspaceDir,
       allowedTools: this.config.allowedTools ?? DEFAULT_READONLY_TOOLS,
+      onUsage: (u) => (real = u),
       ...(this.config.model ? { model: this.config.model } : {}),
       ...(this.config.maxTurns ? { maxTurns: this.config.maxTurns } : {}),
       ...(this.config.timeoutMs ? { timeoutMs: this.config.timeoutMs } : {}),
     });
+    // Prefer the SDK's real usage; fall back to a chars/4 estimate.
+    this.lastUsage = real
+      ? {
+          inputTokens: real.inputTokens,
+          outputTokens: real.outputTokens,
+          totalTokens: real.inputTokens + real.outputTokens,
+          estimated: false,
+        }
+      : {
+          inputTokens: estimateTokens(prompt),
+          outputTokens: estimateTokens(output),
+          totalTokens: estimateTokens(prompt) + estimateTokens(output),
+          estimated: true,
+        };
     try {
       return parseFindings(output);
     } catch (err) {

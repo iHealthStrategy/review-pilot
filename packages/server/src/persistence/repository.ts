@@ -12,6 +12,8 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  TokenUsage,
+  UsageSource,
   User,
   UserRole,
 } from "../domain/entities.js";
@@ -91,6 +93,25 @@ export interface CreateApiTokenInput {
   /** SHA-256 of the secret; the plaintext is never persisted. */
   tokenHash: string;
   prefix: string;
+}
+
+export interface RecordTokenUsageInput {
+  source: UsageSource;
+  sourceId: string;
+  sourceLabel: string;
+  engine: ReviewEngineKind;
+  inputTokens: number;
+  outputTokens: number;
+  estimated: boolean;
+  /** Defaults to now when omitted (injectable for tests). */
+  at?: string;
+}
+
+export interface TokenUsageFilter {
+  source?: UsageSource;
+  sourceId?: string;
+  /** ISO lower bound (inclusive) — bound the scan window for aggregation. */
+  since?: string;
 }
 
 /** Mutable fields that may accompany a job state transition. */
@@ -177,6 +198,11 @@ export interface Repository {
   deleteApiToken(id: string, userId: string): Promise<void>;
   /** Best-effort lastUsedAt stamp on a successful token auth. */
   touchApiToken(id: string, at: string): Promise<void>;
+
+  // --- Token usage (per-task LLM consumption) ---
+  recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage>;
+  /** Raw usage records (newest first), bounded/filtered for aggregation. */
+  listTokenUsage(filter?: TokenUsageFilter): Promise<TokenUsage[]>;
 
   /** Release resources (close DB handle / flush file). */
   close(): Promise<void>;

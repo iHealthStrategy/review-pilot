@@ -8,6 +8,7 @@ import type {
   DiffFileStatus,
 } from "../providers/git-provider.js";
 import type { CommandRunner } from "./command-runner.js";
+import type { RecordTokenUsageInput } from "../persistence/repository.js";
 import { filterToChangedLines } from "./diff-lines.js";
 import type { FindingDraft, ReviewContext, ReviewEngine } from "./review-engine.js";
 import { scanStructure } from "./structure-scanner.js";
@@ -41,6 +42,8 @@ export interface BranchReviewDeps {
   workspaceRoot?: string;
   /** Keep only findings on changed lines (noise reduction). */
   onlyChangedLines?: boolean;
+  /** Persist token usage for this branch-diff task (best-effort). */
+  recordUsage?: (input: RecordTokenUsageInput) => Promise<void> | void;
 }
 
 /**
@@ -98,6 +101,17 @@ export class BranchReviewService {
       };
 
       const produced = await engine.review(context);
+      if (engine.lastUsage && this.deps.recordUsage) {
+        await this.deps.recordUsage({
+          source: "task",
+          sourceId: task.repoFullName,
+          sourceLabel: task.repoFullName,
+          engine: kind,
+          inputTokens: engine.lastUsage.inputTokens,
+          outputTokens: engine.lastUsage.outputTokens,
+          estimated: engine.lastUsage.estimated,
+        });
+      }
       const findings = this.deps.onlyChangedLines
         ? filterToChangedLines(produced, diff)
         : produced;

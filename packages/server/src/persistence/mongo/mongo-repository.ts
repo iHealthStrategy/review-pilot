@@ -11,6 +11,8 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   Severity,
+  TokenUsage,
+  UsageSource,
   User,
   UserRole,
 } from "../../domain/entities.js";
@@ -25,9 +27,11 @@ import {
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type TokenUsageFilter,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -44,6 +48,7 @@ const COLLECTIONS = {
   repoInsights: "repo_insights",
   users: "users",
   apiTokens: "api_tokens",
+  tokenUsage: "token_usage",
 } as const;
 
 /** Drop `undefined` values so optional fields round-trip as absent, not null. */
@@ -162,6 +167,20 @@ function toApiToken(d: MongoDoc): ApiToken {
     ...(d.lastUsedAt != null ? { lastUsedAt: d.lastUsedAt as string } : {}),
   };
 }
+function toTokenUsage(d: MongoDoc): TokenUsage {
+  return {
+    id: d.id as string,
+    source: d.source as UsageSource,
+    sourceId: d.sourceId as string,
+    sourceLabel: d.sourceLabel as string,
+    engine: d.engine as ReviewEngineKind,
+    inputTokens: (d.inputTokens as number) ?? 0,
+    outputTokens: (d.outputTokens as number) ?? 0,
+    totalTokens: (d.totalTokens as number) ?? 0,
+    estimated: !!d.estimated,
+    at: d.at as string,
+  };
+}
 
 export interface MongoRepositoryOptions {
   clock?: Clock;
@@ -210,6 +229,9 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.apiTokens).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ tokenHash: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ userId: 1 });
+    await this.col(COLLECTIONS.tokenUsage).createIndex({ id: 1 }, { unique: true });
+    await this.col(COLLECTIONS.tokenUsage).createIndex({ at: 1 });
+    await this.col(COLLECTIONS.tokenUsage).createIndex({ source: 1, sourceId: 1 });
   }
 
   async createProject(input: CreateProjectInput): Promise<Project> {
@@ -570,6 +592,35 @@ export class MongoRepository implements Repository {
 
   async touchApiToken(id: string, at: string): Promise<void> {
     await this.col(COLLECTIONS.apiTokens).updateOne({ id }, { $set: { lastUsedAt: at } });
+  }
+
+  async recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage> {
+    const usage: TokenUsage = {
+      id: this.idGen("use"),
+      source: input.source,
+      sourceId: input.sourceId,
+      sourceLabel: input.sourceLabel,
+      engine: input.engine,
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      totalTokens: input.inputTokens + input.outputTokens,
+      estimated: input.estimated,
+      at: input.at ?? this.clock(),
+    };
+    await this.col(COLLECTIONS.tokenUsage).insertOne({ ...usage });
+    return usage;
+  }
+
+  async listTokenUsage(filter: TokenUsageFilter = {}): Promise<TokenUsage[]> {
+    const q: Record<string, string> = {};
+    if (filter.source) q.source = filter.source;
+    if (filter.sourceId) q.sourceId = filter.sourceId;
+    const docs = await this.col(COLLECTIONS.tokenUsage).find(q, {
+      sort: { field: "at", dir: -1 },
+    });
+    // `since` is a range filter (not in the equality-only MongoFilter); apply it here.
+    const since = filter.since;
+    return docs.map(toTokenUsage).filter((u) => !since || u.at >= since);
   }
 
   async close(): Promise<void> {

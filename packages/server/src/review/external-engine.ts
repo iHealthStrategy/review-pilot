@@ -1,7 +1,13 @@
 import type { ReviewEngineKind } from "../domain/entities.js";
 import type { CommandRunner } from "./command-runner.js";
 import { buildProjectSummaryPrompt, buildReviewPrompt, parseFindings } from "./prompt.js";
-import type { FindingDraft, ReviewContext, ReviewEngine } from "./review-engine.js";
+import {
+  estimateTokens,
+  type FindingDraft,
+  type ReviewContext,
+  type ReviewEngine,
+  type UsageCounts,
+} from "./review-engine.js";
 
 export interface ExternalEngineConfig {
   /** Executable to invoke (e.g. `cursor-agent`, `claude`, `codex`). */
@@ -30,6 +36,8 @@ export interface ExternalEngineConfig {
  * no real tool required.
  */
 export class ExternalCliEngine implements ReviewEngine {
+  lastUsage?: UsageCounts;
+
   constructor(
     readonly kind: ReviewEngineKind,
     private readonly runner: CommandRunner,
@@ -37,7 +45,15 @@ export class ExternalCliEngine implements ReviewEngine {
   ) {}
 
   async review(ctx: ReviewContext): Promise<FindingDraft[]> {
-    const stdout = await this.runPrompt(buildReviewPrompt(ctx), ctx.workspaceDir);
+    const prompt = buildReviewPrompt(ctx);
+    const stdout = await this.runPrompt(prompt, ctx.workspaceDir);
+    // CLI text output has no usage; estimate from prompt + output (chars/4).
+    this.lastUsage = {
+      inputTokens: estimateTokens(prompt),
+      outputTokens: estimateTokens(stdout),
+      totalTokens: estimateTokens(prompt) + estimateTokens(stdout),
+      estimated: true,
+    };
     try {
       return parseFindings(stdout);
     } catch (err) {

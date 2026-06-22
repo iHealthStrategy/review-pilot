@@ -116,6 +116,21 @@ export class ReviewService {
       }
 
       const drafts = await engine.review(context);
+      // Token consumption for this ad-hoc review task (best-effort; never fails
+      // the review). Attributed to the repo under the "task" source.
+      if (engine.lastUsage) {
+        await this.deps.repo
+          .recordTokenUsage({
+            source: "task",
+            sourceId: repo.fullName,
+            sourceLabel: repo.fullName,
+            engine: kind,
+            inputTokens: engine.lastUsage.inputTokens,
+            outputTokens: engine.lastUsage.outputTokens,
+            estimated: engine.lastUsage.estimated,
+          })
+          .catch(() => {});
+      }
       const scoped = this.deps.config.review.onlyChangedLines
         ? filterToChangedLines(drafts, context.diff)
         : drafts;

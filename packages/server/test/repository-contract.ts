@@ -314,4 +314,38 @@ export function runRepositoryContract(
     assert.equal((await repo.listApiTokensByUser(u.id)).length, 0);
     await repo.close();
   });
+
+  test(`${name}: token usage — record, total, and filter by source/since`, async () => {
+    const repo = await makeRepo();
+    const a = await repo.recordTokenUsage({
+      source: "schedule",
+      sourceId: "sch_1",
+      sourceLabel: "nightly",
+      engine: "claude-agent",
+      inputTokens: 100,
+      outputTokens: 40,
+      estimated: false,
+      at: "2026-06-20T10:00:00.000Z",
+    });
+    assert.equal(a.totalTokens, 140, "total = input + output");
+    await repo.recordTokenUsage({
+      source: "task",
+      sourceId: "acme/app",
+      sourceLabel: "acme/app",
+      engine: "claude-code",
+      inputTokens: 50,
+      outputTokens: 10,
+      estimated: true,
+      at: "2026-06-22T10:00:00.000Z",
+    });
+
+    const all = await repo.listTokenUsage();
+    assert.equal(all.length, 2);
+    assert.ok(all[0]!.at >= all[1]!.at, "newest first");
+
+    assert.equal((await repo.listTokenUsage({ source: "schedule" })).length, 1);
+    assert.equal((await repo.listTokenUsage({ sourceId: "acme/app" }))[0]!.estimated, true);
+    assert.equal((await repo.listTokenUsage({ since: "2026-06-21T00:00:00.000Z" })).length, 1);
+    await repo.close();
+  });
 }

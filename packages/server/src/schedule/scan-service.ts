@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Platform, ReviewEngineKind } from "../domain/entities.js";
 import type { DiffFile, DiffFileStatus } from "../providers/git-provider.js";
 import type { CommandRunner } from "../review/command-runner.js";
+import type { RecordTokenUsageInput } from "../persistence/repository.js";
 import { cloneWithRetry } from "../review/git-clone.js";
 import { changedRanges, filterToChangedLines } from "../review/diff-lines.js";
 import type { GraphCacheService } from "../review/graph-cache.js";
@@ -36,6 +37,8 @@ export interface ScanServiceDeps {
   graphCache?: GraphCacheService;
   /** Enrich each branch review with structural context from the base graph. */
   structuralContext?: boolean;
+  /** Persist per-branch token usage (best-effort); omitted → not recorded. */
+  recordUsage?: (input: RecordTokenUsageInput) => Promise<void> | void;
 }
 
 /**
@@ -125,6 +128,17 @@ export class ScheduledScanService {
         // record it and move on so the other branches still get reviewed.
         try {
           const produced = await engine.review(context);
+          if (engine.lastUsage && this.deps.recordUsage) {
+            await this.deps.recordUsage({
+              source: "schedule",
+              sourceId: config.id,
+              sourceLabel: config.name,
+              engine: kind,
+              inputTokens: engine.lastUsage.inputTokens,
+              outputTokens: engine.lastUsage.outputTokens,
+              estimated: engine.lastUsage.estimated,
+            });
+          }
           const findings = this.deps.onlyChangedLines
             ? filterToChangedLines(produced, diff)
             : produced;
