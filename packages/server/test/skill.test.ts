@@ -53,6 +53,16 @@ test("buildOrchestratorSkill: derives a per-project key and auto-grows candidate
   assert.match(md, /pending/i); // candidates land pending
 });
 
+test("skills: one-shot fix is aggregate → confirm once → batch-apply (no commit)", () => {
+  for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
+    assert.match(md, /One-shot fix/);
+    assert.match(md, /Aggregate/);
+    assert.match(md, /Ask once/);
+    assert.match(md, /Batch when large/); // handles many issues
+    assert.match(md, /Do NOT commit/); // leaves the working tree for review
+  }
+});
+
 test("normalizeProjectKey: stable cross-form key", () => {
   assert.equal(normalizeProjectKey("git@github.com:acme/App.git"), "github.com/acme/app");
   assert.equal(normalizeProjectKey("https://github.com/acme/app"), "github.com/acme/app");

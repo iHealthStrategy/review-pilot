@@ -110,7 +110,7 @@ PROJECT=$(printf '%s' "$REMOTE" \\
 echo "project=$PROJECT"
 \`\`\`
 If there is no remote, fall back to the repo directory name. Keep this \`PROJECT\`
-value for steps 2 and 8.
+value for steps 2 and 9.
 
 ## 2. Detect whether a reviewer was named
 If the user names someone to review for them — e.g. "我想让 **alice** 帮我 review 我的改动",
@@ -119,7 +119,7 @@ person's **handle** (the token after 让/用/let and before 帮/review; lowercas
 keep letters/digits/hyphens). Call it \`HANDLE\`.
 
 If no one is named, skip to step 5 as a generic review (plus any local ruleset the
-user already installed). Auto-grow (step 8) still applies to your own project.
+user already installed). Auto-grow (step 9) still applies to your own project.
 
 ## 3. Fetch that user's public rulesets for THIS project (on demand)
 \`\`\`sh
@@ -183,10 +183,31 @@ ${FINDING_SCHEMA_FIELDS}
 
 Severity ranks: info < minor < major < critical. Group findings by file, most
 severe first; for each show severity, location (\`path:line\`), title, a short
-explanation, and a concrete fix. Then offer to apply the fixes. If there are no
-issues, say so plainly. If you applied a named user's rules, note whose.
+explanation, and a concrete fix. If there are no issues, say so plainly. If you
+applied a named user's rules, note whose. (The report stays in this session — do
+not write it to a file unless the user asks.)
 
-## 8. Auto-grow this project's rules (key points → candidate rules)
+## 8. One-shot fix (aggregate → confirm once → batch-apply)
+After presenting, offer a single auto-fix pass:
+1. **Aggregate** every finding that has a concrete, mechanical fix into a fix
+   list. Exclude findings that need a design decision or human judgement — list
+   those separately as "needs manual attention" and never auto-edit them.
+2. **Show the plan**: group the proposed edits by file; for each give the
+   location (\`path:line\`) and a one-line description of the change. Show this as
+   one consolidated list so the user sees everything before deciding.
+3. **Ask once** for approval to apply the whole batch (a single yes/no). Do not
+   prompt per finding.
+4. **Batch when large**: if the fix list is big (roughly >15 edits, or it spans
+   many files), split it into ordered batches (by file/area, ~10–15 edits each).
+   Apply one batch, give a one-line summary, then continue to the next batch
+   automatically — pausing only if the user interrupts or a batch fails. State up
+   front how many batches there will be. This keeps each change set reviewable.
+5. **After applying**: summarise what changed (files + count), and suggest the
+   user inspect \`git diff\` and run the tests/build. Do NOT commit or push —
+   leave the working tree for the user to review.
+If the user declines, leave everything unchanged.
+
+## 9. Auto-grow this project's rules (key points → candidate rules)
 From THIS review, extract 0–3 **key points** worth enforcing on future changes in
 this project — recurring or systemic issues, not one-offs (e.g. "DB migrations must
 be reversible", "public API changes need a changelog entry"). It is fine to find
@@ -310,8 +331,26 @@ Severity ranks: info < minor < major < critical.
 
 ## 5. Present
 Group findings by file, most severe first. For each show: severity, location
-(\`path:line\`), title, a short explanation, and a concrete fix. Then offer to
-apply the fixes. If there are no issues, say so plainly.
+(\`path:line\`), title, a short explanation, and a concrete fix. If there are no
+issues, say so plainly. (The report stays in this session — do not write it to a
+file unless the user asks.)
+
+## 6. One-shot fix (aggregate → confirm once → batch-apply)
+After presenting, offer a single auto-fix pass:
+1. **Aggregate** every finding with a concrete, mechanical fix into a fix list.
+   Exclude findings needing a design decision or human judgement — list those
+   separately as "needs manual attention" and never auto-edit them.
+2. **Show the plan**: group the proposed edits by file with location
+   (\`path:line\`) and a one-line description, as one consolidated list.
+3. **Ask once** for approval to apply the whole batch (single yes/no) — not per
+   finding.
+4. **Batch when large**: if the fix list is big (roughly >15 edits, or it spans
+   many files), split into ordered batches (~10–15 edits each), state how many
+   batches there are, apply one, give a one-line summary, then continue — pausing
+   only if the user interrupts or a batch fails.
+5. **After applying**: summarise what changed and suggest inspecting \`git diff\`
+   and running tests/build. Do NOT commit or push. If the user declines, leave
+   everything unchanged.
 `;
 }
 
