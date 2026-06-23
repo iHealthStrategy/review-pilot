@@ -10,6 +10,8 @@ import type {
   RepoInsight,
   ReviewEngineKind,
   ReviewJob,
+  ReviewRuleset,
+  RulesetVisibility,
   Severity,
   TokenUsage,
   UsageSource,
@@ -24,6 +26,7 @@ import {
   type CreateProjectInput,
   type CreateRepoInput,
   type CreateReviewJobInput,
+  type CreateRulesetInput,
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
@@ -32,6 +35,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type TokenUsageFilter,
+  type UpdateRulesetPatch,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -247,6 +251,36 @@ function toTokenUsage(r: TokenUsageRow): TokenUsage {
     totalTokens: r.total_tokens,
     estimated: !!r.estimated,
     at: r.at,
+  };
+}
+interface RulesetRow {
+  id: string;
+  owner_id: string;
+  owner_email: string;
+  name: string;
+  slug: string;
+  description: string;
+  visibility: string;
+  language: string;
+  focus: string;
+  instructions: string;
+  created_at: string;
+  updated_at: string;
+}
+function toRuleset(r: RulesetRow): ReviewRuleset {
+  return {
+    id: r.id,
+    ownerId: r.owner_id,
+    ownerEmail: r.owner_email,
+    name: r.name,
+    slug: r.slug,
+    description: r.description,
+    visibility: r.visibility as RulesetVisibility,
+    language: r.language,
+    focus: r.focus,
+    instructions: r.instructions,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
   };
 }
 
@@ -846,6 +880,81 @@ export class SqlRepository implements Repository {
       params,
     );
     return rows.map(toTokenUsage);
+  }
+
+  async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {
+    const now = this.clock();
+    const r: ReviewRuleset = {
+      id: this.idGen("rule"),
+      ownerId: input.ownerId,
+      ownerEmail: input.ownerEmail,
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      visibility: input.visibility,
+      language: input.language,
+      focus: input.focus,
+      instructions: input.instructions,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.client.run(
+      `INSERT INTO rulesets
+         (id, owner_id, owner_email, name, slug, description, visibility, language, focus, instructions, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 12)})`,
+      [r.id, r.ownerId, r.ownerEmail, r.name, r.slug, r.description, r.visibility, r.language, r.focus, r.instructions, r.createdAt, r.updatedAt],
+    );
+    return r;
+  }
+
+  async getRuleset(id: string): Promise<ReviewRuleset | null> {
+    const row = await this.client.get<RulesetRow>(
+      `SELECT * FROM rulesets WHERE id = ${this.ph(1)}`,
+      [id],
+    );
+    return row ? toRuleset(row) : null;
+  }
+
+  async listRulesetsByOwner(ownerId: string): Promise<ReviewRuleset[]> {
+    const rows = await this.client.all<RulesetRow>(
+      `SELECT * FROM rulesets WHERE owner_id = ${this.ph(1)} ORDER BY updated_at DESC`,
+      [ownerId],
+    );
+    return rows.map(toRuleset);
+  }
+
+  async listPublicRulesets(): Promise<ReviewRuleset[]> {
+    const rows = await this.client.all<RulesetRow>(
+      `SELECT * FROM rulesets WHERE visibility = ${this.ph(1)} ORDER BY updated_at DESC`,
+      ["public"],
+    );
+    return rows.map(toRuleset);
+  }
+
+  async updateRuleset(
+    id: string,
+    ownerId: string,
+    patch: UpdateRulesetPatch,
+  ): Promise<ReviewRuleset> {
+    const existing = await this.getRuleset(id);
+    if (!existing || existing.ownerId !== ownerId) {
+      throw new EntityNotFoundError("ReviewRuleset", id);
+    }
+    const next: ReviewRuleset = { ...existing, ...patch, updatedAt: this.clock() };
+    await this.client.run(
+      `UPDATE rulesets SET name = ${this.ph(1)}, description = ${this.ph(2)},
+         visibility = ${this.ph(3)}, language = ${this.ph(4)}, focus = ${this.ph(5)},
+         instructions = ${this.ph(6)}, updated_at = ${this.ph(7)} WHERE id = ${this.ph(8)}`,
+      [next.name, next.description, next.visibility, next.language, next.focus, next.instructions, next.updatedAt, id],
+    );
+    return next;
+  }
+
+  async deleteRuleset(id: string, ownerId: string): Promise<void> {
+    await this.client.run(
+      `DELETE FROM rulesets WHERE id = ${this.ph(1)} AND owner_id = ${this.ph(2)}`,
+      [id, ownerId],
+    );
   }
 
   async close(): Promise<void> {

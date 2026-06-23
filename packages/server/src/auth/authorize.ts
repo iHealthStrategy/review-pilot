@@ -28,12 +28,15 @@ export function requiredRole(method: string, pathname: string): UserRole | "publ
   if (pathname === "/api/auth/register" || pathname === "/api/auth/login") return "public";
   // User administration is admin-only.
   if (pathname === "/api/users" || pathname.startsWith("/api/users/")) return "admin";
-  // Self-service (own identity + own tokens) needs only authentication.
+  // Self-service (own identity, own tokens, own rulesets) needs only auth.
+  // Ownership is enforced per-handler; viewers may manage their own content.
   if (
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||
     pathname === "/api/tokens" ||
-    pathname.startsWith("/api/tokens/")
+    pathname.startsWith("/api/tokens/") ||
+    pathname === "/api/rulesets" ||
+    pathname.startsWith("/api/rulesets/")
   ) {
     return "viewer";
   }

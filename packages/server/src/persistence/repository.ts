@@ -11,6 +11,8 @@ import type {
   RepoInsight,
   ReviewEngineKind,
   ReviewJob,
+  ReviewRuleset,
+  RulesetVisibility,
   Severity,
   TokenUsage,
   UsageSource,
@@ -114,6 +116,28 @@ export interface TokenUsageFilter {
   since?: string;
 }
 
+export interface CreateRulesetInput {
+  ownerId: string;
+  ownerEmail: string;
+  name: string;
+  slug: string;
+  description: string;
+  visibility: RulesetVisibility;
+  language: string;
+  focus: string;
+  instructions: string;
+}
+
+/** Editable fields (slug + owner are immutable). */
+export interface UpdateRulesetPatch {
+  name?: string;
+  description?: string;
+  visibility?: RulesetVisibility;
+  language?: string;
+  focus?: string;
+  instructions?: string;
+}
+
 /** Mutable fields that may accompany a job state transition. */
 export interface ReviewJobPatch {
   progress?: number;
@@ -203,6 +227,15 @@ export interface Repository {
   recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage>;
   /** Raw usage records (newest first), bounded/filtered for aggregation. */
   listTokenUsage(filter?: TokenUsageFilter): Promise<TokenUsage[]>;
+
+  // --- Community review rulesets ---
+  createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset>;
+  getRuleset(id: string): Promise<ReviewRuleset | null>;
+  listRulesetsByOwner(ownerId: string): Promise<ReviewRuleset[]>;
+  listPublicRulesets(): Promise<ReviewRuleset[]>;
+  /** Update is owner-scoped: a non-owner edit throws EntityNotFoundError. */
+  updateRuleset(id: string, ownerId: string, patch: UpdateRulesetPatch): Promise<ReviewRuleset>;
+  deleteRuleset(id: string, ownerId: string): Promise<void>;
 
   /** Release resources (close DB handle / flush file). */
   close(): Promise<void>;

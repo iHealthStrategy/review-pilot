@@ -1,31 +1,80 @@
+import type { ReviewRuleset } from "../domain/entities.js";
 import { FINDING_SCHEMA_FIELDS, REVIEW_DIMENSIONS } from "../review/prompt.js";
 
 /**
- * The local Claude Code "skill" — a single SKILL.md that drives the user's own
- * Claude Code as the review engine, using the SAME review kernel as the service
- * (review dimensions + finding schema, imported from the prompt module so they
- * never drift) but running entirely on the user's machine. Distributed via a
- * one-line installer served by the server.
+ * The local Claude Code "skill" — a SKILL.md that drives the user's own Claude
+ * Code as the review engine, using the SAME review kernel as the service (review
+ * dimensions + finding schema, imported from the prompt module so they never
+ * drift) but running entirely on the user's machine. Without a ruleset it is the
+ * generic reviewer; with a community ruleset it weaves in that ruleset's
+ * preferences + custom rules. Distributed via a one-line installer.
  */
 export const SKILL_NAME = "reviewpilot-review";
 
-export function buildReviewSkill(): string {
+/** Filesystem/skill-safe slug from a ruleset name. */
+export function slugify(name: string): string {
+  const s = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return s || "ruleset";
+}
+
+/** Skill (and install dir) name for a ruleset. */
+export function rulesetSkillName(slug: string): string {
+  return `reviewpilot-${slug}`;
+}
+
+/** Collapse whitespace so user text is safe inside YAML frontmatter. */
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+export function buildReviewSkill(ruleset?: ReviewRuleset): string {
+  const name = ruleset ? rulesetSkillName(ruleset.slug) : SKILL_NAME;
+  const descSuffix = ruleset
+    ? ` Applies the community ruleset "${oneLine(ruleset.name)}"${ruleset.description ? ` — ${oneLine(ruleset.description)}` : ""}.`
+    : "";
+
+  const rulesetSections: string[] = [];
+  if (ruleset) {
+    rulesetSections.push(`## Ruleset: ${ruleset.name}`);
+    if (ruleset.description) rulesetSections.push(ruleset.description);
+    if (ruleset.focus.trim()) {
+      rulesetSections.push(
+        "",
+        "## Review focus (prioritise)",
+        ruleset.focus.trim(),
+      );
+    }
+    if (ruleset.instructions.trim()) {
+      rulesetSections.push(
+        "",
+        "## Custom rules",
+        "Apply these rules in addition to the standard review:",
+        "",
+        ruleset.instructions.trim(),
+      );
+    }
+    if (ruleset.language.trim()) {
+      rulesetSections.push("", `Write the findings in ${ruleset.language.trim()}.`);
+    }
+    rulesetSections.push("");
+  }
+
   return `---
-name: ${SKILL_NAME}
+name: ${name}
 description: >-
   Review LOCAL code changes for ${REVIEW_DIMENSIONS} — the same review kernel as
-  the ReviewPilot service, run entirely on this machine. Use when the user asks
-  to review / 评审 / 审查 their local changes, a working-tree diff, a branch diff,
-  or a checked-out pull request.
+  the ReviewPilot service, run entirely on this machine.${descSuffix} Use when the
+  user asks to review / 评审 / 审查 their local changes, a working-tree diff, a
+  branch diff, or a checked-out pull request.
 ---
 
 # ReviewPilot — local code review
 
 Review the user's LOCAL code changes the way the ReviewPilot service would, but
 running here — you are the review engine. Prefer fewer high-quality findings over
-noise. Write the findings in the user's language.
+noise. Write the findings in the user's language unless told otherwise.
 
-## 1. Choose the scope
+${rulesetSections.join("\n")}## 1. Choose the scope
 Default to **working** unless the user says otherwise:
 - **working** — uncommitted changes: \`git diff HEAD\` plus untracked files
   (\`git ls-files --others --exclude-standard\`).
@@ -43,8 +92,9 @@ its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
 gaps for the changed files and prioritise the review accordingly. Skip if absent.
 
 ## 4. Review
-Look for ${REVIEW_DIMENSIONS}. Report only issues introduced or affected by the
-reviewed changes. For each issue, form a finding with these fields:
+Look for ${REVIEW_DIMENSIONS}${ruleset ? ", and apply the ruleset's custom rules above" : ""}.
+Report only issues introduced or affected by the reviewed changes. For each
+issue, form a finding with these fields:
 
 \`\`\`
 ${FINDING_SCHEMA_FIELDS}
@@ -60,10 +110,10 @@ apply the fixes. If there are no issues, say so plainly.
 }
 
 /** A self-contained installer that writes the skill into ~/.claude/skills/. */
-export function buildInstallScript(skillMd: string): string {
+export function buildInstallScript(skillMd: string, dirName: string = SKILL_NAME): string {
   return `#!/bin/sh
 set -e
-DIR="$HOME/.claude/skills/${SKILL_NAME}"
+DIR="$HOME/.claude/skills/${dirName}"
 mkdir -p "$DIR"
 cat > "$DIR/SKILL.md" <<'REVIEWPILOT_SKILL_EOF'
 ${skillMd}REVIEWPILOT_SKILL_EOF

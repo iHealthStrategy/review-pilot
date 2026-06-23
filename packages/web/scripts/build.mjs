@@ -122,6 +122,7 @@ const html = `<!doctype html>
         <a href="#schedules" data-view="schedules">定时扫描</a>
         <a href="#dashboard" data-view="dashboard">仪表盘</a>
         <a href="#account" data-view="account">账户</a>
+        <a href="#rulesets" data-view="rulesets">评审规则集</a>
         <a href="#usage" data-view="usage">Token 用量</a>
         <a href="#integrations" data-view="integrations">API 与 MCP</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
@@ -148,6 +149,13 @@ const html = `<!doctype html>
             <button id="open-token-modal">+ 新建令牌</button>
           </div>
           <section id="tokens"><div data-loading>加载中…</div></section>
+        </div>
+        <div class="view" id="view-rulesets">
+          <div class="view-head">
+            <h2>评审规则集</h2>
+            <button id="open-ruleset-modal">+ 新建规则集</button>
+          </div>
+          <section id="rulesets"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-usage">
           <div class="view-head">
@@ -230,6 +238,24 @@ const html = `<!doctype html>
           <div class="field"><label>名称</label><input name="name" placeholder="ci / my-laptop" required /></div>
           <button type="submit">创建令牌</button>
           <p class="muted result" id="token-result"></p>
+        </form>
+      </div>
+    </div>
+
+    <!-- Create / edit review ruleset modal -->
+    <div class="modal-overlay" id="ruleset-modal" data-modal>
+      <div class="modal">
+        <div class="modal-head"><h2 id="ruleset-modal-title">新建规则集</h2><button class="close" data-close>×</button></div>
+        <form id="ruleset-form">
+          <input type="hidden" name="id" />
+          <div class="field"><label>名称</label><input name="name" placeholder="我的严格规则" required /></div>
+          <div class="field"><label>描述</label><input name="description" placeholder="一句话说明这套规则" /></div>
+          <div class="field"><label>可见性</label><select name="visibility"><option value="private">私有(仅自己,安装需令牌)</option><option value="public">公开(社区可见可安装)</option></select></div>
+          <div class="field"><label>评审语言(留空 = 跟随使用者)</label><input name="language" placeholder="中文" /></div>
+          <div class="field"><label>评审重点</label><input name="focus" placeholder="例如:并发安全、SQL 注入、接口兼容性" /></div>
+          <div class="field"><label>自定义规则(markdown,逐条写)</label><textarea name="instructions" rows="6" placeholder="- 禁止提交 console.log&#10;- DB 写操作必须有索引佐证&#10;- 公共 API 变更需向后兼容"></textarea></div>
+          <button type="submit">保存</button>
+          <p class="muted result" id="ruleset-result"></p>
         </form>
       </div>
     </div>
@@ -352,7 +378,7 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const valid = ["schedules", "dashboard", "account", "usage", "integrations", "users"];
+        const valid = ["schedules", "dashboard", "account", "rulesets", "usage", "integrations", "users"];
         const view = valid.includes(name) ? name : "schedules";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
@@ -362,6 +388,7 @@ const html = `<!doctype html>
         if (view === "users") renderUsers();
         if (view === "integrations") renderIntegrations();
         if (view === "usage") renderUsage();
+        if (view === "rulesets") renderRulesets();
       }
       window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
@@ -577,6 +604,96 @@ const html = `<!doctype html>
         } catch (e) { out.textContent = "✗ " + e.message; }
         finally { btn.disabled = false; }
       };
+
+      // --- Review rulesets (community) ---
+      function openRulesetModal(rs) {
+        const f = document.getElementById("ruleset-form");
+        f.reset();
+        document.getElementById("ruleset-result").textContent = "";
+        document.getElementById("ruleset-modal-title").textContent = rs ? "编辑规则集" : "新建规则集";
+        f.id.value = rs ? rs.id : "";
+        if (rs) {
+          f.name.value = rs.name; f.description.value = rs.description || "";
+          f.visibility.value = rs.visibility; f.language.value = rs.language || "";
+          f.focus.value = rs.focus || ""; f.instructions.value = rs.instructions || "";
+        }
+        openModal("ruleset-modal");
+      }
+      document.getElementById("open-ruleset-modal").onclick = () => openRulesetModal(null);
+
+      document.getElementById("ruleset-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const out = document.getElementById("ruleset-result");
+        const btn = f.querySelector('button[type="submit"]');
+        btn.disabled = true; out.textContent = "";
+        const payload = {
+          name: f.name.value, description: f.description.value,
+          visibility: f.visibility.value, language: f.language.value,
+          focus: f.focus.value, instructions: f.instructions.value,
+        };
+        try {
+          const id = f.id.value;
+          await api(id ? "/api/rulesets/" + id : "/api/rulesets", {
+            method: id ? "PUT" : "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          closeModal("ruleset-modal");
+          renderRulesets();
+        } catch (e) { out.textContent = "✗ " + e.message; }
+        finally { btn.disabled = false; }
+      };
+
+      async function renderRulesets() {
+        const o = location.origin;
+        const mine = await load("/api/rulesets", []);
+        const pub = await load("/api/rulesets?scope=public", []);
+        const cmd = (r) => r.visibility === "public"
+          ? \`curl -fsSL \${o}/skill/ruleset/\${r.id}/install.sh | sh\`
+          : \`curl -fsSL -H "Authorization: Bearer rpat_…" \${o}/skill/ruleset/\${r.id}/install.sh | sh\`;
+
+        const mineRows = mine.map((r) => \`<tr>
+          <td>\${esc(r.name)}</td>
+          <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
+          <td><code>\${esc(cmd(r))}</code></td>
+          <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
+        </tr>\`).join("");
+        const pubRows = pub.map((r) => \`<tr>
+          <td>\${esc(r.name)}</td>
+          <td class="muted">\${esc(r.ownerEmail)}</td>
+          <td class="muted">\${esc(r.description || "")}</td>
+          <td><code>curl -fsSL \${o}/skill/ruleset/\${esc(r.id)}/install.sh | sh</code></td>
+          <td><button class="secondary" data-fork-rs="\${esc(r.id)}">Fork 到我的</button></td>
+        </tr>\`).join("");
+
+        document.querySelector("#rulesets").innerHTML =
+          \`<p class="muted">规则集会生成一个本地 Claude Code skill(与服务同内核)。公开的可被社区直接安装;私有的安装需带你的令牌(rpat_…,见账户页)。</p>
+           <h3>我的规则集</h3>\`
+          + (mine.length
+              ? \`<table><thead><tr><th>名称</th><th>可见性</th><th>安装命令</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
+              : \`<p class="muted">还没有规则集,点上方「+ 新建规则集」创建。</p>\`)
+          + \`<h3>社区规则集</h3>\`
+          + (pub.length
+              ? \`<table><thead><tr><th>名称</th><th>作者</th><th>描述</th><th>安装命令</th><th></th></tr></thead><tbody>\${pubRows}</tbody></table>\`
+              : \`<p class="muted">社区暂无公开规则集。</p>\`);
+
+        const byId = {};
+        mine.forEach((r) => (byId[r.id] = r));
+        document.querySelectorAll('#rulesets [data-edit-rs]').forEach((b) =>
+          (b.onclick = () => openRulesetModal(byId[b.getAttribute("data-edit-rs")])));
+        document.querySelectorAll('#rulesets [data-del-rs]').forEach((b) =>
+          (b.onclick = async () => {
+            if (!confirm("确定删除该规则集?")) return;
+            try { await api("/api/rulesets/" + b.getAttribute("data-del-rs"), { method: "DELETE" }); renderRulesets(); }
+            catch (e) { alert(e.message); }
+          }));
+        document.querySelectorAll('#rulesets [data-fork-rs]').forEach((b) =>
+          (b.onclick = async () => {
+            try { await api("/api/rulesets/" + b.getAttribute("data-fork-rs") + "/fork", { method: "POST" }); renderRulesets(); }
+            catch (e) { alert(e.message); }
+          }));
+      }
 
       // --- Token usage (per configured task; day/week/month) ---
       let usageBucket = "day";

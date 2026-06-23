@@ -348,4 +348,40 @@ export function runRepositoryContract(
     assert.equal((await repo.listTokenUsage({ since: "2026-06-21T00:00:00.000Z" })).length, 1);
     await repo.close();
   });
+
+  test(`${name}: rulesets — owner-scoped CRUD + public listing`, async () => {
+    const repo = await makeRepo();
+    const mk = (ownerId: string, name2: string, visibility: "private" | "public") =>
+      repo.createRuleset({
+        ownerId,
+        ownerEmail: ownerId + "@x.com",
+        name: name2,
+        slug: name2.toLowerCase(),
+        description: "d",
+        visibility,
+        language: "中文",
+        focus: "perf",
+        instructions: "be strict",
+      });
+
+    const a = await mk("u1", "Strict", "public");
+    await mk("u1", "Loose", "private");
+    await mk("u2", "Other", "public");
+
+    assert.equal((await repo.listRulesetsByOwner("u1")).length, 2);
+    assert.equal((await repo.listPublicRulesets()).length, 2); // Strict + Other
+    assert.equal((await repo.getRuleset(a.id))?.name, "Strict");
+
+    const upd = await repo.updateRuleset(a.id, "u1", { focus: "security", visibility: "private" });
+    assert.equal(upd.focus, "security");
+    assert.equal((await repo.listPublicRulesets()).length, 1); // Strict now private
+
+    // Update/delete by a non-owner is a no-op / not-found.
+    await assert.rejects(() => repo.updateRuleset(a.id, "u2", { focus: "x" }));
+    await repo.deleteRuleset(a.id, "u2");
+    assert.ok(await repo.getRuleset(a.id), "non-owner delete is a no-op");
+    await repo.deleteRuleset(a.id, "u1");
+    assert.equal(await repo.getRuleset(a.id), null);
+    await repo.close();
+  });
 }

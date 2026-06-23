@@ -8,6 +8,7 @@ import type {
   Repo,
   RepoInsight,
   ReviewJob,
+  ReviewRuleset,
   TokenUsage,
   User,
   UserRole,
@@ -21,6 +22,7 @@ import {
   type CreateRepoInput,
   type CreateReviewJobInput,
   type CreateUserInput,
+  type CreateRulesetInput,
   EntityNotFoundError,
   type IdGen,
   type RecordTokenUsageInput,
@@ -28,6 +30,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type TokenUsageFilter,
+  type UpdateRulesetPatch,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -49,6 +52,8 @@ export interface MemorySnapshot {
   apiTokens: Record<string, ApiToken>;
   /** Token-usage records, keyed by id. */
   tokenUsage: Record<string, TokenUsage>;
+  /** Community review rulesets, keyed by id. */
+  rulesets: Record<string, ReviewRuleset>;
 }
 
 function emptySnapshot(): MemorySnapshot {
@@ -62,6 +67,7 @@ function emptySnapshot(): MemorySnapshot {
     users: {},
     apiTokens: {},
     tokenUsage: {},
+    rulesets: {},
   };
 }
 
@@ -453,6 +459,66 @@ export class MemoryRepository implements Repository {
         return true;
       })
       .sort((a, b) => (a.at < b.at ? 1 : -1));
+  }
+
+  async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {
+    const now = this.clock();
+    const ruleset: ReviewRuleset = {
+      id: this.idGen("rule"),
+      ownerId: input.ownerId,
+      ownerEmail: input.ownerEmail,
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      visibility: input.visibility,
+      language: input.language,
+      focus: input.focus,
+      instructions: input.instructions,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.data.rulesets[ruleset.id] = ruleset;
+    await this.persist();
+    return ruleset;
+  }
+
+  async getRuleset(id: string): Promise<ReviewRuleset | null> {
+    return this.data.rulesets[id] ?? null;
+  }
+
+  async listRulesetsByOwner(ownerId: string): Promise<ReviewRuleset[]> {
+    return Object.values(this.data.rulesets)
+      .filter((r) => r.ownerId === ownerId)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async listPublicRulesets(): Promise<ReviewRuleset[]> {
+    return Object.values(this.data.rulesets)
+      .filter((r) => r.visibility === "public")
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async updateRuleset(
+    id: string,
+    ownerId: string,
+    patch: UpdateRulesetPatch,
+  ): Promise<ReviewRuleset> {
+    const existing = this.data.rulesets[id];
+    if (!existing || existing.ownerId !== ownerId) {
+      throw new EntityNotFoundError("ReviewRuleset", id);
+    }
+    const next: ReviewRuleset = { ...existing, ...patch, updatedAt: this.clock() };
+    this.data.rulesets[id] = next;
+    await this.persist();
+    return next;
+  }
+
+  async deleteRuleset(id: string, ownerId: string): Promise<void> {
+    const existing = this.data.rulesets[id];
+    if (existing && existing.ownerId === ownerId) {
+      delete this.data.rulesets[id];
+      await this.persist();
+    }
   }
 
   async close(): Promise<void> {

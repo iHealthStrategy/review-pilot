@@ -134,6 +134,28 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_token_usage_source ON token_usage(source, source_id);
     `,
   },
+  {
+    id: "0005_rulesets",
+    up: () => `
+      CREATE TABLE IF NOT EXISTS rulesets (
+        id TEXT PRIMARY KEY,
+        -- No FK to users: the env-configured admin owns rulesets without a DB row.
+        owner_id TEXT NOT NULL,
+        owner_email TEXT NOT NULL,
+        name TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        description TEXT NOT NULL,
+        visibility TEXT NOT NULL,
+        language TEXT NOT NULL,
+        focus TEXT NOT NULL,
+        instructions TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_rulesets_owner ON rulesets(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_rulesets_visibility ON rulesets(visibility);
+    `,
+  },
 ];
 
 /**

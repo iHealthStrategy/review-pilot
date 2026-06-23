@@ -10,6 +10,8 @@ import type {
   RepoInsight,
   ReviewEngineKind,
   ReviewJob,
+  ReviewRuleset,
+  RulesetVisibility,
   Severity,
   TokenUsage,
   UsageSource,
@@ -24,6 +26,7 @@ import {
   type CreateProjectInput,
   type CreateRepoInput,
   type CreateReviewJobInput,
+  type CreateRulesetInput,
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
@@ -32,6 +35,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type TokenUsageFilter,
+  type UpdateRulesetPatch,
   type UpsertPullRequestInput,
   type UpsertRepoInsightInput,
   systemClock,
@@ -49,6 +53,7 @@ const COLLECTIONS = {
   users: "users",
   apiTokens: "api_tokens",
   tokenUsage: "token_usage",
+  rulesets: "rulesets",
 } as const;
 
 /** Drop `undefined` values so optional fields round-trip as absent, not null. */
@@ -181,6 +186,22 @@ function toTokenUsage(d: MongoDoc): TokenUsage {
     at: d.at as string,
   };
 }
+function toRuleset(d: MongoDoc): ReviewRuleset {
+  return {
+    id: d.id as string,
+    ownerId: d.ownerId as string,
+    ownerEmail: d.ownerEmail as string,
+    name: d.name as string,
+    slug: d.slug as string,
+    description: d.description as string,
+    visibility: d.visibility as RulesetVisibility,
+    language: d.language as string,
+    focus: d.focus as string,
+    instructions: d.instructions as string,
+    createdAt: d.createdAt as string,
+    updatedAt: d.updatedAt as string,
+  };
+}
 
 export interface MongoRepositoryOptions {
   clock?: Clock;
@@ -232,6 +253,9 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.tokenUsage).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.tokenUsage).createIndex({ at: 1 });
     await this.col(COLLECTIONS.tokenUsage).createIndex({ source: 1, sourceId: 1 });
+    await this.col(COLLECTIONS.rulesets).createIndex({ id: 1 }, { unique: true });
+    await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1 });
+    await this.col(COLLECTIONS.rulesets).createIndex({ visibility: 1 });
   }
 
   async createProject(input: CreateProjectInput): Promise<Project> {
@@ -621,6 +645,65 @@ export class MongoRepository implements Repository {
     // `since` is a range filter (not in the equality-only MongoFilter); apply it here.
     const since = filter.since;
     return docs.map(toTokenUsage).filter((u) => !since || u.at >= since);
+  }
+
+  async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {
+    const now = this.clock();
+    const r: ReviewRuleset = {
+      id: this.idGen("rule"),
+      ownerId: input.ownerId,
+      ownerEmail: input.ownerEmail,
+      name: input.name,
+      slug: input.slug,
+      description: input.description,
+      visibility: input.visibility,
+      language: input.language,
+      focus: input.focus,
+      instructions: input.instructions,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.col(COLLECTIONS.rulesets).insertOne({ ...r });
+    return r;
+  }
+
+  async getRuleset(id: string): Promise<ReviewRuleset | null> {
+    const d = await this.col(COLLECTIONS.rulesets).findOne({ id });
+    return d ? toRuleset(d) : null;
+  }
+
+  async listRulesetsByOwner(ownerId: string): Promise<ReviewRuleset[]> {
+    const docs = await this.col(COLLECTIONS.rulesets).find(
+      { ownerId },
+      { sort: { field: "updatedAt", dir: -1 } },
+    );
+    return docs.map(toRuleset);
+  }
+
+  async listPublicRulesets(): Promise<ReviewRuleset[]> {
+    const docs = await this.col(COLLECTIONS.rulesets).find(
+      { visibility: "public" },
+      { sort: { field: "updatedAt", dir: -1 } },
+    );
+    return docs.map(toRuleset);
+  }
+
+  async updateRuleset(
+    id: string,
+    ownerId: string,
+    patch: UpdateRulesetPatch,
+  ): Promise<ReviewRuleset> {
+    const existing = await this.getRuleset(id);
+    if (!existing || existing.ownerId !== ownerId) {
+      throw new EntityNotFoundError("ReviewRuleset", id);
+    }
+    const next: ReviewRuleset = { ...existing, ...patch, updatedAt: this.clock() };
+    await this.col(COLLECTIONS.rulesets).updateOne({ id }, { $set: { ...next } });
+    return next;
+  }
+
+  async deleteRuleset(id: string, ownerId: string): Promise<void> {
+    await this.col(COLLECTIONS.rulesets).deleteOne({ id, ownerId });
   }
 
   async close(): Promise<void> {

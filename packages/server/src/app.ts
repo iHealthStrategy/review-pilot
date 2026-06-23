@@ -9,7 +9,12 @@ import { resolvePrincipal } from "./auth/authorize.js";
 import { envAdminFrom } from "./auth/env-admin.js";
 import { handleMcp } from "./mcp/mcp-server.js";
 import type { Repository } from "./persistence/repository.js";
-import { SKILL_NAME, buildInstallScript, buildReviewSkill } from "./skill/review-skill.js";
+import {
+  SKILL_NAME,
+  buildInstallScript,
+  buildReviewSkill,
+  rulesetSkillName,
+} from "./skill/review-skill.js";
 import type { ScheduleStore } from "./schedule/schedule.js";
 import type { Scheduler } from "./schedule/scheduler.js";
 import type { TaskService } from "./trigger/trigger-service.js";
@@ -66,6 +71,35 @@ export function createAppHandler(deps: AppDeps) {
     if (path === `/skill/${SKILL_NAME}/SKILL.md` || path === "/skill/SKILL.md") {
       res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
       res.end(buildReviewSkill());
+      return;
+    }
+    // Per-ruleset skill: public → open; private → requires the owner's token.
+    const rulesetSkill = /^\/skill\/ruleset\/([^/]+)\/(install\.sh|SKILL\.md)$/.exec(path);
+    if (rulesetSkill) {
+      const [, id, kind] = rulesetSkill;
+      const ruleset = await deps.repo.getRuleset(id!);
+      if (!ruleset) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "ruleset not found" }));
+        return;
+      }
+      if (ruleset.visibility !== "public") {
+        const principal = await resolvePrincipal(req.headers.authorization, deps.repo, secret, envAdmin);
+        const allowed = principal && (principal.userId === ruleset.ownerId || principal.role === "admin");
+        if (!allowed) {
+          res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
+          res.end(JSON.stringify({ error: "unauthorized: private ruleset requires the owner's token" }));
+          return;
+        }
+      }
+      const md = buildReviewSkill(ruleset);
+      if (kind === "install.sh") {
+        res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
+        res.end(buildInstallScript(md, rulesetSkillName(ruleset.slug)));
+      } else {
+        res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
+        res.end(md);
+      }
       return;
     }
     if (path === "/mcp") {

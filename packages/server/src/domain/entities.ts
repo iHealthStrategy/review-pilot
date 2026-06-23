@@ -163,6 +163,35 @@ export interface TokenUsage {
   readonly at: string;
 }
 
+/** Visibility of a community review ruleset. */
+export type RulesetVisibility = "private" | "public";
+
+/**
+ * A user-authored set of review rules/preferences. The platform turns it into a
+ * local Claude Code skill (named `reviewpilot-<slug>`). Public rulesets are
+ * browsable + installable by anyone (the "community"); private ones need the
+ * owner's token to install.
+ */
+export interface ReviewRuleset {
+  readonly id: string;
+  readonly ownerId: string;
+  /** Denormalized for community display. */
+  readonly ownerEmail: string;
+  readonly name: string;
+  /** Stable, filesystem-safe slug for the skill name (immutable after create). */
+  readonly slug: string;
+  readonly description: string;
+  readonly visibility: RulesetVisibility;
+  /** Output language for findings ("" = follow the user). */
+  readonly language: string;
+  /** Short review emphasis (prioritised in the skill). */
+  readonly focus: string;
+  /** Freeform custom rules (markdown), woven into the generated skill. */
+  readonly instructions: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 /** A structured review result item (the "issue list + suggestion"). */
 export interface Finding {
   readonly id: string;

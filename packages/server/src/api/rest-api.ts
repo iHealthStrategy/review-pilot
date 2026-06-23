@@ -22,6 +22,9 @@ import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
 import { type Bucket, aggregateUsage, defaultSince } from "../usage/aggregate.js";
+import { slugify } from "../skill/review-skill.js";
+import type { RulesetVisibility } from "../domain/entities.js";
+import type { UpdateRulesetPatch } from "../persistence/repository.js";
 import {
   type EnvAdmin,
   ENV_ADMIN_ID,
@@ -157,6 +160,21 @@ function publicToken(t: ApiToken) {
 function requirePrincipal(principal: Principal | null): Principal {
   if (!principal) throw new HttpError(401, "unauthorized");
   return principal;
+}
+
+/** Resolve a principal's email for display/ownership (env admin or DB user). */
+async function principalEmail(
+  p: Principal,
+  repo: Repository,
+  auth: AuthConfig,
+): Promise<string> {
+  if (p.userId === ENV_ADMIN_ID && auth.envAdmin) return auth.envAdmin.email;
+  const user = await repo.getUserById(p.userId);
+  return user?.email ?? p.userId;
+}
+
+function asVisibility(v: unknown): RulesetVisibility {
+  return v === "public" ? "public" : "private";
 }
 
 const ROUTES: Route[] = [
@@ -305,6 +323,98 @@ const ROUTES: Route[] = [
         ...(source === "schedule" || source === "task" ? { source } : {}),
       });
       return ok({ bucket, rows: aggregateUsage(events, bucket) });
+    },
+  },
+  // --- Community review rulesets (self-service; ownership enforced per-handler) ---
+  {
+    method: "GET",
+    pattern: /^\/api\/rulesets$/,
+    handler: async ({ principal, query }, repo) => {
+      const p = requirePrincipal(principal);
+      if (query.get("scope") === "public") return ok(await repo.listPublicRulesets());
+      return ok(await repo.listRulesetsByOwner(p.userId));
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/rulesets$/,
+    handler: async ({ principal, body, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const name = asString(b.name, "name");
+      const ruleset = await repo.createRuleset({
+        ownerId: p.userId,
+        ownerEmail: await principalEmail(p, repo, auth),
+        name,
+        slug: slugify(name),
+        description: typeof b.description === "string" ? b.description : "",
+        visibility: asVisibility(b.visibility),
+        language: typeof b.language === "string" ? b.language : "",
+        focus: typeof b.focus === "string" ? b.focus : "",
+        instructions: typeof b.instructions === "string" ? b.instructions : "",
+      });
+      return ok(ruleset, 201);
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/rulesets\/(?<id>[^/]+)\/fork$/,
+    handler: async ({ principal, params, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      const src = await repo.getRuleset(params.id!);
+      if (!src || (src.visibility !== "public" && src.ownerId !== p.userId)) {
+        throw new HttpError(404, "ruleset not found");
+      }
+      const copy = await repo.createRuleset({
+        ownerId: p.userId,
+        ownerEmail: await principalEmail(p, repo, auth),
+        name: `${src.name} (fork)`,
+        slug: slugify(`${src.name}-fork`),
+        description: src.description,
+        visibility: "private",
+        language: src.language,
+        focus: src.focus,
+        instructions: src.instructions,
+      });
+      return ok(copy, 201);
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/api\/rulesets\/(?<id>[^/]+)$/,
+    handler: async ({ principal, params }, repo) => {
+      const p = requirePrincipal(principal);
+      const r = await repo.getRuleset(params.id!);
+      if (!r || (r.visibility !== "public" && r.ownerId !== p.userId)) {
+        throw new HttpError(404, "ruleset not found");
+      }
+      return ok(r);
+    },
+  },
+  {
+    method: "PUT",
+    pattern: /^\/api\/rulesets\/(?<id>[^/]+)$/,
+    handler: async ({ principal, params, body }, repo) => {
+      const p = requirePrincipal(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const patch: UpdateRulesetPatch = {};
+      if (typeof b.name === "string") patch.name = b.name;
+      if (typeof b.description === "string") patch.description = b.description;
+      if (b.visibility !== undefined) patch.visibility = asVisibility(b.visibility);
+      if (typeof b.language === "string") patch.language = b.language;
+      if (typeof b.focus === "string") patch.focus = b.focus;
+      if (typeof b.instructions === "string") patch.instructions = b.instructions;
+      // updateRuleset is owner-scoped → EntityNotFoundError (404) for non-owners.
+      return ok(await repo.updateRuleset(params.id!, p.userId, patch));
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/api\/rulesets\/(?<id>[^/]+)$/,
+    handler: async ({ principal, params }, repo) => {
+      const p = requirePrincipal(principal);
+      await repo.deleteRuleset(params.id!, p.userId);
+      return ok({ ok: true });
     },
   },
   {
