@@ -12,6 +12,7 @@ import type { Repository } from "./persistence/repository.js";
 import {
   SKILL_NAME,
   buildInstallScript,
+  buildOrchestratorSkill,
   buildReviewSkill,
   rulesetSkillName,
 } from "./skill/review-skill.js";
@@ -61,16 +62,20 @@ export function createAppHandler(deps: AppDeps) {
   const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "");
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
+    // Derive the server's own origin so the orchestrator skill can call back to
+    // fetch a named user's public rulesets (X-Forwarded-* honoured behind a proxy).
+    const baseUrl = requestOrigin(req);
     // Local Claude Code skill (public artifact — no auth): one-line installer
-    // and the raw SKILL.md, generated from the shared review kernel.
+    // and the raw SKILL.md. The default skill is the orchestrator (fetches a
+    // named user's public rulesets on demand); generated from the shared kernel.
     if (path === "/skill/install.sh") {
       res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
-      res.end(buildInstallScript(buildReviewSkill()));
+      res.end(buildInstallScript(buildOrchestratorSkill(baseUrl)));
       return;
     }
     if (path === `/skill/${SKILL_NAME}/SKILL.md` || path === "/skill/SKILL.md") {
       res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
-      res.end(buildReviewSkill());
+      res.end(buildOrchestratorSkill(baseUrl));
       return;
     }
     // Per-ruleset skill: public → open; private → requires the owner's token.
@@ -124,6 +129,23 @@ export function createAppHandler(deps: AppDeps) {
     if (path.startsWith("/api")) return api(req, res);
     return serveStatic(path, res);
   };
+}
+
+/**
+ * The origin (scheme://host) the request reached us on, so artifacts we generate
+ * can call back to this server. Honours X-Forwarded-Proto/Host set by a reverse
+ * proxy; falls back to the Host header. Empty when neither is present (the skill
+ * then falls back to its REVIEWPILOT_URL env var).
+ */
+function requestOrigin(req: IncomingMessage): string {
+  const header = (name: string): string => {
+    const v = req.headers[name];
+    return (Array.isArray(v) ? v[0] : v)?.split(",")[0]?.trim() ?? "";
+  };
+  const host = header("x-forwarded-host") || header("host");
+  if (!host) return "";
+  const proto = header("x-forwarded-proto") || "http";
+  return `${proto}://${host}`;
 }
 
 /** Start the unified HTTP server. */

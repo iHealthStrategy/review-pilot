@@ -278,10 +278,13 @@ export function runRepositoryContract(
   test(`${name}: users — create, fetch by id/email, count, role update`, async () => {
     const repo = await makeRepo();
     assert.equal(await repo.countUsers(), 0);
-    const u = await repo.createUser({ email: "a@x.com", passwordHash: "h1", role: "admin" });
+    const u = await repo.createUser({ email: "a@x.com", handle: "alice", passwordHash: "h1", role: "admin" });
     assert.equal(u.role, "admin");
+    assert.equal(u.handle, "alice");
     assert.equal((await repo.getUserById(u.id))?.email, "a@x.com");
     assert.equal((await repo.getUserByEmail("a@x.com"))?.id, u.id);
+    assert.equal((await repo.getUserByHandle("alice"))?.id, u.id);
+    assert.equal(await repo.getUserByHandle("nobody"), null);
     assert.equal(await repo.getUserByEmail("missing@x.com"), null);
     assert.equal(await repo.countUsers(), 1);
     const upgraded = await repo.updateUserRole(u.id, "member");
@@ -292,7 +295,7 @@ export function runRepositoryContract(
 
   test(`${name}: api tokens — create, lookup by hash, list, owner-scoped revoke`, async () => {
     const repo = await makeRepo();
-    const u = await repo.createUser({ email: "t@x.com", passwordHash: "h", role: "member" });
+    const u = await repo.createUser({ email: "t@x.com", handle: "tom", passwordHash: "h", role: "member" });
     const tok = await repo.createApiToken({
       userId: u.id,
       name: "ci",
@@ -355,6 +358,9 @@ export function runRepositoryContract(
       repo.createRuleset({
         ownerId,
         ownerEmail: ownerId + "@x.com",
+        ownerHandle: ownerId,
+        project: "github.com/" + ownerId + "/" + name2.toLowerCase(),
+        projectLabel: ownerId + "/" + name2.toLowerCase(),
         name: name2,
         slug: name2.toLowerCase(),
         description: "d",
@@ -362,6 +368,9 @@ export function runRepositoryContract(
         language: "中文",
         focus: "perf",
         instructions: "be strict",
+        rules: [
+          { title: "SQL", instruction: "check injection", globs: ["**"], languages: ["sql"], topics: ["security"] },
+        ],
       });
 
     const a = await mk("u1", "Strict", "public");
@@ -371,9 +380,24 @@ export function runRepositoryContract(
     assert.equal((await repo.listRulesetsByOwner("u1")).length, 2);
     assert.equal((await repo.listPublicRulesets()).length, 2); // Strict + Other
     assert.equal((await repo.getRuleset(a.id))?.name, "Strict");
+    assert.equal((await repo.getRuleset(a.id))?.ownerHandle, "u1");
+    assert.equal((await repo.getRuleset(a.id))?.project, "github.com/u1/strict");
+    assert.deepEqual((await repo.getRuleset(a.id))?.rules, [
+      { title: "SQL", instruction: "check injection", globs: ["**"], languages: ["sql"], topics: ["security"] },
+    ]);
 
-    const upd = await repo.updateRuleset(a.id, "u1", { focus: "security", visibility: "private" });
+    // Per-project lookup (the auto-grow upsert key) is owner-scoped.
+    assert.equal((await repo.findRulesetByOwnerAndProject("u1", "github.com/u1/strict"))?.id, a.id);
+    assert.equal(await repo.findRulesetByOwnerAndProject("u2", "github.com/u1/strict"), null);
+    assert.equal(await repo.findRulesetByOwnerAndProject("u1", "github.com/u1/missing"), null);
+
+    const upd = await repo.updateRuleset(a.id, "u1", {
+      focus: "security",
+      visibility: "private",
+      rules: [{ title: "Perf", instruction: "no N+1", globs: [], languages: [], topics: [] }],
+    });
     assert.equal(upd.focus, "security");
+    assert.deepEqual(upd.rules, [{ title: "Perf", instruction: "no N+1", globs: [], languages: [], topics: [] }]);
     assert.equal((await repo.listPublicRulesets()).length, 1); // Strict now private
 
     // Update/delete by a non-owner is a no-op / not-found.

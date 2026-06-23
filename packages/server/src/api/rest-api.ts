@@ -22,8 +22,8 @@ import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
 import { type Bucket, aggregateUsage, defaultSince } from "../usage/aggregate.js";
-import { slugify } from "../skill/review-skill.js";
-import type { RulesetVisibility } from "../domain/entities.js";
+import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
+import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
 import {
   type EnvAdmin,
@@ -67,7 +67,14 @@ interface AuthConfig {
 
 /** Public user view for the env admin (synthetic; no DB timestamps). */
 function envAdminUser(admin: EnvAdmin) {
-  return { id: admin.id, email: admin.email, role: "admin" as const, createdAt: "", updatedAt: "" };
+  return {
+    id: admin.id,
+    email: admin.email,
+    handle: handleFromEmail(admin.email),
+    role: "admin" as const,
+    createdAt: "",
+    updatedAt: "",
+  };
 }
 
 type Handler = (
@@ -144,7 +151,14 @@ function isEmail(s: string): boolean {
 
 /** API-safe user view — never leaks the password hash. */
 function publicUser(u: User) {
-  return { id: u.id, email: u.email, role: u.role, createdAt: u.createdAt, updatedAt: u.updatedAt };
+  return {
+    id: u.id,
+    email: u.email,
+    handle: u.handle,
+    role: u.role,
+    createdAt: u.createdAt,
+    updatedAt: u.updatedAt,
+  };
 }
 /** API-safe token view — never leaks the token hash. */
 function publicToken(t: ApiToken) {
@@ -177,6 +191,68 @@ function asVisibility(v: unknown): RulesetVisibility {
   return v === "public" ? "public" : "private";
 }
 
+/** Derive a candidate public handle from an email local-part. */
+function handleFromEmail(email: string): string {
+  return slugify(email.split("@")[0] ?? "user");
+}
+
+/**
+ * Generate a unique handle from an email, appending `-N` on collision against
+ * existing DB users or the supplied reserved set (e.g. the env admin's handle).
+ */
+async function generateHandle(
+  email: string,
+  repo: Repository,
+  reserved: readonly string[],
+): Promise<string> {
+  const base = handleFromEmail(email);
+  let candidate = base;
+  let n = 2;
+  while (reserved.includes(candidate) || (await repo.getUserByHandle(candidate))) {
+    candidate = `${base}-${n++}`;
+  }
+  return candidate;
+}
+
+/** Resolve a principal's public handle (env admin or DB user). */
+async function principalHandle(
+  p: Principal,
+  repo: Repository,
+  auth: AuthConfig,
+): Promise<string> {
+  if (p.userId === ENV_ADMIN_ID && auth.envAdmin) return handleFromEmail(auth.envAdmin.email);
+  const user = await repo.getUserById(p.userId);
+  return user?.handle ?? "";
+}
+
+/**
+ * Coerce request `rules` into validated ReviewRule[] (selectors default to []).
+ * When `forcePending` is set, every rule is marked pending (the candidate path);
+ * otherwise the per-rule `pending` flag is honoured (the UI promote/keep path).
+ */
+function parseRules(v: unknown, forcePending = false): ReviewRule[] {
+  if (!Array.isArray(v)) return [];
+  const asStrArray = (x: unknown): string[] =>
+    Array.isArray(x) ? x.filter((s): s is string => typeof s === "string" && s.length > 0) : [];
+  const rules: ReviewRule[] = [];
+  for (const item of v) {
+    if (!item || typeof item !== "object") continue;
+    const r = item as Record<string, unknown>;
+    const title = typeof r.title === "string" ? r.title.trim() : "";
+    const instruction = typeof r.instruction === "string" ? r.instruction.trim() : "";
+    if (!instruction) continue; // a rule with no instruction is meaningless
+    rules.push({
+      title: title || "Rule",
+      instruction,
+      globs: asStrArray(r.globs),
+      languages: asStrArray(r.languages),
+      topics: asStrArray(r.topics),
+      ...(forcePending || r.pending === true ? { pending: true } : {}),
+    });
+  }
+  return rules;
+}
+
 const ROUTES: Route[] = [
   // --- Authentication & account ---
   {
@@ -201,8 +277,14 @@ const ROUTES: Route[] = [
       // read-only viewers (the env admin upgrades them).
       const role: UserRole =
         !auth.envAdmin && (await repo.countUsers()) === 0 ? "admin" : "viewer";
+      const handle = await generateHandle(
+        email,
+        repo,
+        auth.envAdmin ? [handleFromEmail(auth.envAdmin.email)] : [],
+      );
       const user = await repo.createUser({
         email,
+        handle,
         passwordHash: hashPassword(password),
         role,
       });
@@ -342,9 +424,13 @@ const ROUTES: Route[] = [
       const p = requirePrincipal(principal);
       const b = (body ?? {}) as Record<string, unknown>;
       const name = asString(b.name, "name");
+      const project = normalizeProjectKey(typeof b.project === "string" ? b.project : "");
       const ruleset = await repo.createRuleset({
         ownerId: p.userId,
         ownerEmail: await principalEmail(p, repo, auth),
+        ownerHandle: await principalHandle(p, repo, auth),
+        project,
+        projectLabel: typeof b.projectLabel === "string" ? b.projectLabel : project,
         name,
         slug: slugify(name),
         description: typeof b.description === "string" ? b.description : "",
@@ -352,6 +438,7 @@ const ROUTES: Route[] = [
         language: typeof b.language === "string" ? b.language : "",
         focus: typeof b.focus === "string" ? b.focus : "",
         instructions: typeof b.instructions === "string" ? b.instructions : "",
+        rules: parseRules(b.rules),
       });
       return ok(ruleset, 201);
     },
@@ -368,6 +455,11 @@ const ROUTES: Route[] = [
       const copy = await repo.createRuleset({
         ownerId: p.userId,
         ownerEmail: await principalEmail(p, repo, auth),
+        ownerHandle: await principalHandle(p, repo, auth),
+        // A fork is a manual adoption — not the auto-grown per-project ruleset, so
+        // it claims no project slot (keeps the (owner, project) invariant intact).
+        project: "",
+        projectLabel: "",
         name: `${src.name} (fork)`,
         slug: slugify(`${src.name}-fork`),
         description: src.description,
@@ -375,8 +467,53 @@ const ROUTES: Route[] = [
         language: src.language,
         focus: src.focus,
         instructions: src.instructions,
+        // Forked candidates arrive already-promoted (no pending state carried over).
+        rules: src.rules.map((r) => ({ ...r, pending: false })),
       });
       return ok(copy, 201);
+    },
+  },
+  {
+    // Auto-grow: the local skill submits extracted key points as PENDING
+    // candidate rules into the caller's OWN per-project ruleset (upsert by
+    // (owner, project)). PAT/session-authenticated; the owner promotes them later.
+    method: "POST",
+    pattern: /^\/api\/rulesets\/candidates$/,
+    handler: async ({ principal, body, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const project = normalizeProjectKey(asString(b.project, "project"));
+      const projectLabel = typeof b.projectLabel === "string" && b.projectLabel ? b.projectLabel : project;
+      const candidates = parseRules(b.rules, true); // forced pending
+      if (!candidates.length) throw new HttpError(400, "field 'rules' must contain at least one rule");
+
+      const existing = await repo.findRulesetByOwnerAndProject(p.userId, project);
+      if (existing) {
+        // Append, de-duplicating by (title, instruction) against current rules.
+        const seen = new Set(existing.rules.map((r) => `${r.title} ${r.instruction}`));
+        const fresh = candidates.filter((r) => !seen.has(`${r.title} ${r.instruction}`));
+        const updated = await repo.updateRuleset(existing.id, p.userId, {
+          rules: [...existing.rules, ...fresh],
+        });
+        return ok({ ruleset: updated, added: fresh.length, skipped: candidates.length - fresh.length }, 200);
+      }
+      const name = typeof b.name === "string" && b.name ? b.name : projectLabel || "我的项目规则";
+      const created = await repo.createRuleset({
+        ownerId: p.userId,
+        ownerEmail: await principalEmail(p, repo, auth),
+        ownerHandle: await principalHandle(p, repo, auth),
+        project,
+        projectLabel,
+        name,
+        slug: slugify(name),
+        description: typeof b.description === "string" ? b.description : "",
+        visibility: "private",
+        language: typeof b.language === "string" ? b.language : "",
+        focus: typeof b.focus === "string" ? b.focus : "",
+        instructions: "",
+        rules: candidates,
+      });
+      return ok({ ruleset: created, added: candidates.length, skipped: 0 }, 201);
     },
   },
   {
@@ -404,6 +541,8 @@ const ROUTES: Route[] = [
       if (typeof b.language === "string") patch.language = b.language;
       if (typeof b.focus === "string") patch.focus = b.focus;
       if (typeof b.instructions === "string") patch.instructions = b.instructions;
+      if (typeof b.projectLabel === "string") patch.projectLabel = b.projectLabel;
+      if (Array.isArray(b.rules)) patch.rules = parseRules(b.rules);
       // updateRuleset is owner-scoped → EntityNotFoundError (404) for non-owners.
       return ok(await repo.updateRuleset(params.id!, p.userId, patch));
     },
@@ -415,6 +554,31 @@ const ROUTES: Route[] = [
       const p = requirePrincipal(principal);
       await repo.deleteRuleset(params.id!, p.userId);
       return ok({ ok: true });
+    },
+  },
+  {
+    // Public discovery: a user's public rulesets by handle. No auth — this is
+    // how the local orchestrator skill fetches "let X review my changes".
+    method: "GET",
+    pattern: /^\/api\/u\/(?<handle>[^/]+)\/rulesets$/,
+    handler: async ({ params, query }, repo) => {
+      const handle = slugify(params.handle!);
+      const user = await repo.getUserByHandle(handle);
+      const all = await repo.listPublicRulesets();
+      // Optional project filter: a project-scoped ruleset matches its own key;
+      // an "any project" ruleset (project === "") always matches.
+      const projectFilter = normalizeProjectKey(query.get("project") ?? "");
+      const rulesets = all
+        .filter((r) => r.ownerHandle === handle)
+        .filter((r) => !projectFilter || r.project === "" || r.project === projectFilter)
+        // Pending candidates are private to the owner — never expose via discovery.
+        .map((r) => ({ ...r, rules: r.rules.filter((rule) => !rule.pending) }));
+      return ok({
+        handle,
+        ...(projectFilter ? { project: projectFilter } : {}),
+        owner: user ? { handle: user.handle, email: user.email } : { handle },
+        rulesets,
+      });
     },
   },
   {

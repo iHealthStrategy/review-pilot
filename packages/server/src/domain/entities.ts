@@ -118,6 +118,8 @@ export type UserRole = "viewer" | "member" | "admin";
 export interface User {
   readonly id: string;
   readonly email: string;
+  /** Public, unique handle (e.g. for community discovery `…/u/<handle>`). */
+  readonly handle: string;
   /** scrypt hash, encoded `<saltHex>:<hashHex>`. Never serialized to the API. */
   readonly passwordHash: string;
   readonly role: UserRole;
@@ -167,6 +169,29 @@ export interface TokenUsage {
 export type RulesetVisibility = "private" | "public";
 
 /**
+ * One review rule with selectors for on-demand loading. A rule applies to a
+ * change when its selectors match the changed files; empty selectors = always
+ * considered. Matching happens locally in the skill, so code never leaves the
+ * machine. `topics` are semantic hints the model uses to judge relevance.
+ */
+export interface ReviewRule {
+  readonly title: string;
+  readonly instruction: string;
+  /** Path globs (e.g. `src/db/**`, `**` + `/*.sql`); empty = any path. */
+  readonly globs: string[];
+  /** Languages by extension family (e.g. "sql", "python"); empty = any. */
+  readonly languages: string[];
+  /** Semantic topics (e.g. "security", "performance"); empty = always. */
+  readonly topics: string[];
+  /**
+   * Auto-extracted candidate rule awaiting the owner's confirmation. Pending
+   * rules are stored (auto-submitted by the skill) but NOT applied during review
+   * and NOT exposed via public discovery until the owner promotes them.
+   */
+  readonly pending?: boolean;
+}
+
+/**
  * A user-authored set of review rules/preferences. The platform turns it into a
  * local Claude Code skill (named `reviewpilot-<slug>`). Public rulesets are
  * browsable + installable by anyone (the "community"); private ones need the
@@ -177,6 +202,17 @@ export interface ReviewRuleset {
   readonly ownerId: string;
   /** Denormalized for community display. */
   readonly ownerEmail: string;
+  /** Denormalized owner handle — the community discovery key (`…/u/<handle>`). */
+  readonly ownerHandle: string;
+  /**
+   * Normalized project key this ruleset governs (e.g. `github.com/acme/app`,
+   * derived from the git remote). Rules are managed per project; "" = applies to
+   * any project. A user has at most one ruleset per (owner, project) for the
+   * skill's auto-grown candidates, but may create more manually.
+   */
+  readonly project: string;
+  /** Human-facing project label (e.g. the repo full name); display only. */
+  readonly projectLabel: string;
   readonly name: string;
   /** Stable, filesystem-safe slug for the skill name (immutable after create). */
   readonly slug: string;
@@ -186,8 +222,10 @@ export interface ReviewRuleset {
   readonly language: string;
   /** Short review emphasis (prioritised in the skill). */
   readonly focus: string;
-  /** Freeform custom rules (markdown), woven into the generated skill. */
+  /** Freeform rules (markdown) that ALWAYS apply, woven into the skill. */
   readonly instructions: string;
+  /** Structured rules with selectors — loaded on demand by relevance. */
+  readonly rules: ReviewRule[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }

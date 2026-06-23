@@ -10,6 +10,7 @@ import type {
   RepoInsight,
   ReviewEngineKind,
   ReviewJob,
+  ReviewRule,
   ReviewRuleset,
   RulesetVisibility,
   Severity,
@@ -192,6 +193,7 @@ function toFinding(r: FindingRow): Finding {
 interface UserRow {
   id: string;
   email: string;
+  handle: string;
   password_hash: string;
   role: string;
   created_at: string;
@@ -201,6 +203,7 @@ function toUser(r: UserRow): User {
   return {
     id: r.id,
     email: r.email,
+    handle: r.handle ?? "",
     passwordHash: r.password_hash,
     role: r.role as UserRole,
     createdAt: r.created_at,
@@ -257,6 +260,9 @@ interface RulesetRow {
   id: string;
   owner_id: string;
   owner_email: string;
+  owner_handle: string;
+  project: string;
+  project_label: string;
   name: string;
   slug: string;
   description: string;
@@ -264,6 +270,7 @@ interface RulesetRow {
   language: string;
   focus: string;
   instructions: string;
+  rules: string;
   created_at: string;
   updated_at: string;
 }
@@ -272,6 +279,9 @@ function toRuleset(r: RulesetRow): ReviewRuleset {
     id: r.id,
     ownerId: r.owner_id,
     ownerEmail: r.owner_email,
+    ownerHandle: r.owner_handle ?? "",
+    project: r.project ?? "",
+    projectLabel: r.project_label ?? "",
     name: r.name,
     slug: r.slug,
     description: r.description,
@@ -279,6 +289,7 @@ function toRuleset(r: RulesetRow): ReviewRuleset {
     language: r.language,
     focus: r.focus,
     instructions: r.instructions,
+    rules: JSON.parse(r.rules || "[]") as ReviewRule[],
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -725,15 +736,16 @@ export class SqlRepository implements Repository {
     const user: User = {
       id: this.idGen("usr"),
       email: input.email,
+      handle: input.handle,
       passwordHash: input.passwordHash,
       role: input.role,
       createdAt: now,
       updatedAt: now,
     };
     await this.client.run(
-      `INSERT INTO users (id, email, password_hash, role, created_at, updated_at)
-       VALUES (${placeholderList(this.client.dialect, 6)})`,
-      [user.id, user.email, user.passwordHash, user.role, user.createdAt, user.updatedAt],
+      `INSERT INTO users (id, email, handle, password_hash, role, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 7)})`,
+      [user.id, user.email, user.handle, user.passwordHash, user.role, user.createdAt, user.updatedAt],
     );
     return user;
   }
@@ -750,6 +762,14 @@ export class SqlRepository implements Repository {
     const row = await this.client.get<UserRow>(
       `SELECT * FROM users WHERE email = ${this.ph(1)}`,
       [email],
+    );
+    return row ? toUser(row) : null;
+  }
+
+  async getUserByHandle(handle: string): Promise<User | null> {
+    const row = await this.client.get<UserRow>(
+      `SELECT * FROM users WHERE handle = ${this.ph(1)}`,
+      [handle],
     );
     return row ? toUser(row) : null;
   }
@@ -888,6 +908,9 @@ export class SqlRepository implements Repository {
       id: this.idGen("rule"),
       ownerId: input.ownerId,
       ownerEmail: input.ownerEmail,
+      ownerHandle: input.ownerHandle,
+      project: input.project,
+      projectLabel: input.projectLabel,
       name: input.name,
       slug: input.slug,
       description: input.description,
@@ -895,14 +918,15 @@ export class SqlRepository implements Repository {
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
+      rules: input.rules,
       createdAt: now,
       updatedAt: now,
     };
     await this.client.run(
       `INSERT INTO rulesets
-         (id, owner_id, owner_email, name, slug, description, visibility, language, focus, instructions, created_at, updated_at)
-       VALUES (${placeholderList(this.client.dialect, 12)})`,
-      [r.id, r.ownerId, r.ownerEmail, r.name, r.slug, r.description, r.visibility, r.language, r.focus, r.instructions, r.createdAt, r.updatedAt],
+         (id, owner_id, owner_email, owner_handle, project, project_label, name, slug, description, visibility, language, focus, instructions, rules, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 16)})`,
+      [r.id, r.ownerId, r.ownerEmail, r.ownerHandle, r.project, r.projectLabel, r.name, r.slug, r.description, r.visibility, r.language, r.focus, r.instructions, JSON.stringify(r.rules), r.createdAt, r.updatedAt],
     );
     return r;
   }
@@ -921,6 +945,17 @@ export class SqlRepository implements Repository {
       [ownerId],
     );
     return rows.map(toRuleset);
+  }
+
+  async findRulesetByOwnerAndProject(
+    ownerId: string,
+    project: string,
+  ): Promise<ReviewRuleset | null> {
+    const row = await this.client.get<RulesetRow>(
+      `SELECT * FROM rulesets WHERE owner_id = ${this.ph(1)} AND project = ${this.ph(2)} ORDER BY updated_at DESC`,
+      [ownerId, project],
+    );
+    return row ? toRuleset(row) : null;
   }
 
   async listPublicRulesets(): Promise<ReviewRuleset[]> {
@@ -944,8 +979,9 @@ export class SqlRepository implements Repository {
     await this.client.run(
       `UPDATE rulesets SET name = ${this.ph(1)}, description = ${this.ph(2)},
          visibility = ${this.ph(3)}, language = ${this.ph(4)}, focus = ${this.ph(5)},
-         instructions = ${this.ph(6)}, updated_at = ${this.ph(7)} WHERE id = ${this.ph(8)}`,
-      [next.name, next.description, next.visibility, next.language, next.focus, next.instructions, next.updatedAt, id],
+         instructions = ${this.ph(6)}, rules = ${this.ph(7)}, project_label = ${this.ph(8)},
+         updated_at = ${this.ph(9)} WHERE id = ${this.ph(10)}`,
+      [next.name, next.description, next.visibility, next.language, next.focus, next.instructions, JSON.stringify(next.rules), next.projectLabel, next.updatedAt, id],
     );
     return next;
   }

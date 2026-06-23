@@ -100,6 +100,106 @@ test("rulesets: cannot edit someone else's; can fork a public one", () =>
     assert.equal((await (await fetch(`${base}/api/rulesets`, { headers: auth(bob) })).json() as any[]).length, 1);
   }));
 
+test("rulesets: register assigns a handle; public discovery by handle is unauthenticated", () =>
+  withApi(async (base) => {
+    // Two users share an email local-part → handles must stay unique.
+    const a = await register(base, "alice@x.com");
+    const a2 = await register(base, "alice@y.com");
+    const meA = (await (await fetch(`${base}/api/auth/me`, { headers: auth(a) })).json()) as any;
+    const meA2 = (await (await fetch(`${base}/api/auth/me`, { headers: auth(a2) })).json()) as any;
+    assert.equal(meA.user.handle, "alice");
+    assert.equal(meA2.user.handle, "alice-2"); // collision suffixed
+    assert.notEqual(meA.user.handle, meA2.user.handle);
+
+    // alice publishes one public + one private ruleset.
+    const pub = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(a),
+      body: JSON.stringify({
+        name: "Public Set", visibility: "public", instructions: "always rule",
+        rules: [{ title: "SQL", instruction: "no injection", globs: ["**/*.sql"], languages: ["sql"], topics: ["security"] }],
+      }),
+    })).json()) as any;
+    assert.equal(pub.ownerHandle, "alice");
+    assert.equal(pub.rules.length, 1);
+    await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(a),
+      body: JSON.stringify({ name: "Hidden", visibility: "private", instructions: "secret" }),
+    });
+
+    // Public discovery: NO Authorization header, only public rulesets returned.
+    const disc = await fetch(`${base}/api/u/alice/rulesets`);
+    assert.equal(disc.status, 200);
+    const body = (await disc.json()) as any;
+    assert.equal(body.handle, "alice");
+    assert.equal(body.owner.email, "alice@x.com");
+    assert.equal(body.rulesets.length, 1); // private one excluded
+    assert.equal(body.rulesets[0].id, pub.id);
+    assert.equal(body.rulesets[0].rules[0].title, "SQL");
+
+    // Unknown handle → empty, still 200 (skill handles "not found" gracefully).
+    const none = (await (await fetch(`${base}/api/u/nobody/rulesets`)).json()) as any;
+    assert.equal(none.rulesets.length, 0);
+  }));
+
+test("candidates: skill auto-grows the caller's per-project ruleset (pending) and discovery hides pending", () =>
+  withApi(async (base) => {
+    const alice = await register(base, "alice@x.com");
+
+    // First submit: no ruleset for this project yet → creates one (private), pending rules.
+    const sub1 = await fetch(`${base}/api/rulesets/candidates`, {
+      method: "POST", headers: auth(alice),
+      body: JSON.stringify({
+        // Non-normalized remote URL — server normalizes to github.com/acme/app.
+        project: "git@github.com:acme/App.git", projectLabel: "acme/App",
+        rules: [{ title: "迁移", instruction: "DB 迁移需可回滚", globs: ["**/migrations/**"], topics: ["db"] }],
+      }),
+    });
+    assert.equal(sub1.status, 201);
+    const r1 = (await sub1.json()) as any;
+    assert.equal(r1.added, 1);
+    assert.equal(r1.ruleset.project, "github.com/acme/app");
+    assert.equal(r1.ruleset.visibility, "private");
+    assert.equal(r1.ruleset.rules[0].pending, true);
+
+    // Second submit, same project (different remote spelling) → upserts same ruleset.
+    const sub2 = await fetch(`${base}/api/rulesets/candidates`, {
+      method: "POST", headers: auth(alice),
+      body: JSON.stringify({
+        project: "https://github.com/acme/app",
+        rules: [
+          { title: "迁移", instruction: "DB 迁移需可回滚" }, // dup → skipped
+          { title: "日志", instruction: "禁止 console.log" }, // new
+        ],
+      }),
+    });
+    const r2 = (await sub2.json()) as any;
+    assert.equal(sub2.status, 200);
+    assert.equal(r2.ruleset.id, r1.ruleset.id, "same project → same ruleset");
+    assert.equal(r2.added, 1);
+    assert.equal(r2.skipped, 1);
+    assert.equal(r2.ruleset.rules.length, 2);
+
+    // Make it public — discovery must still hide pending candidates.
+    await fetch(`${base}/api/rulesets/${r1.ruleset.id}`, {
+      method: "PUT", headers: auth(alice), body: JSON.stringify({ visibility: "public" }),
+    });
+    const disc = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/app`)).json()) as any;
+    assert.equal(disc.rulesets.length, 1);
+    assert.equal(disc.rulesets[0].rules.length, 0, "pending candidates hidden from discovery");
+
+    // Owner promotes one candidate (clear pending) via PUT → discovery now shows it.
+    const promoted = r2.ruleset.rules.map((x: any, i: number) => ({ ...x, pending: i === 0 ? false : x.pending }));
+    await fetch(`${base}/api/rulesets/${r1.ruleset.id}`, {
+      method: "PUT", headers: auth(alice), body: JSON.stringify({ rules: promoted }),
+    });
+    const disc2 = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/app`)).json()) as any;
+    assert.equal(disc2.rulesets[0].rules.length, 1, "promoted rule now visible");
+
+    // A different project filter excludes this project-scoped ruleset.
+    const other = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/other`)).json()) as any;
+    assert.equal(other.rulesets.length, 0);
+  }));
+
 test("ruleset skill: public installs openly; private needs the owner's token", () =>
   withApi(async (base) => {
     const owner = await register(base, "owner@x.com");

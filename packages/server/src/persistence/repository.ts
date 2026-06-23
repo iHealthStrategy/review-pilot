@@ -11,6 +11,7 @@ import type {
   RepoInsight,
   ReviewEngineKind,
   ReviewJob,
+  ReviewRule,
   ReviewRuleset,
   RulesetVisibility,
   Severity,
@@ -84,6 +85,8 @@ export interface UpsertRepoInsightInput {
 
 export interface CreateUserInput {
   email: string;
+  /** Unique public handle (caller ensures uniqueness). */
+  handle: string;
   /** Pre-hashed (scrypt) — the repository never sees plaintext passwords. */
   passwordHash: string;
   role: UserRole;
@@ -119,6 +122,11 @@ export interface TokenUsageFilter {
 export interface CreateRulesetInput {
   ownerId: string;
   ownerEmail: string;
+  ownerHandle: string;
+  /** Normalized project key ("" = any project). */
+  project: string;
+  /** Human-facing project label (display only). */
+  projectLabel: string;
   name: string;
   slug: string;
   description: string;
@@ -126,9 +134,10 @@ export interface CreateRulesetInput {
   language: string;
   focus: string;
   instructions: string;
+  rules: ReviewRule[];
 }
 
-/** Editable fields (slug + owner are immutable). */
+/** Editable fields (slug + owner + project are immutable). */
 export interface UpdateRulesetPatch {
   name?: string;
   description?: string;
@@ -136,6 +145,8 @@ export interface UpdateRulesetPatch {
   language?: string;
   focus?: string;
   instructions?: string;
+  rules?: ReviewRule[];
+  projectLabel?: string;
 }
 
 /** Mutable fields that may accompany a job state transition. */
@@ -209,6 +220,7 @@ export interface Repository {
   createUser(input: CreateUserInput): Promise<User>;
   getUserById(id: string): Promise<User | null>;
   getUserByEmail(email: string): Promise<User | null>;
+  getUserByHandle(handle: string): Promise<User | null>;
   listUsers(): Promise<User[]>;
   /** Total user count — used to bootstrap the first user as admin. */
   countUsers(): Promise<number>;
@@ -232,6 +244,11 @@ export interface Repository {
   createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset>;
   getRuleset(id: string): Promise<ReviewRuleset | null>;
   listRulesetsByOwner(ownerId: string): Promise<ReviewRuleset[]>;
+  /** The owner's ruleset for a given project key, or null (auto-grow upsert). */
+  findRulesetByOwnerAndProject(
+    ownerId: string,
+    project: string,
+  ): Promise<ReviewRuleset | null>;
   listPublicRulesets(): Promise<ReviewRuleset[]>;
   /** Update is owner-scoped: a non-owner edit throws EntityNotFoundError. */
   updateRuleset(id: string, ownerId: string, patch: UpdateRulesetPatch): Promise<ReviewRuleset>;

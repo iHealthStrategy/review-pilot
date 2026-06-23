@@ -357,6 +357,7 @@ export class MemoryRepository implements Repository {
     const user: User = {
       id: this.idGen("usr"),
       email: input.email,
+      handle: input.handle,
       passwordHash: input.passwordHash,
       role: input.role,
       createdAt: now,
@@ -373,6 +374,10 @@ export class MemoryRepository implements Repository {
 
   async getUserByEmail(email: string): Promise<User | null> {
     return Object.values(this.data.users).find((u) => u.email === email) ?? null;
+  }
+
+  async getUserByHandle(handle: string): Promise<User | null> {
+    return Object.values(this.data.users).find((u) => u.handle === handle) ?? null;
   }
 
   async listUsers(): Promise<User[]> {
@@ -467,6 +472,9 @@ export class MemoryRepository implements Repository {
       id: this.idGen("rule"),
       ownerId: input.ownerId,
       ownerEmail: input.ownerEmail,
+      ownerHandle: input.ownerHandle,
+      project: input.project,
+      projectLabel: input.projectLabel,
       name: input.name,
       slug: input.slug,
       description: input.description,
@@ -474,6 +482,7 @@ export class MemoryRepository implements Repository {
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
+      rules: input.rules,
       createdAt: now,
       updatedAt: now,
     };
@@ -490,6 +499,17 @@ export class MemoryRepository implements Repository {
     return Object.values(this.data.rulesets)
       .filter((r) => r.ownerId === ownerId)
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async findRulesetByOwnerAndProject(
+    ownerId: string,
+    project: string,
+  ): Promise<ReviewRuleset | null> {
+    return (
+      Object.values(this.data.rulesets).find(
+        (r) => r.ownerId === ownerId && r.project === project,
+      ) ?? null
+    );
   }
 
   async listPublicRulesets(): Promise<ReviewRuleset[]> {

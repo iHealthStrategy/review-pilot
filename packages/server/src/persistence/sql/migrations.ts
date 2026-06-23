@@ -156,6 +156,24 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_rulesets_visibility ON rulesets(visibility);
     `,
   },
+  {
+    id: "0006_handles_and_rules",
+    up: () => `
+      ALTER TABLE users ADD COLUMN handle TEXT NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
+      ALTER TABLE rulesets ADD COLUMN owner_handle TEXT NOT NULL DEFAULT '';
+      ALTER TABLE rulesets ADD COLUMN rules TEXT NOT NULL DEFAULT '[]';
+      CREATE INDEX IF NOT EXISTS idx_rulesets_owner_handle ON rulesets(owner_handle);
+    `,
+  },
+  {
+    id: "0007_ruleset_project",
+    up: () => `
+      ALTER TABLE rulesets ADD COLUMN project TEXT NOT NULL DEFAULT '';
+      ALTER TABLE rulesets ADD COLUMN project_label TEXT NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_rulesets_owner_project ON rulesets(owner_id, project);
+    `,
+  },
 ];
 
 /**

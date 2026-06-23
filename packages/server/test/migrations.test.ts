@@ -21,6 +21,13 @@ test("migrations: DDL creates every entity table", () => {
   }
   // PR dedupe is enforced at the schema level.
   assert.match(ddl, /UNIQUE \(repo_id, number\)/);
+  // 0006 adds public handles + structured rules.
+  assert.match(ddl, /ALTER TABLE users ADD COLUMN handle\b/);
+  assert.match(ddl, /ALTER TABLE rulesets ADD COLUMN owner_handle\b/);
+  assert.match(ddl, /ALTER TABLE rulesets ADD COLUMN rules\b/);
+  // 0007 scopes rulesets to a project.
+  assert.match(ddl, /ALTER TABLE rulesets ADD COLUMN project\b/);
+  assert.match(ddl, /ALTER TABLE rulesets ADD COLUMN project_label\b/);
 });
 
 test("migrations: runner applies all then is idempotent", async () => {
@@ -33,6 +40,8 @@ test("migrations: runner applies all then is idempotent", async () => {
     "0003_users_tokens",
     "0004_token_usage",
     "0005_rulesets",
+    "0006_handles_and_rules",
+    "0007_ruleset_project",
   ]);
   // _migrations ledger + each migration body were exec'd.
   assert.ok(client.execs.some((s) => /_migrations/.test(s)));
@@ -45,6 +54,8 @@ test("migrations: runner applies all then is idempotent", async () => {
     { id: "0003_users_tokens" },
     { id: "0004_token_usage" },
     { id: "0005_rulesets" },
+    { id: "0006_handles_and_rules" },
+    { id: "0007_ruleset_project" },
   ]);
   const ran2 = await runMigrations(client);
   assert.deepEqual(ran2, []);

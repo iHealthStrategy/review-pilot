@@ -9,8 +9,11 @@ import { TaskService } from "../src/trigger/trigger-service.js";
 import {
   SKILL_NAME,
   buildInstallScript,
+  buildOrchestratorSkill,
   buildReviewSkill,
+  normalizeProjectKey,
 } from "../src/skill/review-skill.js";
+import type { ReviewRuleset } from "../src/domain/entities.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
@@ -22,6 +25,69 @@ test("buildReviewSkill: valid frontmatter + shared finding schema (no drift)", (
   assert.ok(md.includes(FINDING_SCHEMA_FIELDS), "embeds the shared finding schema");
   assert.match(md, /working/);
   assert.match(md, /code-review-graph/); // structural context step
+});
+
+test("buildOrchestratorSkill: bakes baseUrl + fetches a named user's public rulesets on demand", () => {
+  const md = buildOrchestratorSkill("https://review.example.com/");
+  assert.match(md, /^---\nname: reviewpilot-review\n/);
+  // Base URL baked in (trailing slash trimmed) and used to call the public API.
+  assert.ok(md.includes("https://review.example.com"));
+  assert.ok(!md.includes("review.example.com//"), "trailing slash trimmed");
+  assert.match(md, /\/api\/u\/\$HANDLE\/rulesets/); // public discovery endpoint
+  assert.match(md, /帮我 review/); // recognises the "让 X 帮我 review" trigger
+  assert.match(md, /globs/); // documents local selector matching
+  assert.ok(md.includes(FINDING_SCHEMA_FIELDS), "shares the finding schema");
+});
+
+test("buildOrchestratorSkill: with no baseUrl falls back to REVIEWPILOT_URL env var", () => {
+  const md = buildOrchestratorSkill("");
+  assert.match(md, /REVIEWPILOT_URL/);
+});
+
+test("buildOrchestratorSkill: derives a per-project key and auto-grows candidate rules", () => {
+  const md = buildOrchestratorSkill("https://review.example.com");
+  assert.match(md, /git remote get-url origin/); // project identification
+  assert.match(md, /\/api\/u\/\$HANDLE\/rulesets\?project=\$PROJECT/); // project-scoped fetch
+  assert.match(md, /\/api\/rulesets\/candidates/); // auto-grow submit
+  assert.match(md, /REVIEWPILOT_TOKEN/); // PAT for the write
+  assert.match(md, /pending/i); // candidates land pending
+});
+
+test("normalizeProjectKey: stable cross-form key", () => {
+  assert.equal(normalizeProjectKey("git@github.com:acme/App.git"), "github.com/acme/app");
+  assert.equal(normalizeProjectKey("https://github.com/acme/app"), "github.com/acme/app");
+  assert.equal(normalizeProjectKey("https://user:tok@gitlab.com/g/sub/repo.git/"), "gitlab.com/g/sub/repo");
+  assert.equal(normalizeProjectKey("ssh://git@host:22/x/y.git"), "host:22/x/y");
+  assert.equal(normalizeProjectKey(""), "");
+});
+
+test("buildReviewSkill: structured rules become conditional rule lines with selectors", () => {
+  const ruleset: ReviewRuleset = {
+    id: "r1",
+    ownerId: "u1",
+    ownerEmail: "u1@x.com",
+    ownerHandle: "alice",
+    project: "github.com/alice/backend",
+    projectLabel: "alice/backend",
+    name: "Backend",
+    slug: "backend",
+    description: "",
+    visibility: "public",
+    language: "中文",
+    focus: "",
+    instructions: "",
+    rules: [
+      { title: "SQL safety", instruction: "check injection", globs: ["**/*.sql"], languages: [], topics: ["security"] },
+      { title: "Always", instruction: "no console.log", globs: [], languages: [], topics: [] },
+    ],
+    createdAt: "",
+    updatedAt: "",
+  };
+  const md = buildReviewSkill(ruleset);
+  assert.match(md, /Conditional rules/);
+  assert.match(md, /\*\*SQL safety\*\*.*when:.*paths.*\*\*\/\*\.sql/);
+  assert.match(md, /\*\*Always\*\*.*always/);
+  assert.match(md, /Write the findings in 中文/);
 });
 
 test("buildInstallScript: writes the skill into ~/.claude/skills via a heredoc", () => {

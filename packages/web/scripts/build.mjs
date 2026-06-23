@@ -97,6 +97,22 @@ const html = `<!doctype html>
       .modal .field { margin-bottom: 10px; }
       .modal input, .modal select, .modal textarea { width: 100%; box-sizing: border-box; }
       .modal .result { margin: 8px 0 0; }
+      .modal { width: 640px; }
+      /* Structured conditional-rule editor */
+      .rule-row { border: 1px solid #2a2f3a; border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #11151c; }
+      .rule-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+      .rule-grid2 { display: flex; gap: 8px; align-items: flex-start; }
+      .rule-grid2 textarea { flex: 1; }
+      .rule-grid2 button { white-space: nowrap; }
+      .rule-head { min-height: 0; }
+      .rule-head:empty { display: none; }
+      .rule-pending { border-color: #e7a16e; }
+      .badge-pending { display: inline-block; font-size: 11px; color: #e7a16e; border: 1px solid #e7a16e; border-radius: 4px; padding: 0 6px; margin-right: 6px; }
+      .row-has-pending td { background: rgba(231,161,110,0.06); }
+      /* Info card (orchestrator install) */
+      .card { border: 1px solid #2a2f3a; border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; background: #161a22; }
+      .card h3 { margin: 6px 0 4px; }
+      .card pre { margin: 6px 0; }
       /* Auth gate */
       .auth-gate { position: fixed; inset: 0; background: #0f1115; display: none; align-items: center; justify-content: center; z-index: 200; }
       .auth-gate.open { display: flex; }
@@ -113,6 +129,7 @@ const html = `<!doctype html>
       <h1>🤖 ReviewPilot — 持续代码评审</h1>
       <div class="token" id="userbar" style="display:none">
         <span class="muted" id="user-email"></span>
+        <span class="muted" id="user-handle" title="你的公开用户名(handle)"></span>
         <span class="status" id="user-role"></span>
         <button class="secondary" id="logout">退出登录</button>
       </div>
@@ -248,12 +265,20 @@ const html = `<!doctype html>
         <div class="modal-head"><h2 id="ruleset-modal-title">新建规则集</h2><button class="close" data-close>×</button></div>
         <form id="ruleset-form">
           <input type="hidden" name="id" />
+          <input type="hidden" name="project" />
           <div class="field"><label>名称</label><input name="name" placeholder="我的严格规则" required /></div>
+          <div class="field"><label>项目(git 仓库地址或 host/owner/repo,留空 = 适用所有项目)</label><input name="projectLabel" placeholder="github.com/acme/app" /></div>
           <div class="field"><label>描述</label><input name="description" placeholder="一句话说明这套规则" /></div>
           <div class="field"><label>可见性</label><select name="visibility"><option value="private">私有(仅自己,安装需令牌)</option><option value="public">公开(社区可见可安装)</option></select></div>
           <div class="field"><label>评审语言(留空 = 跟随使用者)</label><input name="language" placeholder="中文" /></div>
           <div class="field"><label>评审重点</label><input name="focus" placeholder="例如:并发安全、SQL 注入、接口兼容性" /></div>
-          <div class="field"><label>自定义规则(markdown,逐条写)</label><textarea name="instructions" rows="6" placeholder="- 禁止提交 console.log&#10;- DB 写操作必须有索引佐证&#10;- 公共 API 变更需向后兼容"></textarea></div>
+          <div class="field"><label>通用规则 / 始终生效(markdown,逐条写)</label><textarea name="instructions" rows="5" placeholder="- 禁止提交 console.log&#10;- DB 写操作必须有索引佐证&#10;- 公共 API 变更需向后兼容"></textarea></div>
+          <div class="field">
+            <label>按需规则(仅当改动命中选择器时加载)</label>
+            <p class="muted" style="margin:.2rem 0 .4rem">选择器留空 = 始终生效。匹配在本地完成,代码不会上传。多个值用逗号分隔。</p>
+            <div id="rs-rules"></div>
+            <button type="button" id="rs-add-rule" class="secondary">+ 添加规则</button>
+          </div>
           <button type="submit">保存</button>
           <p class="muted result" id="ruleset-result"></p>
         </form>
@@ -351,6 +376,7 @@ const html = `<!doctype html>
         if (me) {
           bar.style.display = "";
           document.getElementById("user-email").textContent = me.email;
+          document.getElementById("user-handle").textContent = me.handle ? "@" + me.handle : "";
           const rb = document.getElementById("user-role");
           rb.textContent = ROLE_LABEL[me.role] || me.role;
           rb.className = "status role-" + me.role;
@@ -606,20 +632,76 @@ const html = `<!doctype html>
       };
 
       // --- Review rulesets (community) ---
+      // A structured "conditional rule" editor: each row carries an instruction
+      // plus selectors (globs / languages / topics). Empty selectors = always on.
+      const csv = (a) => (Array.isArray(a) ? a : []).join(", ");
+      const parseCsv = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
+      function addRuleRow(rule) {
+        const r = rule || { title: "", instruction: "", globs: [], languages: [], topics: [], pending: false };
+        const row = document.createElement("div");
+        row.className = "rule-row" + (r.pending ? " rule-pending" : "");
+        row.dataset.pending = r.pending ? "1" : "0";
+        // Pending (auto-extracted) candidates get a badge + a 采纳 toggle.
+        const badge = r.pending
+          ? '<span class="badge-pending">候选 · 待采纳</span> <button type="button" class="secondary" data-adopt-rule>采纳</button>'
+          : "";
+        row.innerHTML =
+          \`<div class="rule-head">\${badge}</div>
+           <div class="rule-grid">
+             <input data-rk="title" placeholder="规则标题(如:SQL 注入)" value="\${esc(r.title || "")}" />
+             <input data-rk="globs" placeholder="路径 globs,如 src/db/**, **/*.sql" value="\${esc(csv(r.globs))}" />
+             <input data-rk="languages" placeholder="语言,如 ts, sql" value="\${esc(csv(r.languages))}" />
+             <input data-rk="topics" placeholder="主题,如 security, performance" value="\${esc(csv(r.topics))}" />
+           </div>
+           <div class="rule-grid2">
+             <textarea data-rk="instruction" rows="2" placeholder="规则正文(命中时应用)">\${esc(r.instruction || "")}</textarea>
+             <button type="button" class="secondary" data-rm-rule>移除</button>
+           </div>\`;
+        row.querySelector("[data-rm-rule]").onclick = () => row.remove();
+        const adopt = row.querySelector("[data-adopt-rule]");
+        if (adopt) adopt.onclick = () => {
+          row.dataset.pending = "0";
+          row.classList.remove("rule-pending");
+          row.querySelector(".rule-head").innerHTML = "";
+        };
+        document.getElementById("rs-rules").appendChild(row);
+      }
+      function collectRules() {
+        const rules = [];
+        document.querySelectorAll("#rs-rules .rule-row").forEach((row) => {
+          const get = (k) => row.querySelector('[data-rk="' + k + '"]').value;
+          const instruction = get("instruction").trim();
+          if (!instruction) return; // skip empty rows
+          rules.push({
+            title: get("title").trim() || "Rule",
+            instruction,
+            globs: parseCsv(get("globs")),
+            languages: parseCsv(get("languages")),
+            topics: parseCsv(get("topics")),
+            pending: row.dataset.pending === "1",
+          });
+        });
+        return rules;
+      }
       function openRulesetModal(rs) {
         const f = document.getElementById("ruleset-form");
         f.reset();
         document.getElementById("ruleset-result").textContent = "";
+        document.getElementById("rs-rules").innerHTML = "";
         document.getElementById("ruleset-modal-title").textContent = rs ? "编辑规则集" : "新建规则集";
         f.id.value = rs ? rs.id : "";
+        f.project.value = rs ? (rs.project || "") : "";
         if (rs) {
           f.name.value = rs.name; f.description.value = rs.description || "";
+          f.projectLabel.value = rs.projectLabel || rs.project || "";
           f.visibility.value = rs.visibility; f.language.value = rs.language || "";
           f.focus.value = rs.focus || ""; f.instructions.value = rs.instructions || "";
+          (rs.rules || []).forEach(addRuleRow);
         }
         openModal("ruleset-modal");
       }
       document.getElementById("open-ruleset-modal").onclick = () => openRulesetModal(null);
+      document.getElementById("rs-add-rule").onclick = () => addRuleRow(null);
 
       document.getElementById("ruleset-form").onsubmit = async (ev) => {
         ev.preventDefault();
@@ -627,13 +709,18 @@ const html = `<!doctype html>
         const out = document.getElementById("ruleset-result");
         const btn = f.querySelector('button[type="submit"]');
         btn.disabled = true; out.textContent = "";
+        const id = f.id.value;
         const payload = {
           name: f.name.value, description: f.description.value,
           visibility: f.visibility.value, language: f.language.value,
           focus: f.focus.value, instructions: f.instructions.value,
+          projectLabel: f.projectLabel.value,
+          rules: collectRules(),
         };
+        // Project key is set at creation only (immutable afterwards); the server
+        // normalizes whatever the user typed into the canonical key.
+        if (!id) payload.project = f.projectLabel.value;
         try {
-          const id = f.id.value;
           await api(id ? "/api/rulesets/" + id : "/api/rulesets", {
             method: id ? "PUT" : "POST",
             headers: { "Content-Type": "application/json" },
@@ -649,33 +736,57 @@ const html = `<!doctype html>
         const o = location.origin;
         const mine = await load("/api/rulesets", []);
         const pub = await load("/api/rulesets?scope=public", []);
+        const myHandle = (me && me.handle) || "";
         const cmd = (r) => r.visibility === "public"
           ? \`curl -fsSL \${o}/skill/ruleset/\${r.id}/install.sh | sh\`
           : \`curl -fsSL -H "Authorization: Bearer rpat_…" \${o}/skill/ruleset/\${r.id}/install.sh | sh\`;
+        const ruleCount = (r) => (r.rules ? r.rules.length : 0);
+        const pendingCount = (r) => (r.rules ? r.rules.filter((x) => x.pending).length : 0);
 
-        const mineRows = mine.map((r) => \`<tr>
+        const mineRows = mine.map((r) => {
+          const pend = pendingCount(r);
+          const pendTag = pend ? \` <span class="badge-pending">\${pend} 候选待采纳</span>\` : "";
+          return \`<tr\${pend ? ' class="row-has-pending"' : ""}>
           <td>\${esc(r.name)}</td>
+          <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
+          <td class="muted">\${ruleCount(r)} 条规则\${pendTag}</td>
           <td><code>\${esc(cmd(r))}</code></td>
           <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
-        </tr>\`).join("");
+        </tr>\`;
+        }).join("");
         const pubRows = pub.map((r) => \`<tr>
           <td>\${esc(r.name)}</td>
-          <td class="muted">\${esc(r.ownerEmail)}</td>
+          <td class="muted">\${esc(r.ownerHandle || r.ownerEmail)}</td>
+          <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td class="muted">\${esc(r.description || "")}</td>
-          <td><code>curl -fsSL \${o}/skill/ruleset/\${esc(r.id)}/install.sh | sh</code></td>
+          <td>\${r.ownerHandle ? \`<code>让 \${esc(r.ownerHandle)} 帮我 review 我的改动</code>\` : '<span class="muted">—</span>'}</td>
           <td><button class="secondary" data-fork-rs="\${esc(r.id)}">Fork 到我的</button></td>
         </tr>\`).join("");
 
+        // The orchestrator skill: install once, then call anyone's public rules by handle.
+        const orchestrator =
+          \`<div class="card">
+             <h3>① 安装编排型 skill(只需一次)</h3>
+             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。</p>
+             <pre><code>curl -fsSL \${o}/skill/install.sh | sh</code></pre>
+             <h3>② 在 Claude Code 里直接说</h3>
+             <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
+             <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
+             <h3>③ 自动沉淀规则(可选)</h3>
+             <p class="muted">设置环境变量 <code>export REVIEWPILOT_TOKEN=rpat_…</code>(令牌见账户页)后,每次 review 会自动把发现的关键点作为<strong>候选规则</strong>提交到当前项目的规则集,你在此页确认采纳后才会生效。</p>
+           </div>\`;
+
         document.querySelector("#rulesets").innerHTML =
-          \`<p class="muted">规则集会生成一个本地 Claude Code skill(与服务同内核)。公开的可被社区直接安装;私有的安装需带你的令牌(rpat_…,见账户页)。</p>
-           <h3>我的规则集</h3>\`
+          orchestrator
+          + \`<p class="muted">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。带「候选待采纳」的规则由 skill 自动提交,需在编辑里点「采纳」后才生效或对外公开。</p>
+             <h3>我的规则集</h3>\`
           + (mine.length
-              ? \`<table><thead><tr><th>名称</th><th>可见性</th><th>安装命令</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
+              ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
               : \`<p class="muted">还没有规则集,点上方「+ 新建规则集」创建。</p>\`)
           + \`<h3>社区规则集</h3>\`
           + (pub.length
-              ? \`<table><thead><tr><th>名称</th><th>作者</th><th>描述</th><th>安装命令</th><th></th></tr></thead><tbody>\${pubRows}</tbody></table>\`
+              ? \`<table><thead><tr><th>名称</th><th>作者</th><th>项目</th><th>描述</th><th>一句话调用</th><th></th></tr></thead><tbody>\${pubRows}</tbody></table>\`
               : \`<p class="muted">社区暂无公开规则集。</p>\`);
 
         const byId = {};
@@ -756,6 +867,7 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
           <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。一行安装:</p>
           <pre>curl -fsSL \${o}/skill/install.sh | sh</pre>
           <p class="muted">安装后在 Claude Code 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看 <code>\${o}/skill/reviewpilot-review/SKILL.md</code>。</p>
+          <p class="muted">这是<b>编排型</b> skill:还可以说「让 &lt;用户名&gt; 帮我 review 我的改动」—— 它会拉取该用户的公开规则集,并按改动文件<b>本地按需</b>加载相关规则(代码不出本机)。规则集的创建与发现见左侧「评审规则集」。</p>
         \`;
       }
 

@@ -152,6 +152,7 @@ function toUser(d: MongoDoc): User {
   return {
     id: d.id as string,
     email: d.email as string,
+    handle: (d.handle as string) ?? "",
     passwordHash: d.passwordHash as string,
     role: d.role as UserRole,
     createdAt: d.createdAt as string,
@@ -191,6 +192,9 @@ function toRuleset(d: MongoDoc): ReviewRuleset {
     id: d.id as string,
     ownerId: d.ownerId as string,
     ownerEmail: d.ownerEmail as string,
+    ownerHandle: (d.ownerHandle as string) ?? "",
+    project: (d.project as string) ?? "",
+    projectLabel: (d.projectLabel as string) ?? "",
     name: d.name as string,
     slug: d.slug as string,
     description: d.description as string,
@@ -198,6 +202,7 @@ function toRuleset(d: MongoDoc): ReviewRuleset {
     language: d.language as string,
     focus: d.focus as string,
     instructions: d.instructions as string,
+    rules: (d.rules as ReviewRuleset["rules"]) ?? [],
     createdAt: d.createdAt as string,
     updatedAt: d.updatedAt as string,
   };
@@ -247,6 +252,7 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.repoInsights).createIndex({ repoId: 1 }, { unique: true });
     await this.col(COLLECTIONS.users).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.users).createIndex({ email: 1 }, { unique: true });
+    await this.col(COLLECTIONS.users).createIndex({ handle: 1 });
     await this.col(COLLECTIONS.apiTokens).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ tokenHash: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ userId: 1 });
@@ -255,6 +261,7 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.tokenUsage).createIndex({ source: 1, sourceId: 1 });
     await this.col(COLLECTIONS.rulesets).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1 });
+    await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1, project: 1 });
     await this.col(COLLECTIONS.rulesets).createIndex({ visibility: 1 });
   }
 
@@ -544,6 +551,7 @@ export class MongoRepository implements Repository {
     const user: User = {
       id: this.idGen("usr"),
       email: input.email,
+      handle: input.handle,
       passwordHash: input.passwordHash,
       role: input.role,
       createdAt: now,
@@ -560,6 +568,11 @@ export class MongoRepository implements Repository {
 
   async getUserByEmail(email: string): Promise<User | null> {
     const d = await this.col(COLLECTIONS.users).findOne({ email });
+    return d ? toUser(d) : null;
+  }
+
+  async getUserByHandle(handle: string): Promise<User | null> {
+    const d = await this.col(COLLECTIONS.users).findOne({ handle });
     return d ? toUser(d) : null;
   }
 
@@ -653,6 +666,9 @@ export class MongoRepository implements Repository {
       id: this.idGen("rule"),
       ownerId: input.ownerId,
       ownerEmail: input.ownerEmail,
+      ownerHandle: input.ownerHandle,
+      project: input.project,
+      projectLabel: input.projectLabel,
       name: input.name,
       slug: input.slug,
       description: input.description,
@@ -660,6 +676,7 @@ export class MongoRepository implements Repository {
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
+      rules: input.rules,
       createdAt: now,
       updatedAt: now,
     };
@@ -678,6 +695,14 @@ export class MongoRepository implements Repository {
       { sort: { field: "updatedAt", dir: -1 } },
     );
     return docs.map(toRuleset);
+  }
+
+  async findRulesetByOwnerAndProject(
+    ownerId: string,
+    project: string,
+  ): Promise<ReviewRuleset | null> {
+    const d = await this.col(COLLECTIONS.rulesets).findOne({ ownerId, project });
+    return d ? toRuleset(d) : null;
   }
 
   async listPublicRulesets(): Promise<ReviewRuleset[]> {
