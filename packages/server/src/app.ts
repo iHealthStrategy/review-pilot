@@ -9,6 +9,7 @@ import { resolvePrincipal } from "./auth/authorize.js";
 import { envAdminFrom } from "./auth/env-admin.js";
 import { handleMcp } from "./mcp/mcp-server.js";
 import type { Repository } from "./persistence/repository.js";
+import { SKILL_NAME, buildInstallScript, buildReviewSkill } from "./skill/review-skill.js";
 import type { ScheduleStore } from "./schedule/schedule.js";
 import type { Scheduler } from "./schedule/scheduler.js";
 import type { TaskService } from "./trigger/trigger-service.js";
@@ -55,6 +56,18 @@ export function createAppHandler(deps: AppDeps) {
   const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "");
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
+    // Local Claude Code skill (public artifact — no auth): one-line installer
+    // and the raw SKILL.md, generated from the shared review kernel.
+    if (path === "/skill/install.sh") {
+      res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
+      res.end(buildInstallScript(buildReviewSkill()));
+      return;
+    }
+    if (path === `/skill/${SKILL_NAME}/SKILL.md` || path === "/skill/SKILL.md") {
+      res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
+      res.end(buildReviewSkill());
+      return;
+    }
     if (path === "/mcp") {
       if ((req.method ?? "GET") !== "POST") {
         res.writeHead(405, { "Content-Type": "application/json", Allow: "POST" });

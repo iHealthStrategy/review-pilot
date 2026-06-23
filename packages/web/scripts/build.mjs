@@ -634,6 +634,11 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
   }
 }</pre>
           <p class="muted">可用工具(按你的角色过滤):<code>whoami</code>、<code>list_schedules</code>、<code>list_jobs</code>、<code>get_job</code>(只读);<code>create_review_task</code>、<code>run_schedule</code>(member+)。</p>
+
+          <h3>本地评审 Skill(Claude Code)</h3>
+          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。一行安装:</p>
+          <pre>curl -fsSL \${o}/skill/install.sh | sh</pre>
+          <p class="muted">安装后在 Claude Code 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看 <code>\${o}/skill/reviewpilot-review/SKILL.md</code>。</p>
         \`;
       }
 

@@ -27,6 +27,28 @@ interface RawFinding {
 const MAX_STRUCTURE_LINES = 400;
 const MAX_DIFF_CHARS = 60000;
 
+/** The review dimensions — shared by the service prompt and the local skill. */
+export const REVIEW_DIMENSIONS =
+  "correctness bugs, security issues, performance problems, and maintainability";
+
+/**
+ * The finding object shape every engine must emit — the single source of truth
+ * for the field set + severity levels, reused by {@link buildReviewPrompt} and
+ * the local Claude Code skill so they never drift.
+ */
+export const FINDING_SCHEMA_FIELDS = [
+  "{",
+  '  "filePath": "<repo-relative path>",',
+  '  "line": <1-based line number, optional>,',
+  '  "endLine": <optional>,',
+  '  "severity": "info" | "minor" | "major" | "critical",',
+  '  "title": "<short summary>",',
+  '  "detail": "<explanation of the problem>",',
+  '  "suggestion": "<concrete fix, optional>",',
+  '  "category": "<e.g. correctness|security|performance|style, optional>"',
+  "}",
+].join("\n");
+
 /**
  * Build the review prompt handed to an external CLI (Claude Code / Cursor /
  * Codex). The agent runs INSIDE the synced full repository (its cwd), so it can
@@ -40,8 +62,7 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
   const diff = renderDiff(ctx.diff);
 
   return [
-    "You are an expert code reviewer. Review the following pull request for",
-    "correctness bugs, security issues, performance problems, and maintainability.",
+    `You are an expert code reviewer. Review the following pull request for ${REVIEW_DIMENSIONS}.`,
     "You are running inside a full checkout of the repository at the PR's head",
     "commit (your current working directory), so you MAY open and read any file",
     "in the project to understand context beyond the diff.",
@@ -73,16 +94,7 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     "",
     "## Output format (STRICT)",
     "Respond with ONLY a JSON array — no prose, no markdown fences. Each element:",
-    "{",
-    '  "filePath": "<repo-relative path>",',
-    '  "line": <1-based line number, optional>,',
-    '  "endLine": <optional>,',
-    '  "severity": "info" | "minor" | "major" | "critical",',
-    '  "title": "<short summary>",',
-    '  "detail": "<explanation of the problem>",',
-    '  "suggestion": "<concrete fix, optional>",',
-    '  "category": "<e.g. correctness|security|performance|style, optional>"',
-    "}",
+    FINDING_SCHEMA_FIELDS,
     "Only report issues introduced or affected by this PR. If there are no issues,",
     "respond with an empty array: []",
     ...languageInstruction(),
