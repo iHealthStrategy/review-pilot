@@ -58,6 +58,45 @@ function oneLine(s: string): string {
 }
 
 /**
+ * Severity calibration rubric, shared by both skills so findings are rated by
+ * REAL-WORLD impact × reachability in THIS codebase — not the theoretical worst
+ * case. Keeps the list honest (no severity inflation, low-confidence → info).
+ */
+const SEVERITY_RUBRIC = `Assign severity by real-world impact × how reachable the issue actually is in
+THIS codebase's context (who controls the inputs, what access/preconditions are
+needed) — NOT the theoretical worst case:
+- **critical** — exploitable with realistic preconditions: RCE, auth bypass,
+  secret/credential theft, cross-user or stored XSS, data loss/corruption. Must
+  fix before shipping.
+- **major** — a real defect with material impact that needs elevated access, a
+  specific backend/config, or concurrency to trigger; or hardening against a
+  genuine vulnerability class. Should fix.
+- **minor** — real but low impact, narrow trigger, or correctness-cosmetic. Fix
+  opportunistically.
+- **info** — theoretical / near-zero impact, style, OR anything you could not
+  actually confirm by reading the code (low confidence).
+Calibration rules: downgrade a finding one level when its precondition is
+unlikely in this project; rate anything you have not confirmed in the code as
+\`info\` (low confidence); never inflate severity to look thorough — prefer fewer,
+higher-quality findings. If something is a deliberate design trade-off rather
+than a defect, label it "design decision" and do NOT give it a fix-severity.`;
+
+/**
+ * Reporting-threshold policy, shared by both skills. Default = only must-fix
+ * (major + critical). The user can widen/narrow it in natural language.
+ */
+const REPORTING_THRESHOLD = `By DEFAULT report only **must-fix** issues — severity **major and critical**.
+Suppress minor/info findings unless asked, so the list stays focused on what
+truly needs changing. Parse the user's intent to adjust the threshold:
+- "只报致命的 / only critical / 最严重" → critical only
+- (default, or "必须修的 / must-fix") → major + critical
+- "也看次要的 / 全面一点 / include minor" → minor + major + critical
+- "全部 / 所有问题 / 包括吹毛求疵 / everything / nitpicks" → all, including info
+Always still COUNT everything internally, then state which threshold you applied
+and how many were suppressed below it, e.g. "（已按 must-fix 过滤，另有 3 个 minor、
+2 个 info 未列出，说『显示全部』可查看）", so the filtering is transparent and reversible.`;
+
+/**
  * The orchestrator skill: install once, then drive every review locally. It
  *  - derives a stable PROJECT key from the local git remote (rules are managed
  *    per project, independently),
@@ -85,6 +124,8 @@ description: >-
   auto-grows your own project rules from each review. Use when the user asks to
   review / 评审 / 审查 their local changes, a working-tree diff, a branch diff, or a
   checked-out pull request — or asks someone (by handle) to review ("让 X 帮我 review").
+  Reports only must-fix (major/critical) issues by default; threshold adjustable in
+  natural language ("也看次要的" / "显示全部").
 ---
 
 # ReviewPilot — local code review (orchestrator)
@@ -172,7 +213,7 @@ If \`code-review-graph\` is installed (check \`code-review-graph --version\`, or
 its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
 gaps for the changed files and prioritise the review accordingly. Skip if absent.
 
-## 7. Review & present
+## 7. Review, rate severity & present
 Look for ${REVIEW_DIMENSIONS}, and apply the selected ruleset rules + freeform
 instructions from step 4. Report only issues introduced or affected by the
 reviewed changes. For each issue, form a finding with these fields:
@@ -181,17 +222,24 @@ reviewed changes. For each issue, form a finding with these fields:
 ${FINDING_SCHEMA_FIELDS}
 \`\`\`
 
-Severity ranks: info < minor < major < critical. Group findings by file, most
-severe first; for each show severity, location (\`path:line\`), title, a short
-explanation, and a concrete fix. If there are no issues, say so plainly. If you
-applied a named user's rules, note whose. (The report stays in this session — do
-not write it to a file unless the user asks.)
+### Severity (rate honestly, by impact × reachability)
+${SEVERITY_RUBRIC}
+
+### Reporting threshold
+${REPORTING_THRESHOLD}
+
+Group the REPORTED findings by file, most severe first; for each show severity,
+location (\`path:line\`), title, a short explanation, and a concrete fix. If there
+are no must-fix issues, say so plainly (and note any suppressed lower-severity
+ones). If you applied a named user's rules, note whose. (The report stays in this
+session — do not write it to a file unless the user asks.)
 
 ## 8. One-shot fix (aggregate → confirm once → batch-apply)
 After presenting, offer a single auto-fix pass:
-1. **Aggregate** every finding that has a concrete, mechanical fix into a fix
-   list. Exclude findings that need a design decision or human judgement — list
-   those separately as "needs manual attention" and never auto-edit them.
+1. **Aggregate** every REPORTED finding (those above the current threshold) that
+   has a concrete, mechanical fix into a fix list. Exclude findings that need a
+   design decision or human judgement — list those separately as "needs manual
+   attention" and never auto-edit them.
 2. **Show the plan**: group the proposed edits by file; for each give the
    location (\`path:line\`) and a one-line description of the change. Show this as
    one consolidated list so the user sees everything before deciding.
@@ -294,7 +342,8 @@ description: >-
   Review LOCAL code changes for ${REVIEW_DIMENSIONS} — the same review kernel as
   the ReviewPilot service, run entirely on this machine.${descSuffix} Use when the
   user asks to review / 评审 / 审查 their local changes, a working-tree diff, a
-  branch diff, or a checked-out pull request.
+  branch diff, or a checked-out pull request. Reports only must-fix (major/critical)
+  issues by default; threshold adjustable in natural language ("也看次要的" / "显示全部").
 ---
 
 # ReviewPilot — local code review
@@ -320,7 +369,7 @@ If \`code-review-graph\` is installed (check \`code-review-graph --version\`, or
 its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
 gaps for the changed files and prioritise the review accordingly. Skip if absent.
 
-## 4. Review
+## 4. Review & rate severity
 Look for ${REVIEW_DIMENSIONS}${ruleset ? ", and apply the ruleset's rules above" : ""}.
 Report only issues introduced or affected by the reviewed changes. For each
 issue, form a finding with these fields:
@@ -329,19 +378,24 @@ issue, form a finding with these fields:
 ${FINDING_SCHEMA_FIELDS}
 \`\`\`
 
-Severity ranks: info < minor < major < critical.
+Rate each finding's severity honestly, by impact × reachability:
+${SEVERITY_RUBRIC}
 
-## 5. Present
-Group findings by file, most severe first. For each show: severity, location
-(\`path:line\`), title, a short explanation, and a concrete fix. If there are no
-issues, say so plainly. (The report stays in this session — do not write it to a
-file unless the user asks.)
+## 5. Present (default: only must-fix)
+${REPORTING_THRESHOLD}
+
+Group the REPORTED findings by file, most severe first. For each show: severity,
+location (\`path:line\`), title, a short explanation, and a concrete fix. If there
+are no must-fix issues, say so plainly (and note any suppressed lower-severity
+ones). (The report stays in this session — do not write it to a file unless the
+user asks.)
 
 ## 6. One-shot fix (aggregate → confirm once → batch-apply)
 After presenting, offer a single auto-fix pass:
-1. **Aggregate** every finding with a concrete, mechanical fix into a fix list.
-   Exclude findings needing a design decision or human judgement — list those
-   separately as "needs manual attention" and never auto-edit them.
+1. **Aggregate** every REPORTED finding (above the current threshold) with a
+   concrete, mechanical fix into a fix list. Exclude findings needing a design
+   decision or human judgement — list those separately as "needs manual
+   attention" and never auto-edit them.
 2. **Show the plan**: group the proposed edits by file with location
    (\`path:line\`) and a one-line description, as one consolidated list.
 3. **Ask once** for approval to apply the whole batch (single yes/no) — not per
