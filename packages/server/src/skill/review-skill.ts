@@ -58,6 +58,19 @@ function oneLine(s: string): string {
 }
 
 /**
+ * Tools the skill pre-authorizes via its `allowed-tools` frontmatter, so Claude
+ * Code does NOT prompt for each command WHILE THIS SKILL IS ACTIVE. Scoped to
+ * exactly what the skill runs: read-only git, the project-key shell pipeline,
+ * curl to the configured server, the code-review-graph probe, plus Read/Edit/
+ * Write for the opt-in one-shot fix (which still asks once before batch-applying).
+ */
+const SKILL_ALLOWED_TOOLS =
+  "Bash(git remote get-url *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) " +
+  "Bash(git merge-base *) Bash(git rev-parse *) Bash(git status *) Bash(printf *) " +
+  "Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) Bash(curl *) Bash(code-review-graph*) " +
+  "Read Edit Write";
+
+/**
  * A confirmation banner the skill must emit as its first output line, so the
  * user can tell at a glance that THIS skill actually ran (vs a generic review).
  * Shared by both skills.
@@ -141,6 +154,7 @@ description: >-
   checked-out pull request — or asks someone (by handle) to review ("让 X 帮我 review").
   Reports only must-fix (major/critical) issues by default; threshold adjustable in
   natural language ("也看次要的" / "显示全部").
+allowed-tools: ${SKILL_ALLOWED_TOOLS}
 ---
 
 # ReviewPilot — local code review (orchestrator)
@@ -361,6 +375,7 @@ description: >-
   user asks to review / 评审 / 审查 their local changes, a working-tree diff, a
   branch diff, or a checked-out pull request. Reports only must-fix (major/critical)
   issues by default; threshold adjustable in natural language ("也看次要的" / "显示全部").
+allowed-tools: ${SKILL_ALLOWED_TOOLS}
 ---
 
 # ReviewPilot — local code review

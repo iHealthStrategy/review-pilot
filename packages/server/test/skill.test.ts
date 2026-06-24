@@ -65,6 +65,18 @@ test("skills: emit a confirmation banner as the first output line", () => {
   }
 });
 
+test("skills: pre-authorize their own commands via allowed-tools frontmatter", () => {
+  for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
+    // allowed-tools must sit in the YAML frontmatter (before the first body `#`).
+    const frontmatter = md.slice(0, md.indexOf("\n# "));
+    assert.match(frontmatter, /^allowed-tools: /m);
+    assert.match(frontmatter, /Bash\(git diff \*\)/);
+    assert.match(frontmatter, /Bash\(curl \*\)/);
+    assert.match(frontmatter, /\bEdit\b/);
+    assert.match(frontmatter, /\bWrite\b/);
+  }
+});
+
 test("skills: severity calibration + default must-fix reporting threshold, NL-adjustable", () => {
   for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
     // Severity rated by impact × reachability, low-confidence → info, no inflation.
