@@ -51,6 +51,10 @@ test("buildOrchestratorSkill: derives a per-project key and auto-grows candidate
   assert.match(md, /\/api\/rulesets\/candidates/); // auto-grow submit
   assert.match(md, /REVIEWPILOT_TOKEN/); // PAT for the write
   assert.match(md, /pending/i); // candidates land pending
+  // Submit uses the SAME normalized $PROJECT key as the fetch (not raw $REMOTE),
+  // so auto-grown rules match next time and no-remote repos don't 400.
+  assert.match(md, /\\"project\\":\\"\$PROJECT\\"/);
+  assert.doesNotMatch(md, /\\"project\\":\\"\$REMOTE\\"/);
 });
 
 test("skills: one-shot fix is aggregate → confirm once → batch-apply (no commit)", () => {

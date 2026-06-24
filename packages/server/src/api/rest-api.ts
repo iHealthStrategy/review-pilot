@@ -563,7 +563,6 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/u\/(?<handle>[^/]+)\/rulesets$/,
     handler: async ({ params, query }, repo) => {
       const handle = slugify(params.handle!);
-      const user = await repo.getUserByHandle(handle);
       const all = await repo.listPublicRulesets();
       // Optional project filter: a project-scoped ruleset matches its own key;
       // an "any project" ruleset (project === "") always matches.
@@ -571,12 +570,17 @@ const ROUTES: Route[] = [
       const rulesets = all
         .filter((r) => r.ownerHandle === handle)
         .filter((r) => !projectFilter || r.project === "" || r.project === projectFilter)
-        // Pending candidates are private to the owner — never expose via discovery.
-        .map((r) => ({ ...r, rules: r.rules.filter((rule) => !rule.pending) }));
+        // Strip PII: this endpoint is unauthenticated, so never leak the owner's
+        // email or internal id. `handle` is the intended public identifier.
+        // Pending candidates are private to the owner — never expose them either.
+        .map(({ ownerId: _ownerId, ownerEmail: _ownerEmail, ...pub }) => ({
+          ...pub,
+          rules: pub.rules.filter((rule) => !rule.pending),
+        }));
       return ok({
         handle,
         ...(projectFilter ? { project: projectFilter } : {}),
-        owner: user ? { handle: user.handle, email: user.email } : { handle },
+        owner: { handle },
         rulesets,
       });
     },

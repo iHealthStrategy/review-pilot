@@ -131,10 +131,15 @@ test("rulesets: register assigns a handle; public discovery by handle is unauthe
     assert.equal(disc.status, 200);
     const body = (await disc.json()) as any;
     assert.equal(body.handle, "alice");
-    assert.equal(body.owner.email, "alice@x.com");
+    // Unauthenticated endpoint must NOT leak PII: only the public handle.
+    assert.equal(body.owner.handle, "alice");
+    assert.equal(body.owner.email, undefined, "owner email must not be exposed");
     assert.equal(body.rulesets.length, 1); // private one excluded
     assert.equal(body.rulesets[0].id, pub.id);
     assert.equal(body.rulesets[0].rules[0].title, "SQL");
+    assert.equal(body.rulesets[0].ownerEmail, undefined, "ruleset must not carry owner email");
+    assert.equal(body.rulesets[0].ownerId, undefined, "ruleset must not carry owner id");
+    assert.equal(body.rulesets[0].ownerHandle, "alice"); // handle is fine
 
     // Unknown handle → empty, still 200 (skill handles "not found" gracefully).
     const none = (await (await fetch(`${base}/api/u/nobody/rulesets`)).json()) as any;

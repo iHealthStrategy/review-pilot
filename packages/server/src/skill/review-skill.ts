@@ -227,13 +227,15 @@ if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
   # RULES_JSON = a JSON array of the candidate rule objects you extracted.
   curl -fsS -X POST "$BASE/api/rulesets/candidates" \\
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
-    -d "{\\"project\\":\\"$REMOTE\\",\\"projectLabel\\":\\"$PROJECT\\",\\"rules\\":$RULES_JSON}" \\
+    -d "{\\"project\\":\\"$PROJECT\\",\\"projectLabel\\":\\"$PROJECT\\",\\"rules\\":$RULES_JSON}" \\
     && echo "✓ 已提交候选规则,去平台「评审规则集」确认采纳" \\
     || echo "(提交候选规则失败,已跳过)"
 fi
 \`\`\`
-Send the raw remote URL as \`project\`; the server normalizes it to the same project
-key. Tell the user which key points you submitted (or that there were none).
+Send the SAME \`$PROJECT\` key used to fetch rules in step 3 (it has the no-remote
+directory-name fallback) so the auto-grown rules match on the next review; the
+server normalizes it idempotently. Tell the user which key points you submitted
+(or that there were none).
 `;
 }
 
