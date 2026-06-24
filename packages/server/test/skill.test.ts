@@ -57,6 +57,14 @@ test("buildOrchestratorSkill: derives a per-project key and auto-grows candidate
   assert.doesNotMatch(md, /\\"project\\":\\"\$REMOTE\\"/);
 });
 
+test("skills: emit a confirmation banner as the first output line", () => {
+  for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
+    assert.match(md, /Confirmation banner \(ALWAYS print this first\)/);
+    assert.match(md, /🤖 ReviewPilot ▸ scope=/);
+    assert.match(md, /threshold=<must-fix/);
+  }
+});
+
 test("skills: severity calibration + default must-fix reporting threshold, NL-adjustable", () => {
   for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
     // Severity rated by impact × reachability, low-confidence → info, no inflation.

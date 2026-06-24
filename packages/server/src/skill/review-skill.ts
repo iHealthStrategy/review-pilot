@@ -58,6 +58,21 @@ function oneLine(s: string): string {
 }
 
 /**
+ * A confirmation banner the skill must emit as its first output line, so the
+ * user can tell at a glance that THIS skill actually ran (vs a generic review).
+ * Shared by both skills.
+ */
+const BANNER_INSTRUCTION = `## Confirmation banner (ALWAYS print this first)
+The VERY FIRST line of your review report MUST be this banner — it is how the
+user confirms this skill actually ran:
+
+\`🤖 ReviewPilot ▸ scope=<working|branch|whole> ▸ threshold=<must-fix|critical-only|+minor|all> ▸ project=<key>\`
+
+Fill the placeholders with the resolved values (project key, chosen scope,
+applied threshold). Always emit it — even when there are no findings, or you fall
+back to a generic review.`;
+
+/**
  * Severity calibration rubric, shared by both skills so findings are rated by
  * REAL-WORLD impact × reachability in THIS codebase — not the theoretical worst
  * case. Keeps the list honest (no severity inflation, low-confidence → info).
@@ -135,6 +150,8 @@ service would, but running here. Prefer fewer high-quality findings over noise.
 Write the findings in the user's language unless told otherwise.
 
 ReviewPilot base URL: ${base ? base : "(not baked — set the REVIEWPILOT_URL env var)"}
+
+${BANNER_INSTRUCTION}
 
 ## 1. Identify the project (rules are managed per project)
 Derive a stable project key from the git remote so rules stay independent across
@@ -351,6 +368,8 @@ description: >-
 Review the user's LOCAL code changes the way the ReviewPilot service would, but
 running here — you are the review engine. Prefer fewer high-quality findings over
 noise. Write the findings in the user's language unless told otherwise.
+
+${BANNER_INSTRUCTION}
 
 ${rulesetSections.join("\n")}## 1. Choose the scope
 Default to **working** unless the user says otherwise:
