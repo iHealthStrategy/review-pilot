@@ -65,10 +65,10 @@ function oneLine(s: string): string {
  * Write for the opt-in one-shot fix (which still asks once before batch-applying).
  */
 const SKILL_ALLOWED_TOOLS =
-  "Bash(git remote get-url *) Bash(git diff *) Bash(git log *) Bash(git ls-files *) " +
-  "Bash(git merge-base *) Bash(git rev-parse *) Bash(git status *) Bash(printf *) " +
-  "Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) Bash(curl *) Bash(code-review-graph*) " +
-  "Read Edit Write";
+  "Bash(cd *) Bash(git remote get-url *) Bash(git diff *) Bash(git log *) " +
+  "Bash(git show *) Bash(git ls-files *) Bash(git merge-base *) Bash(git rev-parse *) " +
+  "Bash(git status *) Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
+  "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
 
 /**
  * A confirmation banner the skill must emit as its first output line, so the
@@ -171,21 +171,19 @@ ReviewPilot base URL: ${base ? base : "(not baked — set the REVIEWPILOT_URL en
 ${BANNER_INSTRUCTION}
 
 ## 1. Identify the project (rules are managed per project)
-Derive a stable project key from the git remote so rules stay independent across
-the user's many projects:
+Run ONE simple command (no pipes, no \`cd\`, no command substitution — keep it
+auto-approvable):
 
 \`\`\`sh
-REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
-# Normalize to host/owner/repo: strip scheme/credentials/.git, lowercase.
-# git@github.com:acme/App.git  -> github.com/acme/app
-# https://github.com/acme/app  -> github.com/acme/app
-PROJECT=$(printf '%s' "$REMOTE" \\
-  | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##; s#^[^@/]+@#@#; s#^@##; s#:#/#; s#\\.git$##; s#/+$##' \\
-  | tr 'A-Z' 'a-z')
-echo "project=$PROJECT"
+git remote get-url origin
 \`\`\`
-If there is no remote, fall back to the repo directory name. Keep this \`PROJECT\`
-value for steps 2 and 9.
+
+Then normalize its output YOURSELF (in your head — do NOT build a shell pipeline)
+into a stable \`PROJECT\` key \`host/owner/repo\`: strip the scheme and any
+\`user:pass@\` credentials, turn a scp-style \`git@host:owner/repo\` into
+\`host/owner/repo\`, drop a trailing \`.git\` and trailing slashes, lowercase. E.g.
+\`git@github.com:acme/App.git\` and \`https://github.com/acme/app\` both → \`github.com/acme/app\`.
+If there is no remote, use the repo directory name. Keep \`PROJECT\` for steps 3 and 9.
 
 ## 2. Detect whether a reviewer was named
 If the user names someone to review for them — e.g. "我想让 **alice** 帮我 review 我的改动",
@@ -235,8 +233,11 @@ which you skipped (and why), so the on-demand selection is transparent.
 Default to **working** unless the user says otherwise:
 - **working** — uncommitted changes: \`git diff HEAD\` plus untracked files
   (\`git ls-files --others --exclude-standard\`).
+  Run commands as SIMPLE single invocations from the current directory — no
+  \`cd\`, no \`&&\` chains, no \`$(…)\` substitution — so they stay auto-approvable.
 - **branch** — current branch vs a base (default \`main\`):
-  \`git diff "$(git merge-base <base> HEAD)..HEAD"\`.
+  do it in TWO simple steps (avoid \`$(…)\`): first \`git merge-base <base> HEAD\`,
+  then \`git diff <that-sha>..HEAD\`.
 - **whole project** — audit the full checkout (slower).
 
 Collect the changed files and their patches. Open and read surrounding code in the
@@ -396,8 +397,11 @@ ${rulesetSections.join("\n")}## 1. Choose the scope
 Default to **working** unless the user says otherwise:
 - **working** — uncommitted changes: \`git diff HEAD\` plus untracked files
   (\`git ls-files --others --exclude-standard\`).
+  Run commands as SIMPLE single invocations from the current directory — no
+  \`cd\`, no \`&&\` chains, no \`$(…)\` substitution — so they stay auto-approvable.
 - **branch** — current branch vs a base (default \`main\`):
-  \`git diff "$(git merge-base <base> HEAD)..HEAD"\`.
+  do it in TWO simple steps (avoid \`$(…)\`): first \`git merge-base <base> HEAD\`,
+  then \`git diff <that-sha>..HEAD\`.
 - **whole project** — audit the full checkout (slower).
 
 ## 2. Gather the diff
