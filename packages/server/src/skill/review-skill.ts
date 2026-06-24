@@ -65,7 +65,7 @@ function oneLine(s: string): string {
  * Write for the opt-in one-shot fix (which still asks once before batch-applying).
  */
 const SKILL_ALLOWED_TOOLS =
-  "Bash(cd *) Bash(git remote get-url *) Bash(git diff *) Bash(git log *) " +
+  "Bash(echo *) Bash(cd *) Bash(git remote get-url *) Bash(git diff *) Bash(git log *) " +
   "Bash(git show *) Bash(git ls-files *) Bash(git merge-base *) Bash(git rev-parse *) " +
   "Bash(git status *) Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
   "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
@@ -81,9 +81,11 @@ user confirms this skill actually ran:
 
 \`🤖 ReviewPilot ▸ scope=<working|branch|whole> ▸ threshold=<must-fix|critical-only|+minor|all> ▸ project=<key>\`
 
-Fill the placeholders with the resolved values (project key, chosen scope,
-applied threshold). Always emit it — even when there are no findings, or you fall
-back to a generic review.`;
+TYPE it directly as the first line of your TEXT reply — do NOT run \`echo\`,
+\`printf\`, or any shell command to produce it (that would just cause a needless
+permission prompt). Fill the placeholders with the resolved values (project key,
+chosen scope, applied threshold). Always emit it — even when there are no
+findings, or you fall back to a generic review.`;
 
 /**
  * Severity calibration rubric, shared by both skills so findings are rated by
