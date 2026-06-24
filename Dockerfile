@@ -40,7 +40,17 @@ RUN npm run build --workspace=packages/server --workspace=packages/web
 # pack ships manylinux wheels but no musl wheels, so it can't install on alpine
 # without a full C toolchain.
 FROM ${NODE_IMAGE} AS runtime
-RUN apt-get update \
+# Optional Debian apt mirror for restricted networks (China-friendly). Pass the
+# mirror HOST (e.g. mirrors.aliyun.com or mirrors.tuna.tsinghua.edu.cn); it
+# rewrites both deb822 (.sources) and classic sources.list. Big win: installing
+# git pulls perl/openssl/curl etc. from deb.debian.org, which is slow overseas.
+#   --build-arg APT_MIRROR=mirrors.aliyun.com
+ARG APT_MIRROR=
+RUN if [ -n "$APT_MIRROR" ]; then \
+      sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" \
+        /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list 2>/dev/null || true; \
+    fi \
+ && apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 # --- Structural-context engine: uv + code-review-graph ---
