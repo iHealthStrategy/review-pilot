@@ -65,6 +65,12 @@ test("skills: emit a confirmation banner as the first output line", () => {
   }
 });
 
+test("skills: default the review output to Chinese", () => {
+  for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
+    assert.match(md, /in \*\*中文 \(Chinese\)\*\* by default/);
+  }
+});
+
 test("skills: pre-authorize their own commands via allowed-tools frontmatter", () => {
   for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
     // allowed-tools must sit in the YAML frontmatter (before the first body `#`).

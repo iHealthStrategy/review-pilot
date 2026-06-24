@@ -161,7 +161,10 @@ allowed-tools: ${SKILL_ALLOWED_TOOLS}
 
 You are the review engine. Review the user's LOCAL changes the way the ReviewPilot
 service would, but running here. Prefer fewer high-quality findings over noise.
-Write the findings in the user's language unless told otherwise.
+Write the ENTIRE review report in **中文 (Chinese)** by default — finding titles,
+explanations, and suggested fixes. Only switch language if the user explicitly
+asks (or a ruleset specifies a different output language). The banner line stays
+as-is.
 
 ReviewPilot base URL: ${base ? base : "(not baked — set the REVIEWPILOT_URL env var)"}
 
@@ -382,7 +385,10 @@ allowed-tools: ${SKILL_ALLOWED_TOOLS}
 
 Review the user's LOCAL code changes the way the ReviewPilot service would, but
 running here — you are the review engine. Prefer fewer high-quality findings over
-noise. Write the findings in the user's language unless told otherwise.
+noise. Write the ENTIRE review report in **中文 (Chinese)** by default — finding titles,
+explanations, and suggested fixes. Only switch language if the user explicitly
+asks (or a ruleset specifies a different output language). The banner line stays
+as-is.
 
 ${BANNER_INSTRUCTION}
 
