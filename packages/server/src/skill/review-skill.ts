@@ -140,10 +140,16 @@ and how many were suppressed below it, e.g. "（已按 must-fix 过滤，另有 
  * `baseUrl` is baked in at install time (the server origin); when empty the skill
  * falls back to the `REVIEWPILOT_URL` env var.
  */
-export function buildOrchestratorSkill(baseUrl = ""): string {
+export function buildOrchestratorSkill(baseUrl = "", token = ""): string {
   const base = baseUrl.replace(/\/+$/, "");
   // Resolve to a shell expression: prefer the baked origin, else an env var.
   const urlExpr = base ? `"${base}"` : '"${REVIEWPILOT_URL:-}"';
+  // When a token is baked in at install time, the skill is fully configured and
+  // needs no manual setup; otherwise it reads REVIEWPILOT_TOKEN from the env.
+  const tokenExpr = token ? `"${token}"` : '"${REVIEWPILOT_TOKEN:-}"';
+  const tokenNote = token
+    ? "Your personal access token is already baked in below — no setup needed."
+    : "This needs your personal access token in `REVIEWPILOT_TOKEN` (create one on the API Key page).";
 
   return `---
 name: ${SKILL_NAME}
@@ -302,12 +308,11 @@ rule only loads for the relevant files (e.g. migrations → \`globs:["**/migrati
 
 Submit them to YOUR OWN project ruleset (they land as **pending** candidates for you
 to confirm later in the web UI; they do not affect others until you promote them).
-This needs your personal access token in \`REVIEWPILOT_TOKEN\` (create one in the
-account page). Skip silently if there are no key points or no token.
+${tokenNote} Skip silently if there are no key points or no token.
 
 \`\`\`sh
 BASE=${urlExpr}
-TOKEN="\${REVIEWPILOT_TOKEN:-}"
+TOKEN=${tokenExpr}
 if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
   # RULES_JSON = a JSON array of the candidate rule objects you extracted.
   curl -fsS -X POST "$BASE/api/rulesets/candidates" \\

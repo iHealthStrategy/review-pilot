@@ -65,6 +65,31 @@ test("skills: emit a confirmation banner as the first output line", () => {
   }
 });
 
+test("buildOrchestratorSkill: bakes a token in when provided (no manual setup)", () => {
+  const withTok = buildOrchestratorSkill("https://x.example.com", "rpat_abc123");
+  assert.match(withTok, /TOKEN="rpat_abc123"/); // baked literal
+  assert.match(withTok, /already baked in/i);
+  assert.doesNotMatch(withTok, /TOKEN="\$\{REVIEWPILOT_TOKEN/); // not the env fallback
+  // Without a token, falls back to the env var.
+  const noTok = buildOrchestratorSkill("https://x.example.com");
+  assert.match(noTok, /TOKEN="\$\{REVIEWPILOT_TOKEN:-\}"/);
+  assert.match(noTok, /REVIEWPILOT_TOKEN/);
+});
+
+test("GET /skill/install.sh bakes the caller's bearer token into the skill", () =>
+  withApp(async (base) => {
+    const res = await fetch(`${base}/skill/install.sh`, {
+      headers: { authorization: "Bearer rpat_installtoken" },
+    });
+    assert.equal(res.status, 200);
+    const sh = await res.text();
+    assert.match(sh, /TOKEN="rpat_installtoken"/); // token baked into the SKILL.md
+    // Anonymous install stays generic (env-var fallback, no baked token).
+    const anon = await (await fetch(`${base}/skill/install.sh`)).text();
+    assert.doesNotMatch(anon, /rpat_installtoken/);
+    assert.match(anon, /TOKEN="\$\{REVIEWPILOT_TOKEN:-\}"/);
+  }));
+
 test("skills: default the review output to Chinese", () => {
   for (const md of [buildOrchestratorSkill("https://x.example.com"), buildReviewSkill()]) {
     assert.match(md, /in \*\*中文 \(Chinese\)\*\* by default/);

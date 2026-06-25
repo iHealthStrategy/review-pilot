@@ -195,6 +195,12 @@ const html = `<!doctype html>
       .card h3 { margin: 14px 0 6px; font-size: 13.5px; }
       .card h3:first-child { margin-top: 0; }
       .card pre { margin: 6px 0; }
+      /* One-click copy on command blocks */
+      .codeblock { position: relative; }
+      .codeblock > pre { padding-right: 64px; }
+      .codeblock > .copy { position: absolute; top: 8px; right: 8px; padding: 3px 10px; font-size: 11px; font-weight: 600; background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--text-dim); border-radius: 6px; box-shadow: none; }
+      .codeblock > .copy:hover { background: var(--surface-2); color: #fff; border-color: var(--accent); filter: none; transform: none; }
+      .codeblock > .copy.copied { color: var(--green); border-color: rgba(110,231,135,.4); }
 
       /* ── Auth gate ─────────────────────────────────────────────── */
       .auth-gate { position: fixed; inset: 0; background: var(--bg-grad); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
@@ -382,6 +388,33 @@ const html = `<!doctype html>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
       const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+      // Wrap every <pre> under \`root\` with a one-click "复制" button (idempotent).
+      function addCopyButtons(root) {
+        if (!root) return;
+        root.querySelectorAll("pre").forEach((pre) => {
+          if (pre.parentElement && pre.parentElement.classList.contains("codeblock")) return;
+          const wrap = document.createElement("div");
+          wrap.className = "codeblock";
+          pre.parentNode.insertBefore(wrap, pre);
+          wrap.appendChild(pre);
+          const btn = document.createElement("button");
+          btn.type = "button"; btn.className = "copy"; btn.textContent = "复制";
+          btn.onclick = async () => {
+            const text = pre.innerText;
+            try { await navigator.clipboard.writeText(text); }
+            catch {
+              const r = document.createRange(); r.selectNodeContents(pre);
+              const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+              try { document.execCommand("copy"); } catch {}
+              s.removeAllRanges();
+            }
+            btn.textContent = "已复制"; btn.classList.add("copied");
+            setTimeout(() => { btn.textContent = "复制"; btn.classList.remove("copied"); }, 1500);
+          };
+          wrap.appendChild(btn);
+        });
+      }
 
       // --- session auth: JWT in localStorage, sent as Bearer header ---
       let me = null;
@@ -688,7 +721,7 @@ const html = `<!doctype html>
         document.querySelector("#tokens").innerHTML =
           tokens.length
             ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">暂无令牌。创建一个即可以你的身份调用 API —— 以 <code>Authorization: Bearer rpat_…</code> 发送。</p>\`;
+            : \`<p class="muted">暂无 API Key。点上方「<b>+ 新建令牌</b>」创建一个 —— 即可以你的身份调用 API(<code>Authorization: Bearer rpat_…</code>),创建成功后还会给出一条<b>已配置好该 token 的本地 Skill 安装命令</b>,装好即用。</p>\`;
         document.querySelectorAll('#tokens [data-revoke]').forEach((b) => {
           b.onclick = async () => {
             if (!confirm("确定吊销该令牌?使用它的调用将立即失效。")) return;
@@ -710,7 +743,12 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: f.name.value }),
           });
-          out.innerHTML = "✓ 立即复制 —— 仅显示这一次:<br/><code>" + esc(r.token) + "</code>";
+          const installCmd = "curl -fsSL -H \"Authorization: Bearer " + r.token + "\" " + location.origin + "/skill/install.sh | sh";
+          out.innerHTML =
+            "✓ 令牌仅显示这一次,立即复制:<br/><code>" + esc(r.token) + "</code>"
+            + "<br/><br/><b>一键安装已配置好的本地 Skill</b>(已内置此 token,装好即用、无需再配置):"
+            + "<pre>" + esc(installCmd) + "</pre>";
+          addCopyButtons(out);
           f.reset();
           renderTokens();
         } catch (e) { out.textContent = "✗ " + e.message; }
@@ -854,13 +892,13 @@ const html = `<!doctype html>
         const orchestrator =
           \`<div class="card">
              <h3>① 安装编排型 skill(只需一次)</h3>
-             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。</p>
+             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。<strong>推荐去「API Key」页新建令牌</strong>,创建后会给出一条<strong>已内置 token</strong> 的安装命令,装好即可自动沉淀规则、无需手动配置。通用(不带 token)命令:</p>
              <pre><code>curl -fsSL \${o}/skill/install.sh | sh</code></pre>
              <h3>② 在 Claude Code 里直接说</h3>
              <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
              <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
-             <h3>③ 自动沉淀规则(可选)</h3>
-             <p class="muted">设置环境变量 <code>export REVIEWPILOT_TOKEN=rpat_…</code>(令牌见账户页)后,每次 review 会自动把发现的关键点作为<strong>候选规则</strong>提交到当前项目的规则集,你在此页确认采纳后才会生效。</p>
+             <h3>③ 自动沉淀规则</h3>
+             <p class="muted">用上面「已内置 token」的安装命令装好后即自动开启:每次 review 会把发现的关键点作为<strong>候选规则</strong>提交到当前项目的规则集,你在此页确认采纳后才会生效。</p>
            </div>\`;
 
         document.querySelector("#rulesets").innerHTML =
@@ -890,6 +928,7 @@ const html = `<!doctype html>
             try { await api("/api/rulesets/" + b.getAttribute("data-fork-rs") + "/fork", { method: "POST" }); renderRulesets(); }
             catch (e) { alert(e.message); }
           }));
+        addCopyButtons(document.querySelector("#rulesets"));
       }
 
       // --- Token usage (per configured task; day/week/month) ---
@@ -950,11 +989,14 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
           <p class="muted">可用工具(按你的角色过滤):<code>whoami</code>、<code>list_schedules</code>、<code>list_jobs</code>、<code>get_job</code>(只读);<code>create_review_task</code>、<code>run_schedule</code>(member+)。</p>
 
           <h3>本地评审 Skill(Claude Code)</h3>
-          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。一行安装:</p>
+          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。</p>
+          <p class="muted"><b>推荐:已配置好 token 的安装命令</b> —— 在上方「<b>+ 新建令牌</b>」创建一个 API Key,创建成功后会直接给出一条<strong>已内置该 token</strong> 的安装命令,复制运行即可,无需再手动配置。</p>
+          <p class="muted">不需要自动沉淀规则的话,也可用这条不带 token 的通用命令安装:</p>
           <pre>curl -fsSL \${o}/skill/install.sh | sh</pre>
           <p class="muted">安装后在 Claude Code 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看 <code>\${o}/skill/reviewpilot-review/SKILL.md</code>。</p>
           <p class="muted">这是<b>编排型</b> skill:还可以说「让 &lt;用户名&gt; 帮我 review 我的改动」—— 它会拉取该用户的公开规则集,并按改动文件<b>本地按需</b>加载相关规则(代码不出本机)。规则集的创建与发现见左侧「评审规则集」。</p>
         \`;
+        addCopyButtons(document.querySelector("#integrations"));
       }
 
       // --- Users (admin only) ---

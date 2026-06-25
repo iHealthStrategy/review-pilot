@@ -65,17 +65,20 @@ export function createAppHandler(deps: AppDeps) {
     // Derive the server's own origin so the orchestrator skill can call back to
     // fetch a named user's public rulesets (X-Forwarded-* honoured behind a proxy).
     const baseUrl = requestOrigin(req);
-    // Local Claude Code skill (public artifact — no auth): one-line installer
-    // and the raw SKILL.md. The default skill is the orchestrator (fetches a
-    // named user's public rulesets on demand); generated from the shared kernel.
+    // Local Claude Code skill (public artifact — no auth): one-line installer and
+    // the raw SKILL.md. The default skill is the orchestrator. If the caller
+    // presents their OWN bearer token (PAT/session), it is baked into the skill so
+    // the download is pre-configured (no manual REVIEWPILOT_TOKEN setup); the token
+    // is only ever reflected back to the caller that supplied it.
+    const installToken = bearerToken(req);
     if (path === "/skill/install.sh") {
       res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
-      res.end(buildInstallScript(buildOrchestratorSkill(baseUrl)));
+      res.end(buildInstallScript(buildOrchestratorSkill(baseUrl, installToken)));
       return;
     }
     if (path === `/skill/${SKILL_NAME}/SKILL.md` || path === "/skill/SKILL.md") {
       res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
-      res.end(buildOrchestratorSkill(baseUrl));
+      res.end(buildOrchestratorSkill(baseUrl, installToken));
       return;
     }
     // Per-ruleset skill: public → open; private → requires the owner's token.
@@ -137,6 +140,13 @@ export function createAppHandler(deps: AppDeps) {
  * proxy; falls back to the Host header. Empty when neither is present (the skill
  * then falls back to its REVIEWPILOT_URL env var).
  */
+/** Extract a `Bearer <token>` credential from the request, or "" when absent. */
+function bearerToken(req: IncomingMessage): string {
+  const h = req.headers.authorization;
+  const m = /^Bearer\s+(.+)$/i.exec((h ?? "").trim());
+  return m ? m[1]!.trim() : "";
+}
+
 function requestOrigin(req: IncomingMessage): string {
   const header = (name: string): string => {
     const v = req.headers[name];
