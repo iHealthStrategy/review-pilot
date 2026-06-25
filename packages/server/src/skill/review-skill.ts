@@ -470,6 +470,25 @@ mkdir -p "$DIR"
 cat > "$DIR/SKILL.md" <<'REVIEWPILOT_SKILL_EOF'
 ${skillMd}REVIEWPILOT_SKILL_EOF
 echo "✓ Installed the ReviewPilot review skill → $DIR/SKILL.md"
+
+# Best-effort: register code-review-graph as a USER-scoped MCP so the skill's
+# structural-context step (risk hotspots / impacted callers / test gaps) works in
+# every project. Lazy: uvx fetches the package on first launch, not now. Skipped
+# when claude/uvx are absent, or when REVIEWPILOT_NO_GRAPH is set. Never fatal.
+if [ -z "\${REVIEWPILOT_NO_GRAPH:-}" ] && command -v claude >/dev/null 2>&1 && command -v uvx >/dev/null 2>&1; then
+  if claude mcp list 2>/dev/null | grep -q "code-review-graph"; then
+    echo "✓ code-review-graph MCP already registered (structural context on)"
+  elif claude mcp add -s user code-review-graph -- uvx code-review-graph serve >/dev/null 2>&1; then
+    echo "✓ Registered code-review-graph MCP (user scope) — structural context enabled"
+  else
+    echo "• Could not auto-register code-review-graph MCP. To enable later, run:"
+    echo "    claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+  fi
+else
+  echo "• Structural context is optional. To enable it (needs uv + claude), run:"
+  echo "    claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+fi
+
 echo "  In Claude Code, just ask: 评审一下我的改动  (or: review my changes)"
 echo "  Or:  让 <用户名> 帮我 review 我的改动  (pulls that user's public rules)"
 echo "  Tip: export REVIEWPILOT_TOKEN=rpat_…  to auto-grow your project's rules (account page)"

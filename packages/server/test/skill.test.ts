@@ -171,6 +171,15 @@ test("buildReviewSkill: structured rules become conditional rule lines with sele
   assert.match(md, /Write the findings in 中文/);
 });
 
+test("buildInstallScript: best-effort registers the code-review-graph MCP (guarded, skippable)", () => {
+  const sh = buildInstallScript(buildOrchestratorSkill("https://x.example.com"));
+  assert.match(sh, /claude mcp add -s user code-review-graph -- uvx code-review-graph serve/);
+  assert.match(sh, /command -v claude/); // only when claude is present
+  assert.match(sh, /command -v uvx/);    // and uvx is present
+  assert.match(sh, /REVIEWPILOT_NO_GRAPH/); // opt-out
+  assert.match(sh, /claude mcp list .* grep -q "code-review-graph"/); // idempotent
+});
+
 test("buildInstallScript: writes the skill into ~/.claude/skills via a heredoc", () => {
   const sh = buildInstallScript(buildReviewSkill());
   assert.match(sh, /\$HOME\/\.claude\/skills\/reviewpilot-review/);
