@@ -753,7 +753,7 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: f.name.value }),
           });
-          const installCmd = "curl -fsSL -H \"Authorization: Bearer " + r.token + "\" " + location.origin + "/skill/install.sh | sh";
+          const installCmd = 'curl -fsSL -H "Authorization: Bearer ' + r.token + '" ' + location.origin + '/skill/install.sh | sh';
           out.innerHTML =
             "✓ 令牌仅显示这一次,立即复制:<br/><code>" + esc(r.token) + "</code>"
             + "<br/><br/><b>一键安装已配置好的本地 Skill</b>(已内置此 token,装好即用、无需再配置):"

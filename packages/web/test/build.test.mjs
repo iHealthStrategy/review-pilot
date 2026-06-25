@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -44,4 +44,18 @@ test("web build emits a static index.html artifact", async () => {
   assert.match(html, /localStorage.getItem\("rp_view"\)/);
   assert.match(html, /location.hash = "tasks\/"/);
   assert.match(html, /rp_bucket/);
+});
+
+test("the embedded app script is syntactically valid JS", async () => {
+  const dist = resolve(root, "dist");
+  await run(process.execPath, [resolve(root, "scripts/build.mjs")]);
+  const html = await readFile(resolve(dist, "index.html"), "utf8");
+  // Grab the last <script>…</script> (the app, not the JSON mock-data block).
+  const parts = html.split(/<script[^>]*>/);
+  const appJs = parts[parts.length - 1].split("</script>")[0];
+  const tmp = resolve(dist, "__app.check.mjs");
+  await writeFile(tmp, appJs);
+  // `node --check` parses without executing; a syntax error rejects (non-zero).
+  await run(process.execPath, ["--check", tmp]);
+  await rm(tmp, { force: true });
 });
