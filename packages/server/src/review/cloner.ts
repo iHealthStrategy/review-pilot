@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner } from "./command-runner.js";
 import { cloneWithRetry } from "./git-clone.js";
+import { assertSafeGitArg } from "./git-safety.js";
 
 /** A synced working copy of a repository at a specific ref. */
 export interface Workspace {
@@ -52,6 +53,8 @@ export class GitCloner implements Cloner {
     // promisor remote mid-operation (which can't be retried and fails on flaky
     // networks). Retries ride out transient repo-host egress blips.
     await cloneWithRetry(this.runner, cloneUrl, dir);
+    // Reject an option-like ref so it can't become a git flag (e.g. --upload-pack).
+    assertSafeGitArg(ref, "ref");
     // Best-effort fetch of the exact commit (covers a head sha not yet pointed
     // at by a fetched ref); ignored if the server disallows by-sha fetch.
     await this.runner.run("git", ["-C", dir, "fetch", "origin", ref]);

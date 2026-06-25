@@ -884,12 +884,31 @@ function parseScheduleUpdate(body: unknown): UpdateScheduleInput {
   return patch;
 }
 
+/** Max accepted request body — guards against unbounded in-memory buffering (DoS). */
+const MAX_BODY_BYTES = 2 * 1024 * 1024; // 2 MB
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    req.on("error", reject);
+    let size = 0;
+    let aborted = false;
+    req.on("data", (c: Buffer) => {
+      if (aborted) return;
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        aborted = true;
+        reject(new HttpError(413, "request body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (!aborted) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (e) => {
+      if (!aborted) reject(e);
+    });
   });
 }
 

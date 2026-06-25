@@ -386,7 +386,7 @@ const html = `<!doctype html>
     <script id="mock-data" type="application/json">${JSON.stringify(MOCK)}</script>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
-      const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
       // Wrap every <pre> under \`root\` with a one-click "复制" button (idempotent).
       function addCopyButtons(root) {

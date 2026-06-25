@@ -1,5 +1,6 @@
 import { mkdir, rm } from "node:fs/promises";
 import type { CommandRunner } from "./command-runner.js";
+import { assertSafeCloneUrl, redactCreds } from "./git-safety.js";
 
 /**
  * Clone a repo (full history, no checkout) with retries. Repo egress to a Git
@@ -22,9 +23,11 @@ export async function cloneWithRetry(
   dir: string,
   attempts = 3,
 ): Promise<void> {
+  assertSafeCloneUrl(cloneUrl);
   let lastErr = "";
   for (let i = 1; i <= attempts; i++) {
-    const res = await runner.run("git", ["clone", "--no-checkout", cloneUrl, dir]);
+    // `--` ends option parsing so a URL/dir starting with `-` can't become a flag.
+    const res = await runner.run("git", ["clone", "--no-checkout", "--", cloneUrl, dir]);
     if (res.code === 0) return;
     lastErr = res.stderr.trim();
     if (i < attempts) {
@@ -33,5 +36,5 @@ export async function cloneWithRetry(
       await mkdir(dir, { recursive: true });
     }
   }
-  throw new Error(`git clone failed after ${attempts} attempts: ${lastErr}`);
+  throw new Error(`git clone failed after ${attempts} attempts: ${redactCreds(lastErr)}`);
 }

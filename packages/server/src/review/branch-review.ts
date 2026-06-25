@@ -10,6 +10,7 @@ import type {
 import type { CommandRunner } from "./command-runner.js";
 import type { RecordTokenUsageInput } from "../persistence/repository.js";
 import { filterToChangedLines } from "./diff-lines.js";
+import { assertSafeCloneUrl, assertSafeGitArg, redactCreds } from "./git-safety.js";
 import type { FindingDraft, ReviewContext, ReviewEngine } from "./review-engine.js";
 import { scanStructure } from "./structure-scanner.js";
 
@@ -71,8 +72,13 @@ export class BranchReviewService {
     // concurrency, and each task gets its own unique mkdtemp subdir below.
     await mkdir(root, { recursive: true });
     const dir = await mkdtemp(join(root, "reviewpilot-branch-"));
+    // Reject option-like / non-http(s) inputs so untrusted task data can't reach
+    // git as an option or an ext::/file:// clone scheme.
+    assertSafeCloneUrl(task.cloneUrl);
+    assertSafeGitArg(task.headBranch, "headBranch");
+    assertSafeGitArg(task.baseBranch, "baseBranch");
     try {
-      await this.run(["clone", task.cloneUrl, dir]);
+      await this.run(["clone", "--", task.cloneUrl, dir]);
       // Make the workspace reflect the head branch for whole-repo context.
       await this.run(["-C", dir, "checkout", task.headBranch]);
 
@@ -125,7 +131,8 @@ export class BranchReviewService {
   private async run(args: string[]): Promise<{ stdout: string }> {
     const res = await this.deps.git.run("git", args);
     if (res.code !== 0) {
-      throw new Error(`git ${args.join(" ")} failed: ${res.stderr.trim()}`);
+      // Redact any credentialed clone URL in the echoed args/stderr.
+      throw new Error(`git ${redactCreds(args.join(" "))} failed: ${redactCreds(res.stderr.trim())}`);
     }
     return { stdout: res.stdout };
   }

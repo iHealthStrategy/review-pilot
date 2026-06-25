@@ -24,23 +24,35 @@ const SEVERITY_EMOJI: Record<Severity, string> = {
 };
 
 /**
+ * Neutralize lark_md control characters in untrusted strings (branch names,
+ * finding titles, engine stderr) so a crafted value can't inject markup, fake
+ * links, code spans, or @mentions into a card a human trusts. Emphasis/code/link
+ * markers become spaces; `@` is broken with a zero-width space.
+ */
+function lk(s: string): string {
+  return String(s)
+    .replace(/[`*_~[\]()<>#|]/g, " ")
+    .replace(/@/g, "@​");
+}
+
+/**
  * Render a daily-scan result as a Feishu (Lark) interactive card payload.
  * Header turns red when there are findings, green when the day was clean.
  */
 export function formatScanCard(result: ScanResult): unknown {
-  const lines: string[] = [`**仓库**: ${result.repoFullName}　**日期**: ${result.date}`];
+  const lines: string[] = [`**仓库**: ${lk(result.repoFullName)}　**日期**: ${lk(result.date)}`];
   if (result.branches.length === 0) {
     lines.push("\n今日无改动。");
   } else {
     for (const b of result.branches) {
       if (b.error) {
-        lines.push(`\n**${b.branch}** （${b.commitCount} 次提交）：⚠️ 评审失败（${b.error}）`);
+        lines.push(`\n**${lk(b.branch)}** （${b.commitCount} 次提交）：⚠️ 评审失败（${lk(b.error)}）`);
         continue;
       }
-      lines.push(`\n**${b.branch}** （${b.commitCount} 次提交）：${b.findings.length} 个问题`);
+      lines.push(`\n**${lk(b.branch)}** （${b.commitCount} 次提交）：${b.findings.length} 个问题`);
       for (const f of b.findings.slice(0, 10)) {
-        const loc = `${f.filePath}${f.line ? ":" + f.line : ""}`;
-        lines.push(`${SEVERITY_EMOJI[f.severity]} \`${loc}\` ${f.title}`);
+        const loc = `${lk(f.filePath)}${f.line ? ":" + f.line : ""}`;
+        lines.push(`${SEVERITY_EMOJI[f.severity]} \`${loc}\` ${lk(f.title)}`);
       }
       if (b.findings.length > 10) lines.push(`…以及另外 ${b.findings.length - 10} 个`);
     }
