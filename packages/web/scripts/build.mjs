@@ -143,13 +143,23 @@ const html = `<!doctype html>
       input, select, button, textarea { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-sm); padding: 8px 11px; font-size: 13px; font-family: inherit; outline: none; transition: border-color .15s, box-shadow .15s, background .15s; }
       input::placeholder, textarea::placeholder { color: var(--muted); }
       input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: var(--ring); }
-      button { cursor: pointer; background: linear-gradient(135deg, var(--accent-2), var(--accent-strong)); border: 1px solid var(--accent-strong); color: #fff; font-weight: 600; box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 6px 16px -8px rgba(31,111,235,.6); }
+      /* Buttons — one coherent size system: primary (default) · secondary (ghost) · compact (in tables) */
+      button { cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; line-height: 1.2; white-space: nowrap; background: linear-gradient(135deg, var(--accent-2), var(--accent-strong)); border: 1px solid var(--accent-strong); color: #fff; font-weight: 600; box-shadow: 0 1px 0 rgba(255,255,255,.06) inset, 0 6px 16px -8px rgba(31,111,235,.6); }
       button:hover { filter: brightness(1.07); transform: translateY(-1px); }
       button:active { transform: translateY(0); filter: brightness(.97); }
       button:focus-visible { box-shadow: var(--ring); }
-      button.secondary { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); box-shadow: none; font-weight: 500; }
+      button.secondary { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); box-shadow: none; font-weight: 500; padding: 6px 13px; }
       button.secondary:hover { background: var(--surface-2); border-color: var(--accent); color: #fff; filter: none; }
       button:disabled { opacity: .55; cursor: not-allowed; transform: none; filter: none; }
+      /* Multiple buttons on one row: consistent spacing + compact size in table cells */
+      td button { padding: 4px 12px; font-size: 12px; }
+      td button + button, .actions button + button { margin-left: 8px; }
+      .actions { display: inline-flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      /* Segmented control (日/周/月) */
+      #usage-buckets { display: inline-flex; gap: 6px; }
+      #usage-buckets button { padding: 6px 14px; }
+      /* "+ New" header buttons sit flush-right, never stretched */
+      .view-head button, .sub-head button { flex: 0 0 auto; padding: 8px 14px; }
 
       /* ── Code / severity / misc ────────────────────────────────── */
       .sev { font-weight: 600; }
