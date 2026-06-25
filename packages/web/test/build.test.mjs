@@ -39,4 +39,9 @@ test("web build emits a static index.html artifact", async () => {
   assert.match(html, /\/api\/tasks/);
   assert.match(html, /\/api\/jobs/);
   assert.match(html, /\/api\/schedules/);
+  // State survives refresh: view restored from hash (with localStorage fallback),
+  // open job detail encoded as #tasks/<id>, usage bucket persisted.
+  assert.match(html, /localStorage.getItem\("rp_view"\)/);
+  assert.match(html, /location.hash = "tasks\/"/);
+  assert.match(html, /rp_bucket/);
 });

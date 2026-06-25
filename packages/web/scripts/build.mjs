@@ -479,7 +479,7 @@ const html = `<!doctype html>
           me = data.user;
           hideAuth();
           applyMe();
-          showView(location.hash.slice(1));
+          showView(location.hash.slice(1) || localStorage.getItem("rp_view") || "tasks");
           refresh();
         } catch (err) { out.textContent = "✗ " + err.message; }
       };
@@ -521,13 +521,16 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
+        // The hash is the source of truth so refresh restores the page. Form:
+        //   "<view>" or "<view>/<sub>" (tasks/<jobId> keeps an open job detail).
         // Merged views keep old hashes working via aliases:
-        //   schedules/dashboard → tasks (定时任务 + 一次性任务 同页)
-        //   integrations → account (API Key 页)
+        //   schedules/dashboard → tasks · integrations → account
+        const [rawView, sub] = String(name || "").split("/");
         const alias = { schedules: "tasks", dashboard: "tasks", integrations: "account" };
-        name = alias[name] || name;
+        const mapped = alias[rawView] || rawView;
         const valid = ["tasks", "account", "rulesets", "usage", "users"];
-        const view = valid.includes(name) ? name : "tasks";
+        const view = valid.includes(mapped) ? mapped : "tasks";
+        localStorage.setItem("rp_view", view); // fallback for a bare URL (no hash)
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>
@@ -536,6 +539,10 @@ const html = `<!doctype html>
         if (view === "users") renderUsers();
         if (view === "usage") renderUsage();
         if (view === "rulesets") renderRulesets();
+        if (view === "tasks") {
+          if (sub) showJob(sub);                       // restore the open job detail
+          else { const d = document.getElementById("detail"); if (d) d.innerHTML = ""; }
+        }
       }
       window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
 
@@ -550,7 +557,8 @@ const html = `<!doctype html>
             ? \`<table><thead><tr><th>Pull Request</th><th>引擎</th><th>状态</th><th>进度</th><th>问题数</th></tr></thead><tbody>\${rows}</tbody></table>\`
             : \`<p class="muted">暂无评审任务。\${canWrite() ? "点上方 <b>+ 新建任务</b>,或 POST /api/tasks。" : ""}</p>\`;
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
-          tr.onclick = () => showJob(tr.getAttribute("data-job"));
+          // Drive the hash so an open job detail is restored on refresh.
+          tr.onclick = () => { location.hash = "tasks/" + tr.getAttribute("data-job"); };
         });
       }
 
@@ -934,9 +942,13 @@ const html = `<!doctype html>
       }
 
       // --- Token usage (per configured task; day/week/month) ---
-      let usageBucket = "day";
+      let usageBucket = localStorage.getItem("rp_bucket") || "day";
       document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) => {
-        b.onclick = () => { usageBucket = b.getAttribute("data-bucket"); renderUsage(); };
+        b.onclick = () => {
+          usageBucket = b.getAttribute("data-bucket");
+          localStorage.setItem("rp_bucket", usageBucket); // survive refresh
+          renderUsage();
+        };
       });
       async function renderUsage() {
         document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) =>
@@ -1038,7 +1050,7 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         applyMe();
         if (me) {
           hideAuth();
-          showView(location.hash.slice(1));
+          showView(location.hash.slice(1) || localStorage.getItem("rp_view") || "tasks");
           refresh();
         } else {
           showAuth();
