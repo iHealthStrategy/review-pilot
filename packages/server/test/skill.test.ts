@@ -178,6 +178,10 @@ test("buildInstallScript: best-effort registers the code-review-graph MCP (guard
   assert.match(sh, /command -v uvx/);    // and uvx is present
   assert.match(sh, /REVIEWPILOT_NO_GRAPH/); // opt-out
   assert.match(sh, /claude mcp list .* grep -q "code-review-graph"/); // idempotent
+  // Interactive uv install offer: prompt read from /dev/tty (works under curl|sh),
+  // installs via the official script, skippable.
+  assert.match(sh, /read ans < \/dev\/tty/);
+  assert.match(sh, /astral\.sh\/uv\/install\.sh/);
 });
 
 test("buildInstallScript: writes the skill into ~/.claude/skills via a heredoc", () => {

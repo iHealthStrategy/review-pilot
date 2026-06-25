@@ -471,22 +471,58 @@ cat > "$DIR/SKILL.md" <<'REVIEWPILOT_SKILL_EOF'
 ${skillMd}REVIEWPILOT_SKILL_EOF
 echo "✓ Installed the ReviewPilot review skill → $DIR/SKILL.md"
 
-# Best-effort: register code-review-graph as a USER-scoped MCP so the skill's
-# structural-context step (risk hotspots / impacted callers / test gaps) works in
-# every project. Lazy: uvx fetches the package on first launch, not now. Skipped
-# when claude/uvx are absent, or when REVIEWPILOT_NO_GRAPH is set. Never fatal.
-if [ -z "\${REVIEWPILOT_NO_GRAPH:-}" ] && command -v claude >/dev/null 2>&1 && command -v uvx >/dev/null 2>&1; then
+# Optional structural-context engine: code-review-graph via a USER-scoped MCP, so
+# the skill's risk-hotspot / impacted-caller / test-gap step works in every
+# project. The skill works fine WITHOUT it. uvx fetches the package lazily on
+# first launch. If uv is missing we interactively offer to install it (reading
+# the answer from /dev/tty so it works even under \`curl … | sh\`); skipping is
+# safe, and a non-interactive run (CI) skips automatically. Never fatal.
+GRAPH_CMD="claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+register_graph_mcp() {
   if claude mcp list 2>/dev/null | grep -q "code-review-graph"; then
     echo "✓ code-review-graph MCP already registered (structural context on)"
   elif claude mcp add -s user code-review-graph -- uvx code-review-graph serve >/dev/null 2>&1; then
     echo "✓ Registered code-review-graph MCP (user scope) — structural context enabled"
   else
-    echo "• Could not auto-register code-review-graph MCP. To enable later, run:"
-    echo "    claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+    echo "• Could not register the MCP automatically. Run later:  \$GRAPH_CMD"
   fi
+}
+if [ -n "\${REVIEWPILOT_NO_GRAPH:-}" ]; then
+  echo "• Skipped structural-context setup (REVIEWPILOT_NO_GRAPH set)."
+elif ! command -v claude >/dev/null 2>&1; then
+  echo "• Structural context optional; Claude Code CLI not found — skipping."
+elif command -v uvx >/dev/null 2>&1; then
+  register_graph_mcp
 else
-  echo "• Structural context is optional. To enable it (needs uv + claude), run:"
-  echo "    claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+  echo ""
+  echo "可选增强:结构化上下文(风险热点 / 调用方 / 测试缺口)需要 uv (uvx)。"
+  echo "不装也行 —— skill 照常评审,只是少这层上下文。"
+  ans=n
+  if [ -r /dev/tty ]; then
+    printf "现在安装 uv 吗? [y/N] " > /dev/tty
+    read ans < /dev/tty || ans=n
+  fi
+  case "\$ans" in
+    y|Y|yes|YES)
+      echo "→ 通过官方脚本安装 uv (https://astral.sh/uv) …"
+      if curl -LsSf https://astral.sh/uv/install.sh | sh; then
+        # uv installs to ~/.local/bin by default; surface it to this session.
+        export PATH="\$HOME/.local/bin:\$PATH"
+        if command -v uvx >/dev/null 2>&1; then
+          echo "✓ uv 已安装。"
+          register_graph_mcp
+          echo "  注意:新开终端(或 source shell 配置)让 uvx 永久在 PATH。"
+        else
+          echo "✓ uv 已安装,但当前会话 PATH 未生效。新开终端后运行:  \$GRAPH_CMD"
+        fi
+      else
+        echo "✗ uv 安装失败(网络?)。手动装好 uv 后运行:  \$GRAPH_CMD"
+      fi
+      ;;
+    *)
+      echo "• 已跳过。以后启用:先装 uv,再运行:  \$GRAPH_CMD"
+      ;;
+  esac
 fi
 
 echo "  In Claude Code, just ask: 评审一下我的改动  (or: review my changes)"
