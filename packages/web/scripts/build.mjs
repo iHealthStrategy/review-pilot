@@ -97,7 +97,6 @@ const html = `<!doctype html>
       nav a[data-view="rulesets"]::before { content: "📐"; }
       nav a[data-view="account"]::before { content: "🔑"; }
       nav a[data-view="usage"]::before { content: "📈"; }
-      nav a[data-view="integrations"]::before { content: "🔌"; }
       nav a[data-view="users"]::before { content: "👥"; }
       nav a:hover { background: var(--surface-2); color: var(--text); }
       nav a:active { transform: translateY(1px); }
@@ -227,9 +226,8 @@ const html = `<!doctype html>
         <a href="#dashboard" data-view="dashboard">仪表盘</a>
         <a href="#rulesets" data-view="rulesets">评审规则集</a>
         <div class="nav-group">账户与接入</div>
-        <a href="#account" data-view="account">账户</a>
+        <a href="#account" data-view="account">API Key</a>
         <a href="#usage" data-view="usage">Token 用量</a>
-        <a href="#integrations" data-view="integrations">API 与 MCP</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
       </nav>
       <main>
@@ -250,10 +248,12 @@ const html = `<!doctype html>
         </div>
         <div class="view" id="view-account">
           <div class="view-head">
-            <h2>个人访问令牌</h2>
+            <h2>API Key</h2>
             <button id="open-token-modal">+ 新建令牌</button>
           </div>
           <section id="tokens"><div data-loading>加载中…</div></section>
+          <h3>API 与 MCP 接入说明</h3>
+          <section id="integrations"></section>
         </div>
         <div class="view" id="view-rulesets">
           <div class="view-head">
@@ -272,10 +272,6 @@ const html = `<!doctype html>
             </div>
           </div>
           <section id="usage"><div data-loading>加载中…</div></section>
-        </div>
-        <div class="view" id="view-integrations">
-          <div class="view-head"><h2>API &amp; MCP 接入说明</h2></div>
-          <section id="integrations"></section>
         </div>
         <div class="view" id="view-users">
           <div class="view-head"><h2>用户管理</h2></div>
@@ -493,15 +489,16 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        const valid = ["schedules", "dashboard", "account", "rulesets", "usage", "integrations", "users"];
-        const view = valid.includes(name) ? name : "schedules";
+        // "integrations" merged into the account/API Key view; keep the hash
+        // working by aliasing it to account.
+        const valid = ["schedules", "dashboard", "account", "rulesets", "usage", "users"];
+        const view = valid.includes(name) ? name : (name === "integrations" ? "account" : "schedules");
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>
           a.classList.toggle("active", a.getAttribute("data-view") === view));
-        if (view === "account") renderTokens();
+        if (view === "account") { renderTokens(); renderIntegrations(); }
         if (view === "users") renderUsers();
-        if (view === "integrations") renderIntegrations();
         if (view === "usage") renderUsage();
         if (view === "rulesets") renderRulesets();
       }
@@ -928,7 +925,7 @@ const html = `<!doctype html>
       function renderIntegrations() {
         const o = esc(location.origin);
         document.querySelector("#integrations").innerHTML = \`
-          <p class="muted">用你在 <b>Account</b> 页创建的个人访问令牌(<code>rpat_…</code>)调用 REST API 或接入 MCP。令牌继承你的角色:viewer 只读,写操作(新建任务、触发扫描)需 member+(由管理员升级)。令牌只在创建时显示一次。</p>
+          <p class="muted">用上方创建的个人访问令牌(<code>rpat_…</code>)调用 REST API 或接入 MCP。令牌继承你的角色:viewer 只读,写操作(新建任务、触发扫描)需 member+(由管理员升级)。令牌只在创建时显示一次。</p>
 
           <h3>REST API</h3>
           <p class="muted">Base URL <code>\${o}</code> · 认证头 <code>Authorization: Bearer rpat_…</code> · 健康检查 <code>GET /api/health</code> 免鉴权。</p>
