@@ -169,6 +169,7 @@ export function startApp(
       sessionTtlMs: config.sessionTtlMs,
       adminEmail: config.adminEmail,
       ...(config.adminPassword ? { adminPassword: config.adminPassword } : {}),
+      ...(config.adminToken ? { adminToken: config.adminToken } : {}),
       webDistDir: config.webDistDir,
       scheduleStore,
       scheduler,

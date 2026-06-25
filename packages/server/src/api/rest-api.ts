@@ -930,6 +930,8 @@ export interface ApiOptions {
   adminEmail?: string;
   /** Built-in admin password; when set, the env admin is enabled. */
   adminPassword?: string;
+  /** Optional config-only PAT for the env admin (bearer auth without a DB row). */
+  adminToken?: string;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
   /** Required for the /api/schedules routes. */
@@ -943,7 +945,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const auth: AuthConfig = {
     secret,
     sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
-    envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminPassword ?? ""),
+    envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminPassword ?? "", options.adminToken ?? ""),
   };
   const tasks = options.taskService;
   const schedules = options.scheduleStore;

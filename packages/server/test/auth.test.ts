@@ -13,7 +13,7 @@ const SECRET = "test-session-secret";
 
 async function withAuthApi(
   run: (base: string, repo: Repository) => Promise<void>,
-  opts: { adminEmail?: string; adminPassword?: string } = {},
+  opts: { adminEmail?: string; adminPassword?: string; adminToken?: string } = {},
 ): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
@@ -249,3 +249,17 @@ test("env admin: cannot mint personal tokens (it has no DB row)", () =>
     });
     assert.equal(res.status, 400);
   }, ENV_ADMIN));
+
+test("env admin: configured ADMIN_TOKEN authenticates as admin without a DB row", () =>
+  withAuthApi(async (base) => {
+    const TOK = "envadmin-secret-token-xyz"; // need not have the rpat_ prefix
+    // /api/auth/me resolves to the env admin via the token.
+    const me = await fetch(`${base}/api/auth/me`, { headers: authHeaders(TOK) });
+    assert.equal(me.status, 200);
+    const body = (await me.json()) as any;
+    assert.equal(body.user.role, "admin");
+    assert.equal(body.via, "token");
+    // Admin-only route reachable with the token; a wrong token is rejected.
+    assert.equal((await fetch(`${base}/api/users`, { headers: authHeaders(TOK) })).status, 200);
+    assert.equal((await fetch(`${base}/api/auth/me`, { headers: authHeaders("nope") })).status, 401);
+  }, { ...ENV_ADMIN, adminToken: "envadmin-secret-token-xyz" }));

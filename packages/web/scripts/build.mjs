@@ -724,6 +724,18 @@ const html = `<!doctype html>
 
       // --- Account: personal access tokens ---
       async function renderTokens() {
+        // The env-configured admin has no DB row, so it can't mint DB tokens —
+        // it authenticates via the server's ADMIN_TOKEN env var instead.
+        if (me && me.id === "usr_env_admin") {
+          document.querySelector("#tokens").innerHTML =
+            \`<div class="card"><h3>内置管理员(环境配置)</h3>
+             <p class="muted">当前是环境变量配置的管理员账户,<b>不在数据库中</b>,因此无法在此创建个人令牌。请用服务端设置的环境变量 <code>ADMIN_TOKEN</code> 作为令牌——它在 API / MCP / skill 自动沉淀里等同于一个 admin PAT。</p>
+             <p class="muted">本地 skill 安装(把 <code>&lt;ADMIN_TOKEN&gt;</code> 换成你配置的值):</p>
+             <pre>curl -fsSL -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;" \${esc(location.origin)}/skill/install.sh | sh</pre>
+             <p class="muted">若服务端未设置 <code>ADMIN_TOKEN</code>,请在部署环境加上后重启;或改用一个普通注册账户来测试。</p></div>\`;
+          addCopyButtons(document.querySelector("#tokens"));
+          return;
+        }
         const tokens = await load("/api/tokens", []);
         const rows = tokens.map((t) =>
           \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "从未使用")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">吊销</button></td></tr>\`

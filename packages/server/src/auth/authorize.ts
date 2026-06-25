@@ -1,6 +1,6 @@
 import type { UserRole } from "../domain/entities.js";
 import type { Repository } from "../persistence/repository.js";
-import { type EnvAdmin, ENV_ADMIN_ID } from "./env-admin.js";
+import { type EnvAdmin, ENV_ADMIN_ID, matchesEnvAdminToken } from "./env-admin.js";
 import { verifySession } from "./session.js";
 import { hashApiToken, looksLikeApiToken } from "./tokens.js";
 
@@ -63,6 +63,13 @@ export async function resolvePrincipal(
   const match = /^Bearer\s+(.+)$/i.exec(authorization.trim());
   if (!match) return null;
   const credential = match[1]!.trim();
+
+  // Config-only env-admin token: authenticates as the env admin with no DB row.
+  // Checked first (and independent of the rpat_ prefix) so it works everywhere a
+  // PAT does — API, MCP, skill auto-grow.
+  if (matchesEnvAdminToken(envAdmin, credential)) {
+    return { userId: ENV_ADMIN_ID, role: "admin", via: "token" };
+  }
 
   if (looksLikeApiToken(credential)) {
     const record = await repo.getApiTokenByHash(hashApiToken(credential));

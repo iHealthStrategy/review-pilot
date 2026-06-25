@@ -124,6 +124,12 @@ export interface AppConfig {
    */
   readonly adminEmail: string;
   readonly adminPassword: string;
+  /**
+   * Optional config-only PAT for the env admin. When set, a request bearing this
+   * token authenticates as the env admin (admin role) without a DB row — lets the
+   * env admin drive the API / MCP / skill auto-grow. Break-glass; keep it secret.
+   */
+  readonly adminToken: string;
   /** Directory of the built Web UI to serve; empty uses the bundled default. */
   readonly webDistDir: string;
   readonly workspaceDir: string;
@@ -281,6 +287,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionTtlMs: int(env, "SESSION_TTL_MS", 604800000),
     adminEmail: str(env, "ADMIN_EMAIL", "admin@reviewpilot.local"),
     adminPassword: str(env, "ADMIN_PASSWORD", ""),
+    adminToken: str(env, "ADMIN_TOKEN", ""),
     webDistDir: str(env, "WEB_DIST_DIR", ""),
     workspaceDir: str(env, "WORKSPACE_DIR", "./.workspace"),
   };

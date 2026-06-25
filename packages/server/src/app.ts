@@ -31,6 +31,8 @@ export interface AppDeps {
   /** Built-in env-configured admin (email + password); password enables it. */
   adminEmail?: string;
   adminPassword?: string;
+  /** Optional config-only PAT for the env admin (bearer auth without a DB row). */
+  adminToken?: string;
   /** Override directory for the built Web UI (defaults to bundled location). */
   webDistDir?: string;
   /** Backs the /api/schedules routes (scheduled scans). */
@@ -51,6 +53,7 @@ export function createAppHandler(deps: AppDeps) {
     ...(deps.sessionTtlMs !== undefined ? { sessionTtlMs: deps.sessionTtlMs } : {}),
     ...(deps.adminEmail !== undefined ? { adminEmail: deps.adminEmail } : {}),
     ...(deps.adminPassword ? { adminPassword: deps.adminPassword } : {}),
+    ...(deps.adminToken ? { adminToken: deps.adminToken } : {}),
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
@@ -59,7 +62,7 @@ export function createAppHandler(deps: AppDeps) {
   // MCP endpoint auth: resolve the bearer credential (PAT or session) the same
   // way the REST API does, so every user drives MCP with their own token.
   const secret = deps.sessionSecret ?? "";
-  const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "");
+  const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "", deps.adminToken ?? "");
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
     // Derive the server's own origin so the orchestrator skill can call back to

@@ -12,12 +12,19 @@ export interface EnvAdmin {
   id: string;
   email: string;
   password: string;
+  /**
+   * Optional config-only personal access token. When set, a request bearing
+   * this token authenticates as the env admin (admin role) — no DB row needed,
+   * so the env admin can drive the API/MCP/skill-auto-grow without registering.
+   * Break-glass like the password: keep it long, random, and secret-managed.
+   */
+  token: string;
 }
 
 /** Build the env admin, or null when no password is configured (disabled). */
-export function envAdminFrom(email: string, password: string): EnvAdmin | null {
+export function envAdminFrom(email: string, password: string, token = ""): EnvAdmin | null {
   if (!password) return null;
-  return { id: ENV_ADMIN_ID, email: email.trim().toLowerCase(), password };
+  return { id: ENV_ADMIN_ID, email: email.trim().toLowerCase(), password, token };
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -39,4 +46,10 @@ export function matchesEnvAdmin(
 ): boolean {
   if (!admin) return false;
   return safeEqual(normalizedEmail, admin.email) && safeEqual(password, admin.password);
+}
+
+/** A presented bearer credential equals the env admin's configured token (constant-time). */
+export function matchesEnvAdminToken(admin: EnvAdmin | null, credential: string): boolean {
+  if (!admin || !admin.token) return false;
+  return safeEqual(credential, admin.token);
 }
