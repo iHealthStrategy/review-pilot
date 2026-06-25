@@ -3,6 +3,7 @@ import type { Repository } from "../persistence/repository.js";
 import { type EnvAdmin, ENV_ADMIN_ID, matchesEnvAdminToken } from "./env-admin.js";
 import { verifySession } from "./session.js";
 import { hashApiToken, looksLikeApiToken } from "./tokens.js";
+import { looksLikeSkillToken, verifySkillToken } from "./skill-token.js";
 
 /** The authenticated caller, resolved from a session token or a PAT. */
 export interface Principal {
@@ -69,6 +70,16 @@ export async function resolvePrincipal(
   // PAT does — API, MCP, skill auto-grow.
   if (matchesEnvAdminToken(envAdmin, credential)) {
     return { userId: ENV_ADMIN_ID, role: "admin", via: "token" };
+  }
+
+  // Derived, non-stored per-user skill token (rsk_…). Verified by recomputing the
+  // HMAC; the user's CURRENT role is then loaded from the store.
+  if (looksLikeSkillToken(credential)) {
+    const userId = verifySkillToken(credential, secret);
+    if (!userId) return null;
+    const user = await repo.getUserById(userId);
+    if (!user) return null;
+    return { userId: user.id, role: user.role, via: "token" };
   }
 
   if (looksLikeApiToken(credential)) {

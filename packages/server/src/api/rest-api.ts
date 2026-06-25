@@ -21,6 +21,7 @@ import {
 import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
+import { skillTokenFor } from "../auth/skill-token.js";
 import { type Bucket, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
@@ -327,6 +328,21 @@ const ROUTES: Route[] = [
       const user = await repo.getUserById(p.userId);
       if (!user) throw new HttpError(401, "unauthorized");
       return ok({ user: publicUser(user), via: p.via });
+    },
+  },
+  {
+    // The caller's dedicated skill-access token (always available, non-deletable),
+    // so the install command can always carry a real token. Env admin → the
+    // configured ADMIN_TOKEN; a DB user → their derived rsk_ token.
+    method: "GET",
+    pattern: /^\/api\/auth\/skill-token$/,
+    handler: async ({ principal, auth }) => {
+      const p = requirePrincipal(principal);
+      if (p.userId === ENV_ADMIN_ID) {
+        const token = auth.envAdmin?.token ?? "";
+        return ok({ kind: "admin", token, configured: token.length > 0 });
+      }
+      return ok({ kind: "user", token: skillTokenFor(p.userId, auth.secret), configured: true });
     },
   },
   {

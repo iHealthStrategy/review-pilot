@@ -250,6 +250,32 @@ test("env admin: cannot mint personal tokens (it has no DB row)", () =>
     assert.equal(res.status, 400);
   }, ENV_ADMIN));
 
+test("skill token: a registered user gets a stable derived token that authenticates", () =>
+  withAuthApi(async (base) => {
+    const sess = (await register(base, "u1@x.com", "password1")).body.token;
+    const r = await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(sess) });
+    assert.equal(r.status, 200);
+    const body = (await r.json()) as any;
+    assert.equal(body.kind, "user");
+    assert.ok(String(body.token).startsWith("rsk_"));
+    // The skill token authenticates as the user, via "token".
+    const me = await fetch(`${base}/api/auth/me`, { headers: authHeaders(body.token) });
+    assert.equal(me.status, 200);
+    assert.equal(((await me.json()) as any).via, "token");
+    // Stable across calls (derived, not stored).
+    const again = (await (await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(sess) })).json()) as any;
+    assert.equal(again.token, body.token);
+  }));
+
+test("skill token: env admin's is the configured ADMIN_TOKEN", () =>
+  withAuthApi(async (base) => {
+    const sess = (await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword)).body.token;
+    const body = (await (await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(sess) })).json()) as any;
+    assert.equal(body.kind, "admin");
+    assert.equal(body.configured, true);
+    assert.equal(body.token, "envadmin-secret-token-xyz");
+  }, { ...ENV_ADMIN, adminToken: "envadmin-secret-token-xyz" }));
+
 test("env admin: configured ADMIN_TOKEN authenticates as admin without a DB row", () =>
   withAuthApi(async (base) => {
     const TOK = "envadmin-secret-token-xyz"; // need not have the rpat_ prefix

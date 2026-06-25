@@ -722,17 +722,33 @@ const html = `<!doctype html>
         finally { btn.disabled = false; btn.textContent = label; }
       };
 
-      // --- Account: personal access tokens ---
+      // --- Account: skill-access token + personal access tokens ---
+      // Build the install card from the caller's always-available skill token
+      // (env admin → configured ADMIN_TOKEN; DB user → derived rsk_ token), so the
+      // copied command always carries a real token.
+      function skillInstallCard(skill) {
+        const o = location.origin;
+        if (skill.kind === "admin" && !skill.configured) {
+          return \`<div class="card"><h3>① 安装本地 Skill</h3>
+            <p class="muted">内置管理员账户的 skill 令牌来自服务端环境变量 <code>ADMIN_TOKEN</code>,但目前<b>未配置</b>。请在部署环境设置 <code>ADMIN_TOKEN</code> 并重启,这里就会自动填好命令;或用占位符手动替换:</p>
+            <pre>curl -fsSL -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;" \${esc(o)}/skill/install.sh | sh</pre></div>\`;
+        }
+        const cmd = 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + o + '/skill/install.sh | sh';
+        const who = skill.kind === "admin"
+          ? "已为你填入服务端配置的 <code>ADMIN_TOKEN</code>。"
+          : "已内置你的专属 skill 访问令牌(随账户存在、<b>不可删除</b>)。";
+        return \`<div class="card"><h3>① 安装本地 Skill(命令已内置 token)</h3>
+          <p class="muted">\${who}复制下面这条直接在终端运行即可,装好即用、无需再配置 token。</p>
+          <pre>\${esc(cmd)}</pre>
+          <p class="muted">然后在任意项目里说「评审一下我的改动」,或 <code>/reviewpilot-review</code>。</p></div>\`;
+      }
+
       async function renderTokens() {
-        // The env-configured admin has no DB row, so it can't mint DB tokens —
-        // it authenticates via the server's ADMIN_TOKEN env var instead.
-        if (me && me.id === "usr_env_admin") {
-          document.querySelector("#tokens").innerHTML =
-            \`<div class="card"><h3>内置管理员(环境配置)</h3>
-             <p class="muted">当前是环境变量配置的管理员账户,<b>不在数据库中</b>,因此无法在此创建个人令牌。请用服务端设置的环境变量 <code>ADMIN_TOKEN</code> 作为令牌——它在 API / MCP / skill 自动沉淀里等同于一个 admin PAT。</p>
-             <p class="muted">本地 skill 安装(把 <code>&lt;ADMIN_TOKEN&gt;</code> 换成你配置的值):</p>
-             <pre>curl -fsSL -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;" \${esc(location.origin)}/skill/install.sh | sh</pre>
-             <p class="muted">若服务端未设置 <code>ADMIN_TOKEN</code>,请在部署环境加上后重启;或改用一个普通注册账户来测试。</p></div>\`;
+        const skill = await load("/api/auth/skill-token", { kind: "user", token: "", configured: false });
+        const card = skillInstallCard(skill);
+        // Env admin has no DB row → no personal-token table, just the install card.
+        if (skill.kind === "admin") {
+          document.querySelector("#tokens").innerHTML = card;
           addCopyButtons(document.querySelector("#tokens"));
           return;
         }
@@ -741,9 +757,11 @@ const html = `<!doctype html>
           \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "从未使用")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">吊销</button></td></tr>\`
         ).join("");
         document.querySelector("#tokens").innerHTML =
-          tokens.length
-            ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
-            : \`<p class="muted">暂无 API Key。点上方「<b>+ 新建令牌</b>」创建一个 —— 即可以你的身份调用 API(<code>Authorization: Bearer rpat_…</code>),创建成功后还会给出一条<b>已配置好该 token 的本地 Skill 安装命令</b>,装好即用。</p>\`;
+          card
+          + \`<h3>② 个人访问令牌(可选,用于 API / MCP)</h3>\`
+          + (tokens.length
+              ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+              : \`<p class="muted">这些是<b>可吊销</b>的额外令牌,供脚本 / CI / MCP 调用 API。skill 安装用上面那条即可,不必在此创建。</p>\`);
         document.querySelectorAll('#tokens [data-revoke]').forEach((b) => {
           b.onclick = async () => {
             if (!confirm("确定吊销该令牌?使用它的调用将立即失效。")) return;
@@ -751,6 +769,7 @@ const html = `<!doctype html>
             catch (e) { alert(e.message); }
           };
         });
+        addCopyButtons(document.querySelector("#tokens"));
       }
 
       document.getElementById("token-form").onsubmit = async (ev) => {
