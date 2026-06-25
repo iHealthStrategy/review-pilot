@@ -92,8 +92,7 @@ const html = `<!doctype html>
       .nav-group:first-child { padding-top: 2px; }
       nav a { display: flex; align-items: center; gap: 10px; padding: 9px 12px; margin: 1px 0; color: var(--text-dim); text-decoration: none; font-size: 13.5px; font-weight: 500; border-radius: var(--r-sm); transition: background .15s, color .15s, transform .05s; }
       nav a::before { font-size: 15px; width: 18px; text-align: center; opacity: .92; }
-      nav a[data-view="schedules"]::before { content: "🗓️"; }
-      nav a[data-view="dashboard"]::before { content: "📊"; }
+      nav a[data-view="tasks"]::before { content: "🗂️"; }
       nav a[data-view="rulesets"]::before { content: "📐"; }
       nav a[data-view="account"]::before { content: "🔑"; }
       nav a[data-view="usage"]::before { content: "📈"; }
@@ -112,6 +111,8 @@ const html = `<!doctype html>
       h3 { font-size: 14px; font-weight: 620; margin: 22px 0 10px; color: var(--text); }
       .view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
       .view-head h2 { margin: 0; font-size: 17px; text-transform: none; letter-spacing: 0; color: var(--text); font-weight: 650; }
+      .sub-head { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 12px; }
+      .sub-head h3 { margin: 0; }
 
       /* ── Tables ────────────────────────────────────────────────── */
       table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
@@ -228,8 +229,7 @@ const html = `<!doctype html>
     <div class="layout">
       <nav>
         <div class="nav-group">工作区</div>
-        <a href="#schedules" data-view="schedules">定时扫描</a>
-        <a href="#dashboard" data-view="dashboard">仪表盘</a>
+        <a href="#tasks" data-view="tasks">任务</a>
         <a href="#rulesets" data-view="rulesets">评审规则集</a>
         <div class="nav-group">账户与接入</div>
         <a href="#account" data-view="account">API Key</a>
@@ -237,16 +237,15 @@ const html = `<!doctype html>
         <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
       </nav>
       <main>
-        <div class="view" id="view-schedules">
-          <div class="view-head">
-            <h2>定时扫描</h2>
+        <div class="view" id="view-tasks">
+          <div class="view-head"><h2>任务</h2></div>
+          <div class="sub-head">
+            <h3>定时任务</h3>
             <button id="open-schedule-modal">+ 新建定时扫描</button>
           </div>
           <section id="schedules"><div data-loading>加载中…</div></section>
-        </div>
-        <div class="view" id="view-dashboard">
-          <div class="view-head">
-            <h2>评审任务</h2>
+          <div class="sub-head">
+            <h3>一次性任务</h3>
             <button id="open-task-modal">+ 新建任务</button>
           </div>
           <section id="jobs"><div data-loading>加载中…</div></section>
@@ -522,10 +521,13 @@ const html = `<!doctype html>
 
       // --- view routing (sidebar + hash) ---
       function showView(name) {
-        // "integrations" merged into the account/API Key view; keep the hash
-        // working by aliasing it to account.
-        const valid = ["schedules", "dashboard", "account", "rulesets", "usage", "users"];
-        const view = valid.includes(name) ? name : (name === "integrations" ? "account" : "schedules");
+        // Merged views keep old hashes working via aliases:
+        //   schedules/dashboard → tasks (定时任务 + 一次性任务 同页)
+        //   integrations → account (API Key 页)
+        const alias = { schedules: "tasks", dashboard: "tasks", integrations: "account" };
+        name = alias[name] || name;
+        const valid = ["tasks", "account", "rulesets", "usage", "users"];
+        const view = valid.includes(name) ? name : "tasks";
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
         document.getElementById("view-" + view)?.classList.add("active");
         document.querySelectorAll("nav a").forEach((a) =>

@@ -15,9 +15,11 @@ test("web build emits a static index.html artifact", async () => {
   await run(process.execPath, [resolve(root, "scripts/build.mjs")]);
   const html = await readFile(resolve(dist, "index.html"), "utf8");
   assert.match(html, /ReviewPilot/);
-  // Sidebar nav switches the Scheduled scans + Dashboard views.
-  assert.match(html, /data-view="schedules"/);
-  assert.match(html, /data-view="dashboard"/);
+  // Sidebar "任务" view holds both scheduled (定时任务) + one-time (一次性任务) tasks.
+  assert.match(html, /data-view="tasks"/);
+  assert.match(html, /id="view-tasks"/);
+  assert.match(html, /定时任务/);
+  assert.match(html, /一次性任务/);
   // Both creation forms live in modal dialogs opened by "+ New" buttons.
   assert.match(html, /id="open-schedule-modal"/);
   assert.match(html, /id="open-task-modal"/);
