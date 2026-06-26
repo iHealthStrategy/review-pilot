@@ -429,7 +429,7 @@ const html = `<!doctype html>
       let me = null;
       const ROLE_LABEL = { viewer: "游客(只读)", member: "成员(可写)", admin: "管理员" };
       function token() { return localStorage.getItem("rp_session") || ""; }
-      function setToken(t) { if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
+      function setToken(t) { _skillTok = undefined; if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
       function canWrite() { return me && (me.role === "member" || me.role === "admin"); }
       function isAdmin() { return me && me.role === "admin"; }
       function headers(extra) {
@@ -733,28 +733,39 @@ const html = `<!doctype html>
       };
 
       // --- Account: skill-access token + personal access tokens ---
-      // Build the install card from the caller's always-available skill token
-      // (env admin → configured ADMIN_TOKEN; DB user → derived rsk_ token), so the
-      // copied command always carries a real token.
-      function skillInstallCard(skill) {
+      // The caller's always-available skill token (env admin → configured
+      // ADMIN_TOKEN; DB user → derived rsk_ token). Cached for the session so
+      // every install command on every page can be built with a real token.
+      let _skillTok;
+      async function getSkillToken() {
+        if (!_skillTok) _skillTok = await load("/api/auth/skill-token", { kind: "user", token: "", configured: false });
+        return _skillTok;
+      }
+      // The one-line install command — ALWAYS carries a token when available
+      // (admin without ADMIN_TOKEN configured → an honest placeholder).
+      function skillInstallCmd(skill) {
         const o = location.origin;
+        if (skill && skill.token) return 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + o + '/skill/install.sh | sh';
+        if (skill && skill.kind === "admin") return 'curl -fsSL -H "Authorization: Bearer <ADMIN_TOKEN>" ' + o + '/skill/install.sh | sh';
+        return 'curl -fsSL ' + o + '/skill/install.sh | sh';
+      }
+      function skillInstallCard(skill) {
         if (skill.kind === "admin" && !skill.configured) {
           return \`<div class="card"><h3>① 安装本地 Skill</h3>
             <p class="muted">内置管理员账户的 skill 令牌来自服务端环境变量 <code>ADMIN_TOKEN</code>,但目前<b>未配置</b>。请在部署环境设置 <code>ADMIN_TOKEN</code> 并重启,这里就会自动填好命令;或用占位符手动替换:</p>
-            <pre>curl -fsSL -H "Authorization: Bearer &lt;ADMIN_TOKEN&gt;" \${esc(o)}/skill/install.sh | sh</pre></div>\`;
+            <pre>\${esc(skillInstallCmd(skill))}</pre></div>\`;
         }
-        const cmd = 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + o + '/skill/install.sh | sh';
         const who = skill.kind === "admin"
           ? "已为你填入服务端配置的 <code>ADMIN_TOKEN</code>。"
           : "已内置你的专属 skill 访问令牌(随账户存在、<b>不可删除</b>)。";
         return \`<div class="card"><h3>① 安装本地 Skill(命令已内置 token)</h3>
           <p class="muted">\${who}复制下面这条直接在终端运行即可,装好即用、无需再配置 token。</p>
-          <pre>\${esc(cmd)}</pre>
+          <pre>\${esc(skillInstallCmd(skill))}</pre>
           <p class="muted">然后在任意项目里说「评审一下我的改动」,或 <code>/reviewpilot-review</code>。</p></div>\`;
       }
 
       async function renderTokens() {
-        const skill = await load("/api/auth/skill-token", { kind: "user", token: "", configured: false });
+        const skill = await getSkillToken();
         const card = skillInstallCard(skill);
         // Env admin has no DB row → no personal-token table, just the install card.
         if (skill.kind === "admin") {
@@ -909,6 +920,7 @@ const html = `<!doctype html>
 
       async function renderRulesets() {
         const o = location.origin;
+        const installCmd = skillInstallCmd(await getSkillToken()); // token baked in
         const mine = await load("/api/rulesets", []);
         const pub = await load("/api/rulesets?scope=public", []);
         const myHandle = (me && me.handle) || "";
@@ -942,9 +954,9 @@ const html = `<!doctype html>
         // The orchestrator skill: install once, then call anyone's public rules by handle.
         const orchestrator =
           \`<div class="card">
-             <h3>① 安装编排型 skill(只需一次)</h3>
-             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。<strong>推荐去「API Key」页新建令牌</strong>,创建后会给出一条<strong>已内置 token</strong> 的安装命令,装好即可自动沉淀规则、无需手动配置。通用(不带 token)命令:</p>
-             <pre><code>curl -fsSL \${o}/skill/install.sh | sh</code></pre>
+             <h3>① 安装编排型 skill(只需一次,命令已内置你的 token)</h3>
+             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。下面这条已内置你的 token,复制即用、装好即可自动沉淀规则:</p>
+             <pre><code>\${esc(installCmd)}</code></pre>
              <h3>② 在 Claude Code 里直接说</h3>
              <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
              <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
@@ -1016,8 +1028,9 @@ const html = `<!doctype html>
       }
 
       // --- Integrations: API & MCP docs ---
-      function renderIntegrations() {
+      async function renderIntegrations() {
         const o = esc(location.origin);
+        const installCmd = skillInstallCmd(await getSkillToken()); // token baked in
         document.querySelector("#integrations").innerHTML = \`
           <p class="muted">用上方创建的个人访问令牌(<code>rpat_…</code>)调用 REST API 或接入 MCP。令牌继承你的角色:viewer 只读,写操作(新建任务、触发扫描)需 member+(由管理员升级)。令牌只在创建时显示一次。</p>
 
@@ -1044,10 +1057,8 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
           <p class="muted">可用工具(按你的角色过滤):<code>whoami</code>、<code>list_schedules</code>、<code>list_jobs</code>、<code>get_job</code>(只读);<code>create_review_task</code>、<code>run_schedule</code>(member+)。</p>
 
           <h3>本地评审 Skill(Claude Code)</h3>
-          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。</p>
-          <p class="muted"><b>推荐:已配置好 token 的安装命令</b> —— 在上方「<b>+ 新建令牌</b>」创建一个 API Key,创建成功后会直接给出一条<strong>已内置该 token</strong> 的安装命令,复制运行即可,无需再手动配置。</p>
-          <p class="muted">不需要自动沉淀规则的话,也可用这条不带 token 的通用命令安装:</p>
-          <pre>curl -fsSL \${o}/skill/install.sh | sh</pre>
+          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。下面这条<strong>已内置你的 token</strong>,复制运行即可、无需再配置:</p>
+          <pre>\${esc(installCmd)}</pre>
           <p class="muted">安装后在 Claude Code 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看 <code>\${o}/skill/reviewpilot-review/SKILL.md</code>。</p>
           <p class="muted">这是<b>编排型</b> skill:还可以说「让 &lt;用户名&gt; 帮我 review 我的改动」—— 它会拉取该用户的公开规则集,并按改动文件<b>本地按需</b>加载相关规则(代码不出本机)。规则集的创建与发现见左侧「评审规则集」。</p>
         \`;
