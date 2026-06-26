@@ -65,9 +65,10 @@ function oneLine(s: string): string {
  * Write for the opt-in one-shot fix (which still asks once before batch-applying).
  */
 const SKILL_ALLOWED_TOOLS =
-  "Bash(echo *) Bash(cd *) Bash(git remote get-url *) Bash(git diff *) Bash(git log *) " +
-  "Bash(git show *) Bash(git ls-files *) Bash(git merge-base *) Bash(git rev-parse *) " +
-  "Bash(git status *) Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
+  "Bash(echo *) Bash(cd *) Bash(find *) Bash(grep *) Bash(ls *) Bash(rg *) " +
+  "Bash(git remote get-url *) Bash(git diff *) Bash(git log *) Bash(git show *) " +
+  "Bash(git ls-files *) Bash(git merge-base *) Bash(git rev-parse *) Bash(git status *) " +
+  "Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
   "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
 
 /**

@@ -103,6 +103,8 @@ test("skills: pre-authorize their own commands via allowed-tools frontmatter", (
     assert.match(frontmatter, /^allowed-tools: /m);
     assert.match(frontmatter, /Bash\(git diff \*\)/);
     assert.match(frontmatter, /Bash\(curl \*\)/);
+    assert.match(frontmatter, /Bash\(find \*\)/); // read-only search pre-authorized
+    assert.match(frontmatter, /Bash\(grep \*\)/);
     assert.match(frontmatter, /\bEdit\b/);
     assert.match(frontmatter, /\bWrite\b/);
   }
