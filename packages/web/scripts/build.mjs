@@ -123,6 +123,8 @@ const html = `<!doctype html>
       tbody tr { transition: background .12s; }
       tbody tr:hover { background: var(--surface-2); }
       tr.clickable { cursor: pointer; }
+      /* Wide tables scroll inside their own container so a narrow viewport never pushes the whole page sideways. */
+      .table-wrap { overflow-x: auto; }
 
       /* ── Badges: status / role / severity ──────────────────────── */
       .status { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.4; border: 1px solid transparent; }
@@ -425,6 +427,19 @@ const html = `<!doctype html>
         });
       }
 
+      // Wrap every bare <table> under \`root\` in a horizontal-scroll container so
+      // wide tables never push the whole page sideways on narrow viewports (idempotent).
+      function wrapTables(root) {
+        if (!root) return;
+        root.querySelectorAll("table").forEach((t) => {
+          if (t.parentElement && t.parentElement.classList.contains("table-wrap")) return;
+          const w = document.createElement("div");
+          w.className = "table-wrap";
+          t.parentNode.insertBefore(w, t);
+          w.appendChild(t);
+        });
+      }
+
       // --- session auth: JWT in localStorage, sent as Bearer header ---
       let me = null;
       const ROLE_LABEL = { viewer: "游客(只读)", member: "成员(可写)", admin: "管理员" };
@@ -516,7 +531,11 @@ const html = `<!doctype html>
       }
 
       // --- modal helpers ---
-      function openModal(id) { document.getElementById(id).classList.add("open"); }
+      function openModal(id) {
+        const m = document.getElementById(id);
+        m.classList.add("open");
+        m.querySelector("input, select, textarea")?.focus(); // keyboard users land in the form
+      }
       function closeModal(id) { document.getElementById(id).classList.remove("open"); }
       document.getElementById("open-schedule-modal").onclick = () => openModal("schedule-modal");
       document.getElementById("open-task-modal").onclick = () => openModal("task-modal");
@@ -527,6 +546,11 @@ const html = `<!doctype html>
       document.querySelectorAll("[data-modal]").forEach((ov) => {
         ov.addEventListener("click", (e) => { if (e.target === ov) ov.classList.remove("open"); });
         ov.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => ov.classList.remove("open")));
+      });
+      // Esc closes any open modal.
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape")
+          document.querySelectorAll(".modal-overlay.open").forEach((o) => o.classList.remove("open"));
       });
 
       // --- view routing (sidebar + hash) ---
@@ -566,6 +590,7 @@ const html = `<!doctype html>
           jobs.length
             ? \`<table><thead><tr><th>Pull Request</th><th>引擎</th><th>状态</th><th>进度</th><th>问题数</th></tr></thead><tbody>\${rows}</tbody></table>\`
             : \`<p class="muted">暂无评审任务。\${canWrite() ? "点上方 <b>+ 新建任务</b>,或 POST /api/tasks。" : ""}</p>\`;
+        wrapTables(document.querySelector("#jobs"));
         document.querySelectorAll('#jobs tr[data-job]').forEach((tr) => {
           // Drive the hash so an open job detail is restored on refresh.
           tr.onclick = () => { location.hash = "tasks/" + tr.getAttribute("data-job"); };
@@ -645,6 +670,7 @@ const html = `<!doctype html>
           schedules.length
             ? \`<table><thead><tr><th>名称</th><th>仓库</th><th>分支</th><th>时间</th><th>推送</th><th>上次结果</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
             : \`<p class="muted">暂无定时扫描。\${canWrite() ? "点上方 <b>+ 新建定时扫描</b>。" : ""}至少配置一个后,每日调度才会运行。</p>\`;
+        wrapTables(document.querySelector("#schedules"));
         document.querySelectorAll('#schedules [data-run]').forEach((b) => {
           b.onclick = async () => {
             b.disabled = true; b.textContent = "运行中…";
@@ -679,7 +705,7 @@ const html = `<!doctype html>
         const s = await load("/api/schedules/" + id, null);
         const body = document.getElementById("scan-modal-body");
         document.getElementById("scan-modal-title").textContent =
-          "Scan result · " + (s ? s.name : id);
+          "扫描结果 · " + (s ? s.name : id);
         if (!s || !s.lastScan) {
           body.innerHTML = '<p class="muted">尚无扫描结果（还没成功跑过一次）。</p>';
           openModal("scan-modal");
@@ -790,6 +816,7 @@ const html = `<!doctype html>
             catch (e) { alert(e.message); }
           };
         });
+        wrapTables(document.querySelector("#tokens"));
         addCopyButtons(document.querySelector("#tokens"));
       }
 
@@ -991,6 +1018,7 @@ const html = `<!doctype html>
             try { await api("/api/rulesets/" + b.getAttribute("data-fork-rs") + "/fork", { method: "POST" }); renderRulesets(); }
             catch (e) { alert(e.message); }
           }));
+        wrapTables(document.querySelector("#rulesets"));
         addCopyButtons(document.querySelector("#rulesets"));
       }
 
@@ -1025,6 +1053,7 @@ const html = `<!doctype html>
           \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计;"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
           + section("定时扫描 (schedules)", "schedule")
           + section("临时任务 (tasks)", "task");
+        wrapTables(document.querySelector("#usage"));
       }
 
       // --- Integrations: API & MCP docs ---
@@ -1076,6 +1105,7 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         ).join("");
         document.querySelector("#users").innerHTML =
           \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+        wrapTables(document.querySelector("#users"));
         document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
           sel.onchange = async () => {
             try {
@@ -1092,6 +1122,9 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         if (!me) return;
         renderSchedules(await load("/api/schedules", []));
         renderJobs(await load("/api/jobs", MOCK.jobs));
+        // Keep an open task detail's progress/logs fresh while polling.
+        const [v, sub] = (location.hash.slice(1) || "").split("/");
+        if (v === "tasks" && sub) showJob(sub);
       }
 
       async function init() {
