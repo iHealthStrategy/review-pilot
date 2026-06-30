@@ -275,27 +275,36 @@ export function runRepositoryContract(
     await repo.close();
   });
 
-  test(`${name}: users — create, fetch by id/email, count, role update`, async () => {
+  test(`${name}: users — create, fetch by id/email/external, count, role update, link`, async () => {
     const repo = await makeRepo();
     assert.equal(await repo.countUsers(), 0);
-    const u = await repo.createUser({ email: "a@x.com", handle: "alice", passwordHash: "h1", role: "admin" });
+    const u = await repo.createUser({ email: "a@x.com", handle: "alice", externalId: "sub-1", role: "admin" });
     assert.equal(u.role, "admin");
     assert.equal(u.handle, "alice");
+    assert.equal(u.externalId, "sub-1");
     assert.equal((await repo.getUserById(u.id))?.email, "a@x.com");
     assert.equal((await repo.getUserByEmail("a@x.com"))?.id, u.id);
     assert.equal((await repo.getUserByHandle("alice"))?.id, u.id);
+    assert.equal((await repo.getUserByExternalId("sub-1"))?.id, u.id);
+    assert.equal(await repo.getUserByExternalId(""), null);
+    assert.equal(await repo.getUserByExternalId("nope"), null);
     assert.equal(await repo.getUserByHandle("nobody"), null);
     assert.equal(await repo.getUserByEmail("missing@x.com"), null);
     assert.equal(await repo.countUsers(), 1);
     const upgraded = await repo.updateUserRole(u.id, "member");
     assert.equal(upgraded.role, "member");
     assert.equal((await repo.getUserById(u.id))?.role, "member");
+    // Link an unlinked account to an external subject (first OIDC login path).
+    const linked = await repo.createUser({ email: "b@x.com", handle: "bob", externalId: "", role: "viewer" });
+    const after = await repo.setUserExternalId(linked.id, "sub-2");
+    assert.equal(after.externalId, "sub-2");
+    assert.equal((await repo.getUserByExternalId("sub-2"))?.id, linked.id);
     await repo.close();
   });
 
   test(`${name}: api tokens — create, lookup by hash, list, owner-scoped revoke`, async () => {
     const repo = await makeRepo();
-    const u = await repo.createUser({ email: "t@x.com", handle: "tom", passwordHash: "h", role: "member" });
+    const u = await repo.createUser({ email: "t@x.com", handle: "tom", externalId: "sub-tom", role: "member" });
     const tok = await repo.createApiToken({
       userId: u.id,
       name: "ci",

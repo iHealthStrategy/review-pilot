@@ -26,7 +26,6 @@ export function roleAtLeast(role: UserRole, min: UserRole): boolean {
  */
 export function requiredRole(method: string, pathname: string): UserRole | "public" {
   if (pathname === "/api/health") return "public";
-  if (pathname === "/api/auth/register" || pathname === "/api/auth/login") return "public";
   // Public ruleset discovery by handle — the local orchestrator skill fetches
   // "let X review my changes" without credentials (only public rulesets returned).
   if (pathname.startsWith("/api/u/")) return "public";

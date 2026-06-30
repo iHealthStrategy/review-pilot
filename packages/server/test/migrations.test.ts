@@ -31,6 +31,8 @@ test("migrations: DDL creates every entity table", () => {
   assert.match(ddl, /ALTER TABLE rulesets ADD COLUMN project_label\b/);
   // 0008 adds per-user skill-usage tracking.
   assert.match(ddl, /CREATE TABLE IF NOT EXISTS skill_usage\b/);
+  // 0009 links accounts to the external IdP subject.
+  assert.match(ddl, /ALTER TABLE users ADD COLUMN external_id\b/);
 });
 
 test("migrations: runner applies all then is idempotent", async () => {
@@ -46,6 +48,7 @@ test("migrations: runner applies all then is idempotent", async () => {
     "0006_handles_and_rules",
     "0007_ruleset_project",
     "0008_skill_usage",
+    "0009_user_external_id",
   ]);
   // _migrations ledger + each migration body were exec'd.
   assert.ok(client.execs.some((s) => /_migrations/.test(s)));
@@ -61,6 +64,7 @@ test("migrations: runner applies all then is idempotent", async () => {
     { id: "0006_handles_and_rules" },
     { id: "0007_ruleset_project" },
     { id: "0008_skill_usage" },
+    { id: "0009_user_external_id" },
   ]);
   const ran2 = await runMigrations(client);
   assert.deepEqual(ran2, []);

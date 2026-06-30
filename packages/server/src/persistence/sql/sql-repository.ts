@@ -198,7 +198,7 @@ interface UserRow {
   id: string;
   email: string;
   handle: string;
-  password_hash: string;
+  external_id: string | null;
   role: string;
   created_at: string;
   updated_at: string;
@@ -208,7 +208,7 @@ function toUser(r: UserRow): User {
     id: r.id,
     email: r.email,
     handle: r.handle ?? "",
-    passwordHash: r.password_hash,
+    externalId: r.external_id ?? "",
     role: r.role as UserRole,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -767,15 +767,16 @@ export class SqlRepository implements Repository {
       id: this.idGen("usr"),
       email: input.email,
       handle: input.handle,
-      passwordHash: input.passwordHash,
+      externalId: input.externalId,
       role: input.role,
       createdAt: now,
       updatedAt: now,
     };
+    // `password_hash` is a retired NOT NULL column kept for back-compat; write "".
     await this.client.run(
-      `INSERT INTO users (id, email, handle, password_hash, role, created_at, updated_at)
-       VALUES (${placeholderList(this.client.dialect, 7)})`,
-      [user.id, user.email, user.handle, user.passwordHash, user.role, user.createdAt, user.updatedAt],
+      `INSERT INTO users (id, email, handle, password_hash, external_id, role, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 8)})`,
+      [user.id, user.email, user.handle, "", user.externalId, user.role, user.createdAt, user.updatedAt],
     );
     return user;
   }
@@ -804,6 +805,15 @@ export class SqlRepository implements Repository {
     return row ? toUser(row) : null;
   }
 
+  async getUserByExternalId(externalId: string): Promise<User | null> {
+    if (!externalId) return null;
+    const row = await this.client.get<UserRow>(
+      `SELECT * FROM users WHERE external_id = ${this.ph(1)}`,
+      [externalId],
+    );
+    return row ? toUser(row) : null;
+  }
+
   async listUsers(): Promise<User[]> {
     const rows = await this.client.all<UserRow>(
       "SELECT * FROM users ORDER BY created_at",
@@ -827,6 +837,17 @@ export class SqlRepository implements Repository {
       [role, updatedAt, id],
     );
     return { ...user, role, updatedAt };
+  }
+
+  async setUserExternalId(id: string, externalId: string): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.client.run(
+      `UPDATE users SET external_id = ${this.ph(1)}, updated_at = ${this.ph(2)} WHERE id = ${this.ph(3)}`,
+      [externalId, updatedAt, id],
+    );
+    return { ...user, externalId, updatedAt };
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {

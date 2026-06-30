@@ -4,13 +4,16 @@ import { test } from "node:test";
 import { startAppServer } from "../src/app.js";
 import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
+import type { Repository } from "../src/persistence/repository.js";
+import type { UserRole } from "../src/domain/entities.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
+import { makeSession } from "./auth-helper.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
 const SECRET = "test-session-secret";
 
-async function withMcp(run: (base: string) => Promise<void>): Promise<void> {
+async function withMcp(run: (base: string, repo: Repository) => Promise<void>): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
   const taskService = new TaskService({
@@ -23,20 +26,15 @@ async function withMcp(run: (base: string) => Promise<void>): Promise<void> {
   await new Promise<void>((r) => server.once("listening", () => r()));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
-    await run(base);
+    await run(base, repo);
   } finally {
     server.close();
   }
 }
 
-async function registerToken(base: string, email: string): Promise<string> {
-  // Register a user (first = admin, rest = viewer), then mint a PAT for them.
-  const reg = await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "password1" }),
-  });
-  const { token } = (await reg.json()) as { token: string };
+/** A user at the given role + a PAT for them (MCP authenticates via PATs). */
+async function registerToken(repo: Repository, base: string, role: UserRole): Promise<string> {
+  const { token } = await makeSession(repo, SECRET, role);
   const pat = await fetch(`${base}/api/tokens`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
@@ -64,8 +62,8 @@ test("mcp: rejects unauthenticated calls", () =>
   }));
 
 test("mcp: initialize returns protocol + server info", () =>
-  withMcp(async (base) => {
-    const admin = await registerToken(base, "admin@x.com");
+  withMcp(async (base, repo) => {
+    const admin = await registerToken(repo, base, "admin");
     const res = await mcp(base, admin, "initialize", { protocolVersion: "2024-11-05" });
     assert.equal(res.status, 200);
     assert.ok(res.body.result.protocolVersion);
@@ -73,8 +71,8 @@ test("mcp: initialize returns protocol + server info", () =>
   }));
 
 test("mcp: admin sees write tools and whoami reports admin", () =>
-  withMcp(async (base) => {
-    const admin = await registerToken(base, "admin@x.com");
+  withMcp(async (base, repo) => {
+    const admin = await registerToken(repo, base, "admin");
     const list = await mcp(base, admin, "tools/list");
     const names = list.body.result.tools.map((t: { name: string }) => t.name);
     assert.ok(names.includes("create_review_task"), "admin sees the write tool");
@@ -86,9 +84,8 @@ test("mcp: admin sees write tools and whoami reports admin", () =>
   }));
 
 test("mcp: a viewer PAT cannot see or call write tools", () =>
-  withMcp(async (base) => {
-    await registerToken(base, "admin@x.com"); // first user = admin
-    const viewer = await registerToken(base, "viewer@x.com"); // second = viewer
+  withMcp(async (base, repo) => {
+    const viewer = await registerToken(repo, base, "viewer");
 
     // tools/list is role-filtered: no write tools for a viewer.
     const list = await mcp(base, viewer, "tools/list");
@@ -106,8 +103,8 @@ test("mcp: a viewer PAT cannot see or call write tools", () =>
   }));
 
 test("mcp: create_review_task queues a job for a member+ caller", () =>
-  withMcp(async (base) => {
-    const admin = await registerToken(base, "admin@x.com");
+  withMcp(async (base, repo) => {
+    const admin = await registerToken(repo, base, "admin");
     const call = await mcp(base, admin, "tools/call", {
       name: "create_review_task",
       arguments: { platform: "github", repoFullName: "acme/app", prNumber: 7 },

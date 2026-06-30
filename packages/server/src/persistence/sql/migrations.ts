@@ -193,6 +193,15 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_skill_usage_at ON skill_usage(at);
     `,
   },
+  {
+    // Auth is delegated to an external OIDC provider; users are linked by the
+    // provider subject. `password_hash` is retired (kept NOT NULL, written "").
+    id: "0009_user_external_id",
+    up: () => `
+      ALTER TABLE users ADD COLUMN external_id TEXT NOT NULL DEFAULT '';
+      CREATE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id);
+    `,
+  },
 ];
 
 /**

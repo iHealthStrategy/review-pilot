@@ -18,21 +18,14 @@ import {
   resolvePrincipal,
   roleAtLeast,
 } from "../auth/authorize.js";
-import { hashPassword, verifyPassword } from "../auth/password.js";
-import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
 import { skillTokenFor } from "../auth/skill-token.js";
+import { handleFromEmail } from "../auth/provision.js";
 import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
-import {
-  type EnvAdmin,
-  ENV_ADMIN_ID,
-  envAdminFrom,
-  isEnvAdminEmail,
-  matchesEnvAdmin,
-} from "../auth/env-admin.js";
+import { type EnvAdmin, ENV_ADMIN_ID, envAdminFrom } from "../auth/env-admin.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
 import type {
   CreateScheduleInput,
@@ -142,15 +135,7 @@ function parseCallback(v: unknown): { url: string; headers?: Record<string, stri
 const ROLES: readonly UserRole[] = ["viewer", "member", "admin"];
 const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-/** Lowercase + trim so email is a stable, case-insensitive identity key. */
-function normalizeEmail(v: unknown): string {
-  return asString(v, "email").trim().toLowerCase();
-}
-function isEmail(s: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-}
-
-/** API-safe user view — never leaks the password hash. */
+/** API-safe user view. */
 function publicUser(u: User) {
   return {
     id: u.id,
@@ -190,29 +175,6 @@ async function principalEmail(
 
 function asVisibility(v: unknown): RulesetVisibility {
   return v === "public" ? "public" : "private";
-}
-
-/** Derive a candidate public handle from an email local-part. */
-function handleFromEmail(email: string): string {
-  return slugify(email.split("@")[0] ?? "user");
-}
-
-/**
- * Generate a unique handle from an email, appending `-N` on collision against
- * existing DB users or the supplied reserved set (e.g. the env admin's handle).
- */
-async function generateHandle(
-  email: string,
-  repo: Repository,
-  reserved: readonly string[],
-): Promise<string> {
-  const base = handleFromEmail(email);
-  let candidate = base;
-  let n = 2;
-  while (reserved.includes(candidate) || (await repo.getUserByHandle(candidate))) {
-    candidate = `${base}-${n++}`;
-  }
-  return candidate;
 }
 
 /** Resolve a principal's public handle (env admin or DB user). */
@@ -255,68 +217,8 @@ function parseRules(v: unknown, forcePending = false): ReviewRule[] {
 }
 
 const ROUTES: Route[] = [
-  // --- Authentication & account ---
-  {
-    method: "POST",
-    pattern: /^\/api\/auth\/register$/,
-    handler: async ({ body, auth }, repo) => {
-      const b = (body ?? {}) as Record<string, unknown>;
-      const email = normalizeEmail(b.email);
-      const password = asString(b.password, "password");
-      if (!isEmail(email)) throw new HttpError(400, "field 'email' must be a valid email");
-      if (password.length < 8) {
-        throw new HttpError(400, "field 'password' must be at least 8 characters");
-      }
-      if (isEnvAdminEmail(auth.envAdmin, email)) {
-        throw new HttpError(409, "email is reserved");
-      }
-      if (await repo.getUserByEmail(email)) {
-        throw new HttpError(409, "email already registered");
-      }
-      // Bootstrap admin: only when there is NO env admin and this is the first
-      // user. With an env admin configured, self-registered users start as
-      // read-only viewers (the env admin upgrades them).
-      const role: UserRole =
-        !auth.envAdmin && (await repo.countUsers()) === 0 ? "admin" : "viewer";
-      const handle = await generateHandle(
-        email,
-        repo,
-        auth.envAdmin ? [handleFromEmail(auth.envAdmin.email)] : [],
-      );
-      const user = await repo.createUser({
-        email,
-        handle,
-        passwordHash: hashPassword(password),
-        role,
-      });
-      const token = signSession({ sub: user.id, role: user.role }, auth.secret, auth.sessionTtlMs);
-      return ok({ token, user: publicUser(user) }, 201);
-    },
-  },
-  {
-    method: "POST",
-    pattern: /^\/api\/auth\/login$/,
-    handler: async ({ body, auth }, repo) => {
-      const b = (body ?? {}) as Record<string, unknown>;
-      const email = normalizeEmail(b.email);
-      const password = asString(b.password, "password");
-      // The env admin is checked first and short-circuits the DB lookup.
-      if (matchesEnvAdmin(auth.envAdmin, email, password)) {
-        const token = signSession({ sub: ENV_ADMIN_ID, role: "admin" }, auth.secret, auth.sessionTtlMs);
-        return ok({ token, user: envAdminUser(auth.envAdmin!) });
-      }
-      if (isEnvAdminEmail(auth.envAdmin, email)) {
-        // Reserved email: only the env password is valid; never fall through.
-        throw new HttpError(401, "invalid email or password");
-      }
-      const user = await repo.getUserByEmail(email);
-      if (!user || !verifyPassword(password, user.passwordHash)) {
-        throw new HttpError(401, "invalid email or password");
-      }
-      const token = signSession({ sub: user.id, role: user.role }, auth.secret, auth.sessionTtlMs);
-      return ok({ token, user: publicUser(user) });
-    },
-  },
+  // --- Account (authentication is delegated to the OIDC provider; the login
+  //     flow lives in app.ts at /api/auth/oidc/*) ---
   {
     method: "GET",
     pattern: /^\/api\/auth\/me$/,
@@ -989,9 +891,7 @@ export interface ApiOptions {
   sessionTtlMs?: number;
   /** Built-in admin email (env-configured; not in the DB). */
   adminEmail?: string;
-  /** Built-in admin password; when set, the env admin is enabled. */
-  adminPassword?: string;
-  /** Optional config-only PAT for the env admin (bearer auth without a DB row). */
+  /** Config-only PAT for the env admin (bearer auth without a DB row); enables it. */
   adminToken?: string;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
@@ -1006,7 +906,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const auth: AuthConfig = {
     secret,
     sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
-    envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminPassword ?? "", options.adminToken ?? ""),
+    envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminToken ?? ""),
   };
   const tasks = options.taskService;
   const schedules = options.scheduleStore;

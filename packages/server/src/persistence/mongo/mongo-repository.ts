@@ -158,7 +158,7 @@ function toUser(d: MongoDoc): User {
     id: d.id as string,
     email: d.email as string,
     handle: (d.handle as string) ?? "",
-    passwordHash: d.passwordHash as string,
+    externalId: (d.externalId as string) ?? "",
     role: d.role as UserRole,
     createdAt: d.createdAt as string,
     updatedAt: d.updatedAt as string,
@@ -272,6 +272,7 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.users).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.users).createIndex({ email: 1 }, { unique: true });
     await this.col(COLLECTIONS.users).createIndex({ handle: 1 });
+    await this.col(COLLECTIONS.users).createIndex({ externalId: 1 });
     await this.col(COLLECTIONS.apiTokens).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ tokenHash: 1 }, { unique: true });
     await this.col(COLLECTIONS.apiTokens).createIndex({ userId: 1 });
@@ -574,7 +575,7 @@ export class MongoRepository implements Repository {
       id: this.idGen("usr"),
       email: input.email,
       handle: input.handle,
-      passwordHash: input.passwordHash,
+      externalId: input.externalId,
       role: input.role,
       createdAt: now,
       updatedAt: now,
@@ -598,6 +599,12 @@ export class MongoRepository implements Repository {
     return d ? toUser(d) : null;
   }
 
+  async getUserByExternalId(externalId: string): Promise<User | null> {
+    if (!externalId) return null;
+    const d = await this.col(COLLECTIONS.users).findOne({ externalId });
+    return d ? toUser(d) : null;
+  }
+
   async listUsers(): Promise<User[]> {
     const docs = await this.col(COLLECTIONS.users).find(
       {},
@@ -617,6 +624,14 @@ export class MongoRepository implements Repository {
     const updatedAt = this.clock();
     await this.col(COLLECTIONS.users).updateOne({ id }, { $set: { role, updatedAt } });
     return { ...user, role, updatedAt };
+  }
+
+  async setUserExternalId(id: string, externalId: string): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.col(COLLECTIONS.users).updateOne({ id }, { $set: { externalId, updatedAt } });
+    return { ...user, externalId, updatedAt };
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {

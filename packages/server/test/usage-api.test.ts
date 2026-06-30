@@ -6,6 +6,7 @@ import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
+import { makeSession } from "./auth-helper.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
@@ -30,18 +31,8 @@ async function withApi(run: (base: string, repo: Repository) => Promise<void>): 
   }
 }
 
-async function viewerToken(base: string): Promise<string> {
-  await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: "admin@x.com", password: "password1" }),
-  });
-  const reg = await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: "viewer@x.com", password: "password1" }),
-  });
-  return ((await reg.json()) as { token: string }).token;
+async function viewerToken(repo: Repository): Promise<string> {
+  return (await makeSession(repo, SECRET, "viewer")).token;
 }
 
 async function seed(repo: Repository) {
@@ -67,7 +58,7 @@ test("GET /api/usage requires auth", () =>
 test("GET /api/usage aggregates by day and is readable by a viewer", () =>
   withApi(async (base, repo) => {
     await seed(repo);
-    const token = await viewerToken(base);
+    const token = await viewerToken(repo);
     const res = await fetch(`${base}/api/usage?bucket=day`, {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -87,7 +78,7 @@ test("GET /api/usage aggregates by day and is readable by a viewer", () =>
 test("GET /api/usage?source=task filters to tasks only", () =>
   withApi(async (base, repo) => {
     await seed(repo);
-    const token = await viewerToken(base);
+    const token = await viewerToken(repo);
     const res = await fetch(`${base}/api/usage?bucket=month&source=task`, {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -97,15 +88,6 @@ test("GET /api/usage?source=task filters to tasks only", () =>
   }));
 
 // --- Skill usage upload + per-user visibility ---
-
-async function register(base: string, email: string) {
-  const res = await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "password1" }),
-  });
-  return (await res.json()) as { token: string; user: { id: string; role: string } };
-}
 
 function postSkill(base: string, token: string, body: unknown) {
   return fetch(`${base}/api/usage/skill`, {
@@ -126,9 +108,8 @@ test("POST /api/usage/skill requires auth", () =>
   }));
 
 test("POST /api/usage/skill records a run attributed to the caller", () =>
-  withApi(async (base) => {
-    await register(base, "admin@x.com"); // first user → admin
-    const u = await register(base, "dev@x.com");
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "viewer");
     const res = await postSkill(base, u.token, {
       project: "github.com/acme/app",
       scope: "working",
@@ -141,9 +122,9 @@ test("POST /api/usage/skill records a run attributed to the caller", () =>
   }));
 
 test("GET /api/usage/skill: admin sees all users, others see only themselves", () =>
-  withApi(async (base) => {
-    const admin = await register(base, "admin@x.com");
-    const dev = await register(base, "dev@x.com");
+  withApi(async (base, repo) => {
+    const admin = await makeSession(repo, SECRET, "admin");
+    const dev = await makeSession(repo, SECRET, "viewer");
     await postSkill(base, dev.token, { project: "p", scope: "working", critical: 1, major: 0, minor: 0, info: 0 });
     await postSkill(base, dev.token, { project: "p", scope: "branch", critical: 0, major: 1, minor: 0, info: 0 });
     await postSkill(base, admin.token, { project: "p", scope: "whole", critical: 0, major: 0, minor: 3, info: 0 });

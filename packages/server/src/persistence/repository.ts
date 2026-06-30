@@ -89,8 +89,8 @@ export interface CreateUserInput {
   email: string;
   /** Unique public handle (caller ensures uniqueness). */
   handle: string;
-  /** Pre-hashed (scrypt) — the repository never sees plaintext passwords. */
-  passwordHash: string;
+  /** External IdP subject (OIDC `sub`); "" when not yet linked. */
+  externalId: string;
   role: UserRole;
 }
 
@@ -243,10 +243,14 @@ export interface Repository {
   getUserById(id: string): Promise<User | null>;
   getUserByEmail(email: string): Promise<User | null>;
   getUserByHandle(handle: string): Promise<User | null>;
+  /** Look up by external IdP subject (OIDC `sub`); null when unlinked/unknown. */
+  getUserByExternalId(externalId: string): Promise<User | null>;
   listUsers(): Promise<User[]>;
   /** Total user count — used to bootstrap the first user as admin. */
   countUsers(): Promise<number>;
   updateUserRole(id: string, role: UserRole): Promise<User>;
+  /** Link an existing account to an external IdP subject (first OIDC login). */
+  setUserExternalId(id: string, externalId: string): Promise<User>;
 
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   listApiTokensByUser(userId: string): Promise<ApiToken[]>;
