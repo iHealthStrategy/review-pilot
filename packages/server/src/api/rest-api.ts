@@ -551,8 +551,8 @@ const ROUTES: Route[] = [
       const existing = await repo.findRulesetByOwnerAndProject(p.userId, project);
       if (existing) {
         // Append, de-duplicating by (title, instruction) against current rules.
-        const seen = new Set(existing.rules.map((r) => `${r.title} ${r.instruction}`));
-        const fresh = candidates.filter((r) => !seen.has(`${r.title} ${r.instruction}`));
+        const seen = new Set(existing.rules.map((r) => `${r.title}\0${r.instruction}`));
+        const fresh = candidates.filter((r) => !seen.has(`${r.title}\0${r.instruction}`));
         const updated = await repo.updateRuleset(existing.id, p.userId, {
           rules: [...existing.rules, ...fresh],
         });
