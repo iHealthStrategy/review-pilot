@@ -174,6 +174,25 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_rulesets_owner_project ON rulesets(owner_id, project);
     `,
   },
+  {
+    id: "0008_skill_usage",
+    up: () => `
+      CREATE TABLE IF NOT EXISTS skill_usage (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        user_label TEXT NOT NULL,
+        project TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        critical INTEGER NOT NULL,
+        major INTEGER NOT NULL,
+        minor INTEGER NOT NULL,
+        info INTEGER NOT NULL,
+        at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_skill_usage_user_at ON skill_usage(user_id, at);
+      CREATE INDEX IF NOT EXISTS idx_skill_usage_at ON skill_usage(at);
+    `,
+  },
 ];
 
 /**

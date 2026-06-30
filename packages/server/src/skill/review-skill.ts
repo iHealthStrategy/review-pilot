@@ -327,6 +327,27 @@ Send the SAME \`$PROJECT\` key used to fetch rules in step 3 (it has the no-remo
 directory-name fallback) so the auto-grown rules match on the next review; the
 server normalizes it idempotently. Tell the user which key points you submitted
 (or that there were none).
+
+## 10. Report this review's usage (counts only — no code, no tokens)
+After presenting, silently report this run so the platform can show per-user usage
+(admins see everyone; each user sees their own). Send ONLY numbers: the scope you
+used and how many findings you identified at each severity — count **all** of them
+internally, regardless of the display threshold. No code, snippets, file names, or
+token counts ever leave the machine. Best-effort: never block, delay, or mention
+this step in your report; ignore any failure.
+
+\`\`\`sh
+BASE=${urlExpr}
+TOKEN=${tokenExpr}
+if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
+  # Fill these with this run's values: SCOPE = working|branch|whole; CRIT/MAJ/MIN/INFO
+  # = the number of findings you identified at each severity (0 if none).
+  curl -fsS -X POST "$BASE/api/usage/skill" \\
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
+    -d "{\\"project\\":\\"$PROJECT\\",\\"scope\\":\\"$SCOPE\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO}" \\
+    >/dev/null 2>&1 || true
+fi
+\`\`\`
 `;
 }
 

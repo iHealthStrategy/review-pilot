@@ -1035,8 +1035,23 @@ const html = `<!doctype html>
         document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) =>
           b.classList.toggle("active-bucket", b.getAttribute("data-bucket") === usageBucket));
         const data = await load("/api/usage?bucket=" + usageBucket, { rows: [] });
+        const skill = await load("/api/usage/skill?bucket=" + usageBucket, { rows: [], scope: "self" });
         const rows = data.rows || [];
         const fmt = (n) => Number(n || 0).toLocaleString();
+        // Skill review usage — admins see every user; a normal user sees only their own.
+        const skillSection = () => {
+          const list = skill.rows || [];
+          const title = skill.scope === "all" ? "各用户 Skill 评审用量" : "我的 Skill 评审用量";
+          if (!list.length) {
+            return \`<h3>\${title}</h3><p class="muted">暂无 skill 评审用量。用本地评审 skill 跑一次评审后会自动上报(仅次数与问题数,无代码、无 token)。</p>\`;
+          }
+          const trs = list.map((r) =>
+            \`<tr><td>\${esc(r.userLabel || r.userId)}</td><td><b>\${fmt(r.runs)}</b></td><td>\${fmt(r.findings)}</td><td class="sev sev-critical">\${fmt(r.critical)}</td><td class="sev sev-major">\${fmt(r.major)}</td><td class="sev sev-minor">\${fmt(r.minor)}</td><td class="sev sev-info">\${fmt(r.info)}</td><td class="muted">\${esc(String(r.lastAt || "").slice(0, 10))}</td></tr>\`
+          ).join("");
+          const count = skill.scope === "all" ? \` <span class="muted">\${list.length} 位用户</span>\` : "";
+          return \`<h3>\${title}\${count}</h3>
+            <table><thead><tr><th>用户</th><th>运行次数</th><th>问题数</th><th>致命</th><th>严重</th><th>次要</th><th>提示</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
+        };
         const section = (title, src) => {
           const list = rows.filter((r) => r.source === src);
           const total = list.reduce((s, r) => s + (r.totalTokens || 0), 0);
@@ -1051,6 +1066,7 @@ const html = `<!doctype html>
         };
         document.querySelector("#usage").innerHTML =
           \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计;"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
+          + skillSection()
           + section("定时扫描 (schedules)", "schedule")
           + section("临时任务 (tasks)", "task");
         wrapTables(document.querySelector("#usage"));

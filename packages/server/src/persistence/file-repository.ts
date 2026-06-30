@@ -37,6 +37,7 @@ export class FileRepository extends MemoryRepository {
         users: parsed.users ?? {},
         apiTokens: parsed.apiTokens ?? {},
         tokenUsage: parsed.tokenUsage ?? {},
+        skillUsage: parsed.skillUsage ?? {},
         rulesets: parsed.rulesets ?? {},
       };
     } catch (err) {

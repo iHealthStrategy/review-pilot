@@ -352,6 +352,44 @@ export function runRepositoryContract(
     await repo.close();
   });
 
+  test(`${name}: skill usage — record, filter by user/since, newest first`, async () => {
+    const repo = await makeRepo();
+    await repo.recordSkillUsage({
+      userId: "usr_a",
+      userLabel: "@alice",
+      project: "github.com/acme/app",
+      scope: "working",
+      critical: 1,
+      major: 2,
+      minor: 0,
+      info: 3,
+      at: "2026-06-20T10:00:00.000Z",
+    });
+    await repo.recordSkillUsage({
+      userId: "usr_b",
+      userLabel: "@bob",
+      project: "github.com/acme/app",
+      scope: "branch",
+      critical: 0,
+      major: 1,
+      minor: 1,
+      info: 0,
+      at: "2026-06-22T10:00:00.000Z",
+    });
+
+    const all = await repo.listSkillUsage();
+    assert.equal(all.length, 2);
+    assert.ok(all[0]!.at >= all[1]!.at, "newest first");
+
+    const mine = await repo.listSkillUsage({ userId: "usr_a" });
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0]!.userLabel, "@alice");
+    assert.equal(mine[0]!.scope, "working");
+    assert.equal(mine[0]!.critical, 1);
+    assert.equal((await repo.listSkillUsage({ since: "2026-06-21T00:00:00.000Z" })).length, 1);
+    await repo.close();
+  });
+
   test(`${name}: rulesets — owner-scoped CRUD + public listing`, async () => {
     const repo = await makeRepo();
     const mk = (ownerId: string, name2: string, visibility: "private" | "public") =>

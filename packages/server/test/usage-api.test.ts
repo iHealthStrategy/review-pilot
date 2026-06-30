@@ -95,3 +95,74 @@ test("GET /api/usage?source=task filters to tasks only", () =>
     assert.ok(body.rows.length >= 1);
     assert.ok(body.rows.every((r) => r.source === "task"));
   }));
+
+// --- Skill usage upload + per-user visibility ---
+
+async function register(base: string, email: string) {
+  const res = await fetch(`${base}/api/auth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, password: "password1" }),
+  });
+  return (await res.json()) as { token: string; user: { id: string; role: string } };
+}
+
+function postSkill(base: string, token: string, body: unknown) {
+  return fetch(`${base}/api/usage/skill`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+test("POST /api/usage/skill requires auth", () =>
+  withApi(async (base) => {
+    const res = await fetch(`${base}/api/usage/skill`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "working" }),
+    });
+    assert.equal(res.status, 401);
+  }));
+
+test("POST /api/usage/skill records a run attributed to the caller", () =>
+  withApi(async (base) => {
+    await register(base, "admin@x.com"); // first user → admin
+    const u = await register(base, "dev@x.com");
+    const res = await postSkill(base, u.token, {
+      project: "github.com/acme/app",
+      scope: "working",
+      critical: 1,
+      major: 2,
+      minor: 0,
+      info: 5,
+    });
+    assert.equal(res.status, 201);
+  }));
+
+test("GET /api/usage/skill: admin sees all users, others see only themselves", () =>
+  withApi(async (base) => {
+    const admin = await register(base, "admin@x.com");
+    const dev = await register(base, "dev@x.com");
+    await postSkill(base, dev.token, { project: "p", scope: "working", critical: 1, major: 0, minor: 0, info: 0 });
+    await postSkill(base, dev.token, { project: "p", scope: "branch", critical: 0, major: 1, minor: 0, info: 0 });
+    await postSkill(base, admin.token, { project: "p", scope: "whole", critical: 0, major: 0, minor: 3, info: 0 });
+
+    const asAdmin = (await (
+      await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${admin.token}` } })
+    ).json()) as { scope: string; rows: any[] };
+    assert.equal(asAdmin.scope, "all");
+    assert.equal(asAdmin.rows.length, 2, "admin sees both users");
+    const devRow = asAdmin.rows.find((r) => r.userId === dev.user.id);
+    assert.equal(devRow.runs, 2);
+    assert.equal(devRow.findings, 2); // 1 critical + 1 major across the two runs
+    assert.equal(devRow.critical, 1);
+    assert.equal(devRow.major, 1);
+
+    const asDev = (await (
+      await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${dev.token}` } })
+    ).json()) as { scope: string; rows: any[] };
+    assert.equal(asDev.scope, "self");
+    assert.equal(asDev.rows.length, 1, "non-admin sees only their own");
+    assert.equal(asDev.rows[0].userId, dev.user.id);
+  }));

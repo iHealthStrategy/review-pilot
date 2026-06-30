@@ -14,6 +14,8 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillScope,
+  SkillUsage,
   TokenUsage,
   UsageSource,
   User,
@@ -31,10 +33,12 @@ import {
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordSkillUsageInput,
   type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type SkillUsageFilter,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -253,6 +257,32 @@ function toTokenUsage(r: TokenUsageRow): TokenUsage {
     outputTokens: r.output_tokens,
     totalTokens: r.total_tokens,
     estimated: !!r.estimated,
+    at: r.at,
+  };
+}
+interface SkillUsageRow {
+  id: string;
+  user_id: string;
+  user_label: string;
+  project: string;
+  scope: string;
+  critical: number;
+  major: number;
+  minor: number;
+  info: number;
+  at: string;
+}
+function toSkillUsage(r: SkillUsageRow): SkillUsage {
+  return {
+    id: r.id,
+    userId: r.user_id,
+    userLabel: r.user_label,
+    project: r.project,
+    scope: r.scope as SkillScope,
+    critical: r.critical,
+    major: r.major,
+    minor: r.minor,
+    info: r.info,
     at: r.at,
   };
 }
@@ -900,6 +930,58 @@ export class SqlRepository implements Repository {
       params,
     );
     return rows.map(toTokenUsage);
+  }
+
+  async recordSkillUsage(input: RecordSkillUsageInput): Promise<SkillUsage> {
+    const usage: SkillUsage = {
+      id: this.idGen("sku"),
+      userId: input.userId,
+      userLabel: input.userLabel,
+      project: input.project,
+      scope: input.scope,
+      critical: input.critical,
+      major: input.major,
+      minor: input.minor,
+      info: input.info,
+      at: input.at ?? this.clock(),
+    };
+    await this.client.run(
+      `INSERT INTO skill_usage
+         (id, user_id, user_label, project, scope, critical, major, minor, info, at)
+       VALUES (${placeholderList(this.client.dialect, 10)})`,
+      [
+        usage.id,
+        usage.userId,
+        usage.userLabel,
+        usage.project,
+        usage.scope,
+        usage.critical,
+        usage.major,
+        usage.minor,
+        usage.info,
+        usage.at,
+      ],
+    );
+    return usage;
+  }
+
+  async listSkillUsage(filter: SkillUsageFilter = {}): Promise<SkillUsage[]> {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+    if (filter.userId) {
+      params.push(filter.userId);
+      clauses.push(`user_id = ${this.ph(params.length)}`);
+    }
+    if (filter.since) {
+      params.push(filter.since);
+      clauses.push(`at >= ${this.ph(params.length)}`);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+    const rows = await this.client.all<SkillUsageRow>(
+      `SELECT * FROM skill_usage${where} ORDER BY at DESC`,
+      params,
+    );
+    return rows.map(toSkillUsage);
   }
 
   async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {

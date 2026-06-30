@@ -22,7 +22,7 @@ import { hashPassword, verifyPassword } from "../auth/password.js";
 import { signSession } from "../auth/session.js";
 import { generateApiToken } from "../auth/tokens.js";
 import { skillTokenFor } from "../auth/skill-token.js";
-import { type Bucket, aggregateUsage, defaultSince } from "../usage/aggregate.js";
+import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
@@ -421,6 +421,51 @@ const ROUTES: Route[] = [
         ...(source === "schedule" || source === "task" ? { source } : {}),
       });
       return ok({ bucket, rows: aggregateUsage(events, bucket) });
+    },
+  },
+  // --- Skill usage: the local review skill reports each run (no token data).
+  //     POST is self-service (any authenticated user, attributed to the caller).
+  {
+    method: "POST",
+    pattern: /^\/api\/usage\/skill$/,
+    handler: async ({ principal, body, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const scope = asEnum(b.scope, ["working", "branch", "whole"] as const, "scope");
+      const count = (k: string): number => {
+        const v = b[k];
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+      };
+      const handle = await principalHandle(p, repo, auth);
+      const usage = await repo.recordSkillUsage({
+        userId: p.userId,
+        userLabel: handle ? `@${handle}` : await principalEmail(p, repo, auth),
+        project: normalizeProjectKey(typeof b.project === "string" ? b.project : ""),
+        scope,
+        critical: count("critical"),
+        major: count("major"),
+        minor: count("minor"),
+        info: count("info"),
+      });
+      return ok({ id: usage.id }, 201);
+    },
+  },
+  // GET aggregates per user. Admins see ALL users; everyone else sees only their
+  // own (the user filter is forced server-side, never trusting the client).
+  {
+    method: "GET",
+    pattern: /^\/api\/usage\/skill$/,
+    handler: async ({ principal, query }, repo) => {
+      const p = requirePrincipal(principal);
+      const raw = query.get("bucket");
+      const bucket: Bucket = raw === "week" || raw === "month" ? raw : "day";
+      const admin = p.role === "admin";
+      const events = await repo.listSkillUsage({
+        since: defaultSince(bucket),
+        ...(admin ? {} : { userId: p.userId }),
+      });
+      return ok({ bucket, scope: admin ? "all" : "self", rows: aggregateSkillByUser(events) });
     },
   },
   // --- Community review rulesets (self-service; ownership enforced per-handler) ---

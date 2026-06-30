@@ -40,7 +40,11 @@ export function requiredRole(method: string, pathname: string): UserRole | "publ
     pathname === "/api/tokens" ||
     pathname.startsWith("/api/tokens/") ||
     pathname === "/api/rulesets" ||
-    pathname.startsWith("/api/rulesets/")
+    pathname.startsWith("/api/rulesets/") ||
+    // Usage: any authenticated user may read/report. The admin-only "all users"
+    // view is gated inside the handler (a non-admin only ever sees their own).
+    pathname === "/api/usage" ||
+    pathname.startsWith("/api/usage/")
   ) {
     return "viewer";
   }

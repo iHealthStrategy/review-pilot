@@ -13,6 +13,8 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillScope,
+  SkillUsage,
   TokenUsage,
   UsageSource,
   User,
@@ -30,10 +32,12 @@ import {
   type CreateUserInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordSkillUsageInput,
   type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type SkillUsageFilter,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -53,6 +57,7 @@ const COLLECTIONS = {
   users: "users",
   apiTokens: "api_tokens",
   tokenUsage: "token_usage",
+  skillUsage: "skill_usage",
   rulesets: "rulesets",
 } as const;
 
@@ -187,6 +192,20 @@ function toTokenUsage(d: MongoDoc): TokenUsage {
     at: d.at as string,
   };
 }
+function toSkillUsage(d: MongoDoc): SkillUsage {
+  return {
+    id: d.id as string,
+    userId: d.userId as string,
+    userLabel: (d.userLabel as string) ?? "",
+    project: (d.project as string) ?? "",
+    scope: d.scope as SkillScope,
+    critical: (d.critical as number) ?? 0,
+    major: (d.major as number) ?? 0,
+    minor: (d.minor as number) ?? 0,
+    info: (d.info as number) ?? 0,
+    at: d.at as string,
+  };
+}
 function toRuleset(d: MongoDoc): ReviewRuleset {
   return {
     id: d.id as string,
@@ -259,6 +278,9 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.tokenUsage).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.tokenUsage).createIndex({ at: 1 });
     await this.col(COLLECTIONS.tokenUsage).createIndex({ source: 1, sourceId: 1 });
+    await this.col(COLLECTIONS.skillUsage).createIndex({ id: 1 }, { unique: true });
+    await this.col(COLLECTIONS.skillUsage).createIndex({ userId: 1, at: 1 });
+    await this.col(COLLECTIONS.skillUsage).createIndex({ at: 1 });
     await this.col(COLLECTIONS.rulesets).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1 });
     await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1, project: 1 });
@@ -658,6 +680,34 @@ export class MongoRepository implements Repository {
     // `since` is a range filter (not in the equality-only MongoFilter); apply it here.
     const since = filter.since;
     return docs.map(toTokenUsage).filter((u) => !since || u.at >= since);
+  }
+
+  async recordSkillUsage(input: RecordSkillUsageInput): Promise<SkillUsage> {
+    const usage: SkillUsage = {
+      id: this.idGen("sku"),
+      userId: input.userId,
+      userLabel: input.userLabel,
+      project: input.project,
+      scope: input.scope,
+      critical: input.critical,
+      major: input.major,
+      minor: input.minor,
+      info: input.info,
+      at: input.at ?? this.clock(),
+    };
+    await this.col(COLLECTIONS.skillUsage).insertOne({ ...usage });
+    return usage;
+  }
+
+  async listSkillUsage(filter: SkillUsageFilter = {}): Promise<SkillUsage[]> {
+    const q: Record<string, string> = {};
+    if (filter.userId) q.userId = filter.userId;
+    const docs = await this.col(COLLECTIONS.skillUsage).find(q, {
+      sort: { field: "at", dir: -1 },
+    });
+    // `since` is a range filter (not in the equality-only MongoFilter); apply it here.
+    const since = filter.since;
+    return docs.map(toSkillUsage).filter((u) => !since || u.at >= since);
   }
 
   async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {

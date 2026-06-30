@@ -15,6 +15,8 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillScope,
+  SkillUsage,
   TokenUsage,
   UsageSource,
   User,
@@ -115,6 +117,26 @@ export interface RecordTokenUsageInput {
 export interface TokenUsageFilter {
   source?: UsageSource;
   sourceId?: string;
+  /** ISO lower bound (inclusive) — bound the scan window for aggregation. */
+  since?: string;
+}
+
+export interface RecordSkillUsageInput {
+  userId: string;
+  userLabel: string;
+  project: string;
+  scope: SkillScope;
+  critical: number;
+  major: number;
+  minor: number;
+  info: number;
+  /** Defaults to now when omitted (injectable for tests). */
+  at?: string;
+}
+
+export interface SkillUsageFilter {
+  /** Scope to one user (non-admin self view); omit for all users (admin). */
+  userId?: string;
   /** ISO lower bound (inclusive) — bound the scan window for aggregation. */
   since?: string;
 }
@@ -239,6 +261,11 @@ export interface Repository {
   recordTokenUsage(input: RecordTokenUsageInput): Promise<TokenUsage>;
   /** Raw usage records (newest first), bounded/filtered for aggregation. */
   listTokenUsage(filter?: TokenUsageFilter): Promise<TokenUsage[]>;
+
+  // --- Skill usage (local review-skill runs, attributed per user) ---
+  recordSkillUsage(input: RecordSkillUsageInput): Promise<SkillUsage>;
+  /** Raw skill-usage records (newest first), filtered by user/since. */
+  listSkillUsage(filter?: SkillUsageFilter): Promise<SkillUsage[]>;
 
   // --- Community review rulesets ---
   createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset>;

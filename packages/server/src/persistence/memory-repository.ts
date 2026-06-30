@@ -9,6 +9,7 @@ import type {
   RepoInsight,
   ReviewJob,
   ReviewRuleset,
+  SkillUsage,
   TokenUsage,
   User,
   UserRole,
@@ -25,10 +26,12 @@ import {
   type CreateRulesetInput,
   EntityNotFoundError,
   type IdGen,
+  type RecordSkillUsageInput,
   type RecordTokenUsageInput,
   type Repository,
   type ReviewJobFilter,
   type ReviewJobPatch,
+  type SkillUsageFilter,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -52,6 +55,8 @@ export interface MemorySnapshot {
   apiTokens: Record<string, ApiToken>;
   /** Token-usage records, keyed by id. */
   tokenUsage: Record<string, TokenUsage>;
+  /** Local review-skill usage records (per user), keyed by id. */
+  skillUsage: Record<string, SkillUsage>;
   /** Community review rulesets, keyed by id. */
   rulesets: Record<string, ReviewRuleset>;
 }
@@ -67,6 +72,7 @@ function emptySnapshot(): MemorySnapshot {
     users: {},
     apiTokens: {},
     tokenUsage: {},
+    skillUsage: {},
     rulesets: {},
   };
 }
@@ -460,6 +466,34 @@ export class MemoryRepository implements Repository {
       .filter((u) => {
         if (filter.source && u.source !== filter.source) return false;
         if (filter.sourceId && u.sourceId !== filter.sourceId) return false;
+        if (filter.since && u.at < filter.since) return false;
+        return true;
+      })
+      .sort((a, b) => (a.at < b.at ? 1 : -1));
+  }
+
+  async recordSkillUsage(input: RecordSkillUsageInput): Promise<SkillUsage> {
+    const usage: SkillUsage = {
+      id: this.idGen("sku"),
+      userId: input.userId,
+      userLabel: input.userLabel,
+      project: input.project,
+      scope: input.scope,
+      critical: input.critical,
+      major: input.major,
+      minor: input.minor,
+      info: input.info,
+      at: input.at ?? this.clock(),
+    };
+    this.data.skillUsage[usage.id] = usage;
+    await this.persist();
+    return usage;
+  }
+
+  async listSkillUsage(filter: SkillUsageFilter = {}): Promise<SkillUsage[]> {
+    return Object.values(this.data.skillUsage)
+      .filter((u) => {
+        if (filter.userId && u.userId !== filter.userId) return false;
         if (filter.since && u.at < filter.since) return false;
         return true;
       })

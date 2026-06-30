@@ -165,6 +165,33 @@ export interface TokenUsage {
   readonly at: string;
 }
 
+/** The scope the local review skill ran over. */
+export type SkillScope = "working" | "branch" | "whole";
+
+/**
+ * One run of the local review skill (the orchestrator running in a user's own
+ * Claude Code), reported back to the platform per review. Deliberately carries
+ * NO token counts — the local session can't measure them; it records the run,
+ * its scope, and the findings it reported by severity, attributed to the user.
+ * Admins aggregate these per user; a user sees only their own.
+ */
+export interface SkillUsage {
+  readonly id: string;
+  /** Reporting user (the caller's principal). */
+  readonly userId: string;
+  /** Human-facing attribution for display (e.g. "@handle" or email). */
+  readonly userLabel: string;
+  /** Normalized project key the review ran against ("" = unknown). */
+  readonly project: string;
+  readonly scope: SkillScope;
+  /** Reported findings counted by severity (total = sum of the four). */
+  readonly critical: number;
+  readonly major: number;
+  readonly minor: number;
+  readonly info: number;
+  readonly at: string;
+}
+
 /** Visibility of a community review ruleset. */
 export type RulesetVisibility = "private" | "public";
 
