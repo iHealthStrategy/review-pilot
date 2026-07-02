@@ -297,18 +297,14 @@ const html = `<!doctype html>
       </main>
     </div>
 
-    <!-- Login / register gate -->
+    <!-- Login gate — authentication is delegated to the identity provider -->
     <div class="auth-gate" id="auth-gate">
       <div class="auth-card">
         <div class="auth-brand"><span class="brand-badge">🤖</span>ReviewPilot</div>
-        <h2 id="auth-title">登录</h2>
-        <form id="auth-form">
-          <div class="field"><label>邮箱</label><input type="email" id="auth-email" autocomplete="username" required /></div>
-          <div class="field"><label>密码(至少 8 位)</label><input type="password" id="auth-password" autocomplete="current-password" minlength="8" required /></div>
-          <button type="submit" id="auth-submit">登录</button>
-          <p class="muted result" id="auth-result"></p>
-          <p class="muted"><span id="auth-switch-text">还没有账户?</span> <a href="#" id="auth-switch" style="color:#4c8bf5">注册</a></p>
-        </form>
+        <h2>登录</h2>
+        <p class="muted" style="margin:0 0 18px">使用统一身份认证登录。账号与密码由身份提供方(authentik)管理,本平台只负责评审与权限。</p>
+        <button type="button" id="auth-login">使用 authentik 登录</button>
+        <p class="muted result" id="auth-result"></p>
       </div>
     </div>
 
@@ -442,6 +438,9 @@ const html = `<!doctype html>
 
       // --- session auth: JWT in localStorage, sent as Bearer header ---
       let me = null;
+      // When true, roles are managed by the identity provider (OIDC group sync);
+      // the local role editor is hidden and roles are shown read-only.
+      let rolesManagedExt = false;
       const ROLE_LABEL = { viewer: "游客(只读)", member: "成员(可写)", admin: "管理员" };
       function token() { return localStorage.getItem("rp_session") || ""; }
       function setToken(t) { _skillTok = undefined; if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
@@ -469,45 +468,31 @@ const html = `<!doctype html>
         try { return await api(path); } catch { return fallback; }
       }
 
-      // --- auth gate (login / register) ---
+      // --- auth gate (login delegated to the OIDC provider) ---
       const gate = document.getElementById("auth-gate");
-      let authMode = "login";
       function showAuth() { gate.classList.add("open"); }
       function hideAuth() { gate.classList.remove("open"); }
-      function setAuthMode(m) {
-        authMode = m;
-        document.getElementById("auth-title").textContent = m === "login" ? "登录" : "创建账户";
-        document.getElementById("auth-submit").textContent = m === "login" ? "登录" : "注册";
-        document.getElementById("auth-switch-text").textContent = m === "login" ? "还没有账户?" : "已有账户?";
-        document.getElementById("auth-switch").textContent = m === "login" ? "注册" : "登录";
-        document.getElementById("auth-result").textContent = "";
+      // The server (app.ts) drives the OIDC handshake and redirects back with the
+      // session token in the URL fragment; clicking just leaves to /api/auth/oidc/login.
+      document.getElementById("auth-login").onclick = () => {
+        window.location.href = "/api/auth/oidc/login";
+      };
+      // Consume an OIDC redirect result delivered in the URL fragment:
+      //   #rp_session=<jwt>  → store + clean URL;  #oidc_error=<msg> → show it.
+      function consumeAuthFragment() {
+        const h = location.hash.slice(1);
+        if (!h) return;
+        const p = new URLSearchParams(h);
+        const tok = p.get("rp_session");
+        const err = p.get("oidc_error");
+        if (tok) {
+          setToken(tok);
+          history.replaceState(null, "", location.pathname + location.search);
+        } else if (err) {
+          document.getElementById("auth-result").textContent = "✗ " + err;
+          history.replaceState(null, "", location.pathname + location.search);
+        }
       }
-      document.getElementById("auth-switch").onclick = (e) => {
-        e.preventDefault();
-        setAuthMode(authMode === "login" ? "register" : "login");
-      };
-      document.getElementById("auth-form").onsubmit = async (e) => {
-        e.preventDefault();
-        const email = document.getElementById("auth-email").value.trim();
-        const password = document.getElementById("auth-password").value;
-        const out = document.getElementById("auth-result");
-        out.textContent = "";
-        try {
-          const res = await fetch("/api/auth/" + (authMode === "login" ? "login" : "register"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
-          setToken(data.token);
-          me = data.user;
-          hideAuth();
-          applyMe();
-          showView(location.hash.slice(1) || localStorage.getItem("rp_view") || "tasks");
-          refresh();
-        } catch (err) { out.textContent = "✗ " + err.message; }
-      };
       document.getElementById("logout").onclick = () => {
         setToken(""); me = null; applyMe(); showAuth();
       };
@@ -1116,11 +1101,18 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         const users = await load("/api/users", []);
         const roleOpts = (sel) => ["viewer", "member", "admin"]
           .map((r) => \`<option value="\${r}"\${r === sel ? " selected" : ""}>\${ROLE_LABEL[r]}</option>\`).join("");
+        // When roles are IdP-managed, show them read-only; otherwise an editable select.
+        const roleCell = (u) => rolesManagedExt
+          ? \`<td><span class="status role-\${esc(u.role)}">\${esc(ROLE_LABEL[u.role] || u.role)}</span></td>\`
+          : \`<td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td>\`;
         const rows = users.map((u) =>
-          \`<tr><td>\${esc(u.email)}</td><td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td><td class="muted">\${esc(u.createdAt)}</td></tr>\`
+          \`<tr><td>\${esc(u.email)}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
         ).join("");
+        const note = rolesManagedExt
+          ? '<p class="muted">角色由身份提供方(authentik)按用户组统一管理,此处只读。请在 authentik 中调整用户所属的组。</p>'
+          : "";
         document.querySelector("#users").innerHTML =
-          \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+          note + \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
         wrapTables(document.querySelector("#users"));
         document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
           sel.onchange = async () => {
@@ -1144,9 +1136,13 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
       }
 
       async function init() {
-        setAuthMode("login");
+        consumeAuthFragment(); // pick up a session/error returned by the OIDC redirect
         if (token()) {
-          try { me = (await api("/api/auth/me")).user; } catch { me = null; }
+          try {
+            const meRes = await api("/api/auth/me");
+            me = meRes.user;
+            rolesManagedExt = !!meRes.rolesManagedExternally;
+          } catch { me = null; }
         }
         applyMe();
         if (me) {

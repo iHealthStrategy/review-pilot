@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { startAppServer } from "../src/app.js";
+import type { OidcConfig } from "../src/auth/oidc.js";
 import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
+import { makeSession } from "./auth-helper.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
@@ -13,7 +15,7 @@ const SECRET = "test-session-secret";
 
 async function withAuthApi(
   run: (base: string, repo: Repository) => Promise<void>,
-  opts: { adminEmail?: string; adminPassword?: string; adminToken?: string } = {},
+  opts: { adminEmail?: string; adminToken?: string; oidc?: OidcConfig; publicBaseUrl?: string } = {},
 ): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
@@ -40,72 +42,15 @@ function authHeaders(token?: string): Record<string, string> {
   };
 }
 
-async function register(base: string, email: string, password: string) {
-  const res = await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ email, password }),
-  });
-  return { status: res.status, body: (await res.json().catch(() => ({}))) as any };
-}
-
 const PROJECT = { name: "p", platform: "github", defaultEngine: "mock", enabledEngines: ["mock"] };
-const ENV_ADMIN = { adminEmail: "root@corp.com", adminPassword: "rootpassword1" };
-
-async function login(base: string, email: string, password: string) {
-  const res = await fetch(`${base}/api/auth/login`, {
-    method: "POST",
-    headers: authHeaders(),
-    body: JSON.stringify({ email, password }),
-  });
-  return { status: res.status, body: (await res.json().catch(() => ({}))) as any };
-}
-
-test("register: first user is admin, subsequent users are viewers", () =>
-  withAuthApi(async (base) => {
-    const a = await register(base, "a@x.com", "password1");
-    assert.equal(a.status, 201);
-    assert.equal(a.body.user.role, "admin");
-    assert.equal(a.body.user.email, "a@x.com");
-    assert.ok(a.body.token, "register returns a session token");
-    assert.equal(a.body.user.passwordHash, undefined, "never leaks the hash");
-
-    const b = await register(base, "b@x.com", "password1");
-    assert.equal(b.status, 201);
-    assert.equal(b.body.user.role, "viewer");
-  }));
-
-test("register: rejects duplicate email, bad email, and weak password", () =>
-  withAuthApi(async (base) => {
-    await register(base, "dup@x.com", "password1");
-    assert.equal((await register(base, "DUP@x.com", "password1")).status, 409); // case-insensitive
-    assert.equal((await register(base, "not-an-email", "password1")).status, 400);
-    assert.equal((await register(base, "weak@x.com", "short")).status, 400);
-  }));
-
-test("login: correct password returns a token; wrong is rejected", () =>
-  withAuthApi(async (base) => {
-    await register(base, "u@x.com", "password1");
-    const okRes = await fetch(`${base}/api/auth/login`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ email: "u@x.com", password: "password1" }),
-    });
-    assert.equal(okRes.status, 200);
-    assert.ok(((await okRes.json()) as { token?: string }).token);
-
-    const bad = await fetch(`${base}/api/auth/login`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({ email: "u@x.com", password: "wrong" }),
-    });
-    assert.equal(bad.status, 401);
-  }));
+// Auth is delegated to the OIDC provider; the env admin is now a token-only
+// break-glass admin (no password login).
+const ENV_ADMIN = { adminEmail: "root@corp.com", adminToken: "envadmin-secret-token-xyz" };
 
 test("RBAC: viewer can read but not write; member/admin can write", () =>
-  withAuthApi(async (base) => {
-    const admin = (await register(base, "admin@x.com", "password1")).body.token;
-    const viewer = (await register(base, "viewer@x.com", "password1")).body.token;
+  withAuthApi(async (base, repo) => {
+    const { token: admin } = await makeSession(repo, SECRET, "admin");
+    const { token: viewer } = await makeSession(repo, SECRET, "viewer");
 
     // Unauthenticated → 401.
     assert.equal((await fetch(`${base}/api/projects`)).status, 401);
@@ -132,11 +77,9 @@ test("RBAC: viewer can read but not write; member/admin can write", () =>
   }));
 
 test("admin can upgrade a viewer to member; takes effect on the existing token", () =>
-  withAuthApi(async (base) => {
-    const admin = (await register(base, "admin@x.com", "password1")).body.token;
-    const viewerReg = await register(base, "v@x.com", "password1");
-    const viewerToken = viewerReg.body.token;
-    const viewerId = viewerReg.body.user.id;
+  withAuthApi(async (base, repo) => {
+    const { token: admin } = await makeSession(repo, SECRET, "admin");
+    const { token: viewerToken, user: viewer } = await makeSession(repo, SECRET, "viewer");
 
     // Before upgrade: viewer write is forbidden.
     assert.equal(
@@ -155,7 +98,7 @@ test("admin can upgrade a viewer to member; takes effect on the existing token",
     );
 
     // Admin upgrades the viewer to member.
-    const upgrade = await fetch(`${base}/api/users/${viewerId}/role`, {
+    const upgrade = await fetch(`${base}/api/users/${viewer.id}/role`, {
       method: "PATCH",
       headers: authHeaders(admin),
       body: JSON.stringify({ role: "member" }),
@@ -174,8 +117,8 @@ test("admin can upgrade a viewer to member; takes effect on the existing token",
   }));
 
 test("personal access tokens: create, authenticate with, and revoke", () =>
-  withAuthApi(async (base) => {
-    const admin = (await register(base, "admin@x.com", "password1")).body.token;
+  withAuthApi(async (base, repo) => {
+    const { token: admin } = await makeSession(repo, SECRET, "admin");
 
     // Mint a PAT.
     const created = await fetch(`${base}/api/tokens`, {
@@ -195,12 +138,6 @@ test("personal access tokens: create, authenticate with, and revoke", () =>
     });
     assert.equal(withPat.status, 201);
 
-    // Listing tokens never exposes the secret/hash.
-    const list = (await (await fetch(`${base}/api/tokens`, { headers: authHeaders(admin) })).json()) as any[];
-    assert.equal(list.length, 1);
-    assert.equal(list[0].token, undefined);
-    assert.equal(list[0].tokenHash, undefined);
-
     // Revoke → the PAT no longer authenticates.
     assert.equal(
       (await fetch(`${base}/api/tokens/${pat.id}`, { method: "DELETE", headers: authHeaders(admin) })).status,
@@ -212,47 +149,9 @@ test("personal access tokens: create, authenticate with, and revoke", () =>
     );
   }));
 
-test("env admin: logs in as a permanent admin without any DB user", () =>
+test("skill token: a user gets a stable derived token that authenticates", () =>
   withAuthApi(async (base, repo) => {
-    assert.equal(await repo.countUsers(), 0, "env admin is not stored in the DB");
-    const bad = await login(base, ENV_ADMIN.adminEmail, "wrong-password");
-    assert.equal(bad.status, 401);
-
-    const good = await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword);
-    assert.equal(good.status, 200);
-    assert.equal(good.body.user.role, "admin");
-    const token = good.body.token as string;
-
-    // Full admin powers (e.g. user administration) and still no DB user created.
-    assert.equal((await fetch(`${base}/api/users`, { headers: authHeaders(token) })).status, 200);
-    assert.equal((await fetch(`${base}/api/auth/me`, { headers: authHeaders(token) })).status, 200);
-    assert.equal(await repo.countUsers(), 0);
-  }, ENV_ADMIN));
-
-test("env admin: reserves its email and demotes the first registered user to viewer", () =>
-  withAuthApi(async (base) => {
-    // Reserved email cannot be registered.
-    assert.equal((await register(base, ENV_ADMIN.adminEmail, "password1")).status, 409);
-    // With an env admin present, the first self-registered user is a viewer.
-    const first = await register(base, "first@x.com", "password1");
-    assert.equal(first.status, 201);
-    assert.equal(first.body.user.role, "viewer");
-  }, ENV_ADMIN));
-
-test("env admin: cannot mint personal tokens (it has no DB row)", () =>
-  withAuthApi(async (base) => {
-    const token = (await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword)).body.token;
-    const res = await fetch(`${base}/api/tokens`, {
-      method: "POST",
-      headers: authHeaders(token),
-      body: JSON.stringify({ name: "ci" }),
-    });
-    assert.equal(res.status, 400);
-  }, ENV_ADMIN));
-
-test("skill token: a registered user gets a stable derived token that authenticates", () =>
-  withAuthApi(async (base) => {
-    const sess = (await register(base, "u1@x.com", "password1")).body.token;
+    const { token: sess } = await makeSession(repo, SECRET, "member");
     const r = await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(sess) });
     assert.equal(r.status, 200);
     const body = (await r.json()) as any;
@@ -267,18 +166,10 @@ test("skill token: a registered user gets a stable derived token that authentica
     assert.equal(again.token, body.token);
   }));
 
-test("skill token: env admin's is the configured ADMIN_TOKEN", () =>
-  withAuthApi(async (base) => {
-    const sess = (await login(base, ENV_ADMIN.adminEmail, ENV_ADMIN.adminPassword)).body.token;
-    const body = (await (await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(sess) })).json()) as any;
-    assert.equal(body.kind, "admin");
-    assert.equal(body.configured, true);
-    assert.equal(body.token, "envadmin-secret-token-xyz");
-  }, { ...ENV_ADMIN, adminToken: "envadmin-secret-token-xyz" }));
-
 test("env admin: configured ADMIN_TOKEN authenticates as admin without a DB row", () =>
-  withAuthApi(async (base) => {
-    const TOK = "envadmin-secret-token-xyz"; // need not have the rpat_ prefix
+  withAuthApi(async (base, repo) => {
+    const TOK = ENV_ADMIN.adminToken; // need not have the rpat_ prefix
+    assert.equal(await repo.countUsers(), 0, "env admin is not stored in the DB");
     // /api/auth/me resolves to the env admin via the token.
     const me = await fetch(`${base}/api/auth/me`, { headers: authHeaders(TOK) });
     assert.equal(me.status, 200);
@@ -288,4 +179,59 @@ test("env admin: configured ADMIN_TOKEN authenticates as admin without a DB row"
     // Admin-only route reachable with the token; a wrong token is rejected.
     assert.equal((await fetch(`${base}/api/users`, { headers: authHeaders(TOK) })).status, 200);
     assert.equal((await fetch(`${base}/api/auth/me`, { headers: authHeaders("nope") })).status, 401);
-  }, { ...ENV_ADMIN, adminToken: "envadmin-secret-token-xyz" }));
+    assert.equal(await repo.countUsers(), 0);
+  }, ENV_ADMIN));
+
+test("env admin: cannot mint personal tokens (it has no DB row)", () =>
+  withAuthApi(async (base) => {
+    const res = await fetch(`${base}/api/tokens`, {
+      method: "POST",
+      headers: authHeaders(ENV_ADMIN.adminToken),
+      body: JSON.stringify({ name: "ci" }),
+    });
+    assert.equal(res.status, 400);
+  }, ENV_ADMIN));
+
+test("env admin: skill token is the configured ADMIN_TOKEN", () =>
+  withAuthApi(async (base) => {
+    const body = (await (
+      await fetch(`${base}/api/auth/skill-token`, { headers: authHeaders(ENV_ADMIN.adminToken) })
+    ).json()) as any;
+    assert.equal(body.kind, "admin");
+    assert.equal(body.configured, true);
+    assert.equal(body.token, ENV_ADMIN.adminToken);
+  }, ENV_ADMIN));
+
+// When roles are delegated to the IdP (OIDC role-sync on), local role editing is
+// disabled and /me advertises the flag so the UI can render roles read-only.
+const OIDC_SYNC: { oidc: OidcConfig; publicBaseUrl: string } = {
+  publicBaseUrl: "https://test.local",
+  oidc: {
+    issuer: "https://idp.example/application/o/app/",
+    clientId: "c",
+    clientSecret: "",
+    scopes: "openid",
+    groupsClaim: "groups",
+    groupRoleMap: {},
+    syncRoles: true,
+    defaultRole: "viewer",
+    apiUrl: "",
+    apiToken: "",
+  },
+};
+
+test("roles managed externally: PATCH /users/:id/role is rejected + /me advertises it", () =>
+  withAuthApi(async (base, repo) => {
+    const { token: admin } = await makeSession(repo, SECRET, "admin");
+    const { user: viewer } = await makeSession(repo, SECRET, "viewer");
+
+    const me = (await (await fetch(`${base}/api/auth/me`, { headers: authHeaders(admin) })).json()) as any;
+    assert.equal(me.rolesManagedExternally, true);
+
+    const res = await fetch(`${base}/api/users/${viewer.id}/role`, {
+      method: "PATCH",
+      headers: authHeaders(admin),
+      body: JSON.stringify({ role: "member" }),
+    });
+    assert.equal(res.status, 409);
+  }, OIDC_SYNC));

@@ -8,6 +8,9 @@
  * no external credentials.
  */
 
+import type { UserRole } from "./domain/entities.js";
+import { parseGroupRoleMap } from "./auth/oidc.js";
+
 export type DbDriver = "mock" | "sqlite" | "postgres" | "mongo";
 export type ReviewEngineKind =
   | "mock"
@@ -118,18 +121,47 @@ export interface AppConfig {
   readonly sessionTtlMs: number;
   /**
    * Built-in admin configured from the environment — NOT stored in the DB and
-   * needs no maintenance. Enabled only when `adminPassword` is set. Logs in as a
-   * permanent admin (break-glass / bootstrap). When enabled, self-registered
-   * users start as read-only viewers (this admin upgrades them).
+   * needs no maintenance. Enabled only when `adminToken` is set. Acts as a
+   * token-only break-glass admin for the API/MCP (interactive login is delegated
+   * to the OIDC provider; there is no env-admin password login).
    */
   readonly adminEmail: string;
-  readonly adminPassword: string;
   /**
    * Optional config-only PAT for the env admin. When set, a request bearing this
    * token authenticates as the env admin (admin role) without a DB row — lets the
    * env admin drive the API / MCP / skill auto-grow. Break-glass; keep it secret.
    */
   readonly adminToken: string;
+  /**
+   * Public base URL of this service (scheme://host, no trailing slash). Used for
+   * the OIDC redirect URI and self-referential links; preferred over request
+   * headers (avoids Host-header spoofing). Empty falls back to the request origin.
+   */
+  readonly publicBaseUrl: string;
+  /**
+   * OpenID Connect (e.g. authentik). When `issuer` + `clientId` are set,
+   * interactive authentication is delegated to the IdP and local password login
+   * is disabled; this app keeps only authorization (role config).
+   */
+  readonly oidc: {
+    readonly issuer: string;
+    readonly clientId: string;
+    readonly clientSecret: string;
+    readonly scopes: string;
+    readonly groupsClaim: string;
+    readonly groupRoleMap: Record<string, UserRole>;
+    /**
+     * When true, the user's role is (re)synced from their IdP groups on EVERY
+     * login — the IdP becomes the source of truth and local role editing is
+     * disabled. When false, groups only seed the role at first login and admins
+     * manage it locally.
+     */
+    readonly syncRoles: boolean;
+    /** Role for a user whose groups match nothing in the map. */
+    readonly defaultRole: UserRole;
+    readonly apiUrl: string;
+    readonly apiToken: string;
+  };
   /** Directory of the built Web UI to serve; empty uses the bundled default. */
   readonly webDistDir: string;
   readonly workspaceDir: string;
@@ -147,6 +179,11 @@ const ENGINES: readonly ReviewEngineKind[] = [
 function str(env: NodeJS.ProcessEnv, key: string, fallback: string): string {
   const v = env[key];
   return v === undefined || v === "" ? fallback : v;
+}
+
+/** Coerce a string to a valid UserRole, or the fallback when unrecognized. */
+function roleOr(v: string, fallback: UserRole): UserRole {
+  return v === "viewer" || v === "member" || v === "admin" ? v : fallback;
 }
 
 function int(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
@@ -286,8 +323,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret: str(env, "SESSION_SECRET", ""),
     sessionTtlMs: int(env, "SESSION_TTL_MS", 604800000),
     adminEmail: str(env, "ADMIN_EMAIL", "admin@reviewpilot.local"),
-    adminPassword: str(env, "ADMIN_PASSWORD", ""),
     adminToken: str(env, "ADMIN_TOKEN", ""),
+    publicBaseUrl: str(env, "PUBLIC_BASE_URL", "").replace(/\/+$/, ""),
+    oidc: {
+      issuer: str(env, "OIDC_ISSUER", ""),
+      clientId: str(env, "OIDC_CLIENT_ID", ""),
+      clientSecret: str(env, "OIDC_CLIENT_SECRET", ""),
+      scopes: str(env, "OIDC_SCOPES", "openid profile email"),
+      groupsClaim: str(env, "OIDC_GROUPS_CLAIM", "groups"),
+      groupRoleMap: parseGroupRoleMap(str(env, "OIDC_GROUP_ROLE_MAP", "")),
+      syncRoles: bool(env, "OIDC_SYNC_ROLES", false),
+      defaultRole: roleOr(str(env, "OIDC_DEFAULT_ROLE", "viewer"), "viewer"),
+      apiUrl: str(env, "AUTHENTIK_API_URL", ""),
+      apiToken: str(env, "AUTHENTIK_API_TOKEN", ""),
+    },
     webDistDir: str(env, "WEB_DIST_DIR", ""),
     workspaceDir: str(env, "WORKSPACE_DIR", "./.workspace"),
   };

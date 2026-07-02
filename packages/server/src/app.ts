@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -7,6 +8,16 @@ import {
 import { createApiHandler } from "./api/rest-api.js";
 import { resolvePrincipal } from "./auth/authorize.js";
 import { envAdminFrom } from "./auth/env-admin.js";
+import {
+  type OidcConfig,
+  OidcClient,
+  OidcLoginError,
+  oidcEnabled,
+  pkceChallenge,
+  randomUrlToken,
+} from "./auth/oidc.js";
+import { loginUser } from "./auth/provision.js";
+import { signSession } from "./auth/session.js";
 import { handleMcp } from "./mcp/mcp-server.js";
 import type { Repository } from "./persistence/repository.js";
 import {
@@ -28,11 +39,14 @@ export interface AppDeps {
   sessionSecret?: string;
   /** Session token lifetime (ms). */
   sessionTtlMs?: number;
-  /** Built-in env-configured admin (email + password); password enables it. */
+  /** Built-in env-configured admin email (display only). */
   adminEmail?: string;
-  adminPassword?: string;
-  /** Optional config-only PAT for the env admin (bearer auth without a DB row). */
+  /** Config-only PAT for the env admin (bearer auth without a DB row); enables it. */
   adminToken?: string;
+  /** Public base URL (scheme://host) for OIDC redirect URI + self links. */
+  publicBaseUrl?: string;
+  /** OIDC provider config; when set, interactive login is delegated to it. */
+  oidc?: OidcConfig;
   /** Override directory for the built Web UI (defaults to bundled location). */
   webDistDir?: string;
   /** Backs the /api/schedules routes (scheduled scans). */
@@ -52,8 +66,9 @@ export function createAppHandler(deps: AppDeps) {
     ...(deps.sessionSecret ? { sessionSecret: deps.sessionSecret } : {}),
     ...(deps.sessionTtlMs !== undefined ? { sessionTtlMs: deps.sessionTtlMs } : {}),
     ...(deps.adminEmail !== undefined ? { adminEmail: deps.adminEmail } : {}),
-    ...(deps.adminPassword ? { adminPassword: deps.adminPassword } : {}),
     ...(deps.adminToken ? { adminToken: deps.adminToken } : {}),
+    // Roles are IdP-managed when OIDC role-sync is on → disable local role editing.
+    rolesManagedExternally: oidcEnabled(deps.oidc) && deps.oidc.syncRoles,
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
@@ -62,12 +77,108 @@ export function createAppHandler(deps: AppDeps) {
   // MCP endpoint auth: resolve the bearer credential (PAT or session) the same
   // way the REST API does, so every user drives MCP with their own token.
   const secret = deps.sessionSecret ?? "";
-  const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminPassword ?? "", deps.adminToken ?? "");
+  const envAdmin = envAdminFrom(deps.adminEmail ?? "", deps.adminToken ?? "");
+  const sessionTtlMs = deps.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
+  // OIDC login is delegated to the provider; minting our own session after the
+  // handshake requires a signing secret, so fail closed if it's missing.
+  if (oidcEnabled(deps.oidc) && !secret) {
+    throw new Error("OIDC is configured but SESSION_SECRET is empty; refusing to start (set SESSION_SECRET)");
+  }
+  // The OIDC redirect URI must be an absolute, stable origin — derive it from
+  // configuration, not request headers (which a proxy/attacker can spoof).
+  if (oidcEnabled(deps.oidc) && !deps.publicBaseUrl) {
+    throw new Error("OIDC is configured but PUBLIC_BASE_URL is empty; refusing to start (set PUBLIC_BASE_URL to this service's public origin)");
+  }
+  const oidc = oidcEnabled(deps.oidc) ? new OidcClient(deps.oidc) : null;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
-    // Derive the server's own origin so the orchestrator skill can call back to
-    // fetch a named user's public rulesets (X-Forwarded-* honoured behind a proxy).
-    const baseUrl = requestOrigin(req);
+    // The server's own origin, for self-referential links (skill callbacks, the
+    // OIDC redirect URI). Prefer the configured PUBLIC_BASE_URL over request
+    // headers so a spoofed Host can't redirect or poison generated artifacts.
+    const baseUrl = deps.publicBaseUrl || requestOrigin(req);
+
+    // --- OIDC login flow (delegated authentication) ---
+    if (path === "/api/auth/oidc/login" || path === "/api/auth/oidc/callback" || path === "/api/auth/oidc/logout") {
+      if (!oidc) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "OIDC is not configured on this server" }));
+        return;
+      }
+      const redirectUri = `${baseUrl}/api/auth/oidc/callback`;
+      try {
+        if (path === "/api/auth/oidc/login") {
+          const state = randomUrlToken();
+          const nonce = randomUrlToken();
+          const codeVerifier = randomUrlToken();
+          const cookie = encodeCookie({ state, nonce, codeVerifier }, secret);
+          const url = await oidc.authorizeUrl({
+            redirectUri,
+            state,
+            nonce,
+            codeChallenge: pkceChallenge(codeVerifier),
+          });
+          res.writeHead(302, {
+            Location: url,
+            "Set-Cookie": `rp_oidc=${cookie}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+          });
+          res.end();
+          return;
+        }
+        if (path === "/api/auth/oidc/logout") {
+          const end = await oidc.endSessionUrl(baseUrl || "/");
+          res.writeHead(302, { Location: end ?? (baseUrl || "/") });
+          res.end();
+          return;
+        }
+        // callback: validate state, exchange the code, provision, mint a session.
+        const url = new URL(req.url ?? "/", "http://localhost");
+        const code = url.searchParams.get("code") ?? "";
+        const state = url.searchParams.get("state") ?? "";
+        const saved = decodeCookie(getCookie(req, "rp_oidc"), secret);
+        const clearCookie = "rp_oidc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
+        if (!code || !saved || saved.state !== state) {
+          res.writeHead(302, {
+            Location: `${baseUrl || ""}/#oidc_error=${encodeURIComponent("invalid login state")}`,
+            "Set-Cookie": clearCookie,
+          });
+          res.end();
+          return;
+        }
+        const identity = await oidc.exchangeCode({
+          code,
+          redirectUri,
+          codeVerifier: saved.codeVerifier,
+          nonce: saved.nonce,
+        });
+        // Create/link the account; when role-sync is on, the IdP is authoritative.
+        const user = await loginUser(
+          deps.repo,
+          identity,
+          oidc.roleForGroups(identity.groups),
+          deps.oidc!.syncRoles,
+        );
+        const token = signSession({ sub: user.id, role: user.role }, secret, sessionTtlMs);
+        // Deliver the session token to the SPA via the URL fragment (kept out of
+        // server logs / Referer); the app stores it and uses Authorization: Bearer.
+        res.writeHead(302, {
+          Location: `${baseUrl || ""}/#rp_session=${encodeURIComponent(token)}`,
+          "Set-Cookie": clearCookie,
+        });
+        res.end();
+        return;
+      } catch (err) {
+        // Only surface messages we deem safe; log the rest server-side and show
+        // a generic message so internal error detail never reaches the client.
+        const safe = err instanceof OidcLoginError ? err.message : "login failed";
+        if (!(err instanceof OidcLoginError)) console.error("OIDC login error:", err);
+        res.writeHead(302, {
+          Location: `${baseUrl || ""}/#oidc_error=${encodeURIComponent(safe)}`,
+          "Set-Cookie": "rp_oidc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
+        });
+        res.end();
+        return;
+      }
+    }
     // Local Claude Code skill (public artifact — no auth): one-line installer and
     // the raw SKILL.md. The default skill is the orchestrator. If the caller
     // presents their OWN bearer token (PAT/session), it is baked into the skill so
@@ -148,6 +259,48 @@ function bearerToken(req: IncomingMessage): string {
   const h = req.headers.authorization;
   const m = /^Bearer\s+(.+)$/i.exec((h ?? "").trim());
   return m ? m[1]!.trim() : "";
+}
+
+/** Transient OIDC handshake state carried across the redirect in a signed cookie. */
+interface OidcCookie {
+  state: string;
+  nonce: string;
+  codeVerifier: string;
+}
+
+/** Encode + HMAC-sign the handshake cookie so the client can't tamper with it. */
+function encodeCookie(data: OidcCookie, secret: string): string {
+  const value = Buffer.from(JSON.stringify(data)).toString("base64url");
+  const sig = createHmac("sha256", secret).update(value).digest("base64url");
+  return `${value}.${sig}`;
+}
+
+/** Verify + decode the handshake cookie; null when missing/tampered. */
+function decodeCookie(raw: string, secret: string): OidcCookie | null {
+  if (!raw) return null;
+  const i = raw.lastIndexOf(".");
+  if (i < 0) return null;
+  const value = raw.slice(0, i);
+  const sig = Buffer.from(raw.slice(i + 1));
+  const expected = createHmac("sha256", secret).update(value).digest("base64url");
+  const exp = Buffer.from(expected);
+  if (sig.length !== exp.length || !timingSafeEqual(sig, exp)) return null;
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as OidcCookie;
+  } catch {
+    return null;
+  }
+}
+
+/** Read a named cookie from the request, or "" when absent. */
+function getCookie(req: IncomingMessage, name: string): string {
+  const raw = req.headers.cookie ?? "";
+  for (const part of raw.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return "";
 }
 
 function requestOrigin(req: IncomingMessage): string {

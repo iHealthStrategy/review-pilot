@@ -114,14 +114,18 @@ export interface RepoInsight {
  */
 export type UserRole = "viewer" | "member" | "admin";
 
-/** A registered account. `passwordHash` never leaves the persistence layer. */
+/**
+ * An account. Authentication is delegated to the external OIDC provider; this
+ * record exists to attach authorization (role config) and community identity.
+ * `externalId` is the provider's stable subject (OIDC `sub`); "" until linked.
+ */
 export interface User {
   readonly id: string;
   readonly email: string;
   /** Public, unique handle (e.g. for community discovery `…/u/<handle>`). */
   readonly handle: string;
-  /** scrypt hash, encoded `<saltHex>:<hashHex>`. Never serialized to the API. */
-  readonly passwordHash: string;
+  /** External IdP subject (OIDC `sub`). Stable identity key; "" if unlinked. */
+  readonly externalId: string;
   readonly role: UserRole;
   readonly createdAt: string;
   readonly updatedAt: string;

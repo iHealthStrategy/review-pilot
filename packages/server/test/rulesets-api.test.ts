@@ -8,6 +8,9 @@ import type { Repository } from "../src/persistence/repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
+import { provisionUser } from "../src/auth/provision.js";
+import { signSession } from "../src/auth/session.js";
+import type { UserRole } from "../src/domain/entities.js";
 
 const SECRET = "test-session-secret";
 
@@ -30,20 +33,21 @@ async function withApi(run: (base: string, repo: Repository) => Promise<void>): 
   }
 }
 
-async function register(base: string, email: string): Promise<string> {
-  const res = await fetch(`${base}/api/auth/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email, password: "password1" }),
-  });
-  return ((await res.json()) as { token: string }).token;
+async function register(repo: Repository, email: string, role: UserRole = "member"): Promise<string> {
+  // Provision the user as an OIDC first-login would (exercises handle generation),
+  // then mint a session token for them.
+  const user = await provisionUser(
+    repo,
+    { sub: `sub:${email}`, email, name: "", preferredUsername: "", groups: [] },
+    role,
+  );
+  return signSession({ sub: user.id, role: user.role }, SECRET, 3_600_000);
 }
 const auth = (t: string) => ({ "content-type": "application/json", authorization: `Bearer ${t}` });
 
 test("rulesets: a viewer can self-create, edit, and only sees their own + public", () =>
-  withApi(async (base) => {
-    await register(base, "admin@x.com"); // first user = admin
-    const viewer = await register(base, "viewer@x.com"); // viewer (read-only role)
+  withApi(async (base, repo) => {
+    const viewer = await register(repo, "viewer@x.com", "viewer");
 
     // Self-service: a viewer CAN create their own ruleset.
     const created = await fetch(`${base}/api/rulesets`, {
@@ -73,9 +77,9 @@ test("rulesets: a viewer can self-create, edit, and only sees their own + public
   }));
 
 test("rulesets: cannot edit someone else's; can fork a public one", () =>
-  withApi(async (base) => {
-    const alice = await register(base, "alice@x.com");
-    const bob = await register(base, "bob@x.com");
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
     const rs = (await (await fetch(`${base}/api/rulesets`, {
       method: "POST",
       headers: auth(alice),
@@ -101,10 +105,10 @@ test("rulesets: cannot edit someone else's; can fork a public one", () =>
   }));
 
 test("rulesets: register assigns a handle; public discovery by handle is unauthenticated", () =>
-  withApi(async (base) => {
+  withApi(async (base, repo) => {
     // Two users share an email local-part → handles must stay unique.
-    const a = await register(base, "alice@x.com");
-    const a2 = await register(base, "alice@y.com");
+    const a = await register(repo, "alice@x.com");
+    const a2 = await register(repo, "alice@y.com");
     const meA = (await (await fetch(`${base}/api/auth/me`, { headers: auth(a) })).json()) as any;
     const meA2 = (await (await fetch(`${base}/api/auth/me`, { headers: auth(a2) })).json()) as any;
     assert.equal(meA.user.handle, "alice");
@@ -147,8 +151,8 @@ test("rulesets: register assigns a handle; public discovery by handle is unauthe
   }));
 
 test("candidates: skill auto-grows the caller's per-project ruleset (pending) and discovery hides pending", () =>
-  withApi(async (base) => {
-    const alice = await register(base, "alice@x.com");
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
 
     // First submit: no ruleset for this project yet → creates one (private), pending rules.
     const sub1 = await fetch(`${base}/api/rulesets/candidates`, {
@@ -206,9 +210,9 @@ test("candidates: skill auto-grows the caller's per-project ruleset (pending) an
   }));
 
 test("ruleset skill: public installs openly; private needs the owner's token", () =>
-  withApi(async (base) => {
-    const owner = await register(base, "owner@x.com");
-    const stranger = await register(base, "stranger@x.com");
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const stranger = await register(repo, "stranger@x.com");
     const pub = (await (await fetch(`${base}/api/rulesets`, {
       method: "POST", headers: auth(owner),
       body: JSON.stringify({ name: "Pub", visibility: "public", instructions: "rule A" }),

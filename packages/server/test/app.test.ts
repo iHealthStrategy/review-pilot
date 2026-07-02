@@ -9,6 +9,7 @@ import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
+import { makeSession } from "./auth-helper.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 
@@ -36,14 +37,8 @@ test("app: auth gates /api (session token) but leaves health open", async () => 
     // No credential → 401; health probe stays open.
     assert.equal((await fetch(`${base}/api/projects`)).status, 401);
     assert.equal((await fetch(`${base}/api/health`)).status, 200);
-    // Register the first user (bootstrapped to admin) → returns a session token.
-    const reg = await fetch(`${base}/api/auth/register`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: "a@b.com", password: "password1" }),
-    });
-    assert.equal(reg.status, 201);
-    const { token } = (await reg.json()) as { token: string };
+    // A signed session (post-OIDC) authenticates the bearer.
+    const { token } = await makeSession(repo, "secret", "admin");
     const ok = await fetch(`${base}/api/projects`, {
       headers: { authorization: `Bearer ${token}` },
     });
