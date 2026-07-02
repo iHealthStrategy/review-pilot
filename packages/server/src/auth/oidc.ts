@@ -31,6 +31,10 @@ export interface OidcConfig {
   groupsClaim: string;
   /** authentik group name → local role. Highest-ranked match wins. */
   groupRoleMap: Record<string, UserRole>;
+  /** When true, re-sync the role from groups on every login (IdP authoritative). */
+  syncRoles: boolean;
+  /** Role when no group matches the map. */
+  defaultRole: UserRole;
   /** Optional management REST API base (e.g. `https://<host>/api/v3`). */
   apiUrl: string;
   /** Bearer token for the REST API groups fallback. */
@@ -253,9 +257,9 @@ export class OidcClient {
     return (u?.groups_obj ?? []).map((g) => g.name ?? "").filter(Boolean);
   }
 
-  /** Map authentik groups to a local role (highest rank wins; default viewer). */
+  /** Map authentik groups to a local role (highest rank wins; else default). */
   roleForGroups(groups: readonly string[]): UserRole {
-    let best: UserRole = "viewer";
+    let best: UserRole = this.cfg.defaultRole;
     for (const g of groups) {
       const r = this.cfg.groupRoleMap[g];
       if (r && RANK[r] > RANK[best]) best = r;

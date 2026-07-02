@@ -438,6 +438,9 @@ const html = `<!doctype html>
 
       // --- session auth: JWT in localStorage, sent as Bearer header ---
       let me = null;
+      // When true, roles are managed by the identity provider (OIDC group sync);
+      // the local role editor is hidden and roles are shown read-only.
+      let rolesManagedExt = false;
       const ROLE_LABEL = { viewer: "游客(只读)", member: "成员(可写)", admin: "管理员" };
       function token() { return localStorage.getItem("rp_session") || ""; }
       function setToken(t) { _skillTok = undefined; if (t) localStorage.setItem("rp_session", t); else localStorage.removeItem("rp_session"); }
@@ -1098,11 +1101,18 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         const users = await load("/api/users", []);
         const roleOpts = (sel) => ["viewer", "member", "admin"]
           .map((r) => \`<option value="\${r}"\${r === sel ? " selected" : ""}>\${ROLE_LABEL[r]}</option>\`).join("");
+        // When roles are IdP-managed, show them read-only; otherwise an editable select.
+        const roleCell = (u) => rolesManagedExt
+          ? \`<td><span class="status role-\${esc(u.role)}">\${esc(ROLE_LABEL[u.role] || u.role)}</span></td>\`
+          : \`<td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td>\`;
         const rows = users.map((u) =>
-          \`<tr><td>\${esc(u.email)}</td><td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td><td class="muted">\${esc(u.createdAt)}</td></tr>\`
+          \`<tr><td>\${esc(u.email)}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
         ).join("");
+        const note = rolesManagedExt
+          ? '<p class="muted">角色由身份提供方(authentik)按用户组统一管理,此处只读。请在 authentik 中调整用户所属的组。</p>'
+          : "";
         document.querySelector("#users").innerHTML =
-          \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+          note + \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
         wrapTables(document.querySelector("#users"));
         document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
           sel.onchange = async () => {
@@ -1128,7 +1138,11 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
       async function init() {
         consumeAuthFragment(); // pick up a session/error returned by the OIDC redirect
         if (token()) {
-          try { me = (await api("/api/auth/me")).user; } catch { me = null; }
+          try {
+            const meRes = await api("/api/auth/me");
+            me = meRes.user;
+            rolesManagedExt = !!meRes.rolesManagedExternally;
+          } catch { me = null; }
         }
         applyMe();
         if (me) {

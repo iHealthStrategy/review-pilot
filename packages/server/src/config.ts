@@ -150,6 +150,15 @@ export interface AppConfig {
     readonly scopes: string;
     readonly groupsClaim: string;
     readonly groupRoleMap: Record<string, UserRole>;
+    /**
+     * When true, the user's role is (re)synced from their IdP groups on EVERY
+     * login — the IdP becomes the source of truth and local role editing is
+     * disabled. When false, groups only seed the role at first login and admins
+     * manage it locally.
+     */
+    readonly syncRoles: boolean;
+    /** Role for a user whose groups match nothing in the map. */
+    readonly defaultRole: UserRole;
     readonly apiUrl: string;
     readonly apiToken: string;
   };
@@ -170,6 +179,11 @@ const ENGINES: readonly ReviewEngineKind[] = [
 function str(env: NodeJS.ProcessEnv, key: string, fallback: string): string {
   const v = env[key];
   return v === undefined || v === "" ? fallback : v;
+}
+
+/** Coerce a string to a valid UserRole, or the fallback when unrecognized. */
+function roleOr(v: string, fallback: UserRole): UserRole {
+  return v === "viewer" || v === "member" || v === "admin" ? v : fallback;
 }
 
 function int(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
@@ -318,6 +332,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       scopes: str(env, "OIDC_SCOPES", "openid profile email"),
       groupsClaim: str(env, "OIDC_GROUPS_CLAIM", "groups"),
       groupRoleMap: parseGroupRoleMap(str(env, "OIDC_GROUP_ROLE_MAP", "")),
+      syncRoles: bool(env, "OIDC_SYNC_ROLES", false),
+      defaultRole: roleOr(str(env, "OIDC_DEFAULT_ROLE", "viewer"), "viewer"),
       apiUrl: str(env, "AUTHENTIK_API_URL", ""),
       apiToken: str(env, "AUTHENTIK_API_TOKEN", ""),
     },

@@ -15,7 +15,7 @@ import {
   pkceChallenge,
   randomUrlToken,
 } from "./auth/oidc.js";
-import { provisionUser } from "./auth/provision.js";
+import { loginUser } from "./auth/provision.js";
 import { signSession } from "./auth/session.js";
 import { handleMcp } from "./mcp/mcp-server.js";
 import type { Repository } from "./persistence/repository.js";
@@ -66,6 +66,8 @@ export function createAppHandler(deps: AppDeps) {
     ...(deps.sessionTtlMs !== undefined ? { sessionTtlMs: deps.sessionTtlMs } : {}),
     ...(deps.adminEmail !== undefined ? { adminEmail: deps.adminEmail } : {}),
     ...(deps.adminToken ? { adminToken: deps.adminToken } : {}),
+    // Roles are IdP-managed when OIDC role-sync is on → disable local role editing.
+    rolesManagedExternally: oidcEnabled(deps.oidc) && deps.oidc.syncRoles,
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
@@ -142,7 +144,13 @@ export function createAppHandler(deps: AppDeps) {
           codeVerifier: saved.codeVerifier,
           nonce: saved.nonce,
         });
-        const user = await provisionUser(deps.repo, identity, oidc.roleForGroups(identity.groups));
+        // Create/link the account; when role-sync is on, the IdP is authoritative.
+        const user = await loginUser(
+          deps.repo,
+          identity,
+          oidc.roleForGroups(identity.groups),
+          deps.oidc!.syncRoles,
+        );
         const token = signSession({ sub: user.id, role: user.role }, secret, sessionTtlMs);
         // Deliver the session token to the SPA via the URL fragment (kept out of
         // server logs / Referer); the app stores it and uses Authorization: Bearer.

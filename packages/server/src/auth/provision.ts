@@ -58,3 +58,23 @@ export async function provisionUser(
     role: seedRole,
   });
 }
+
+/**
+ * Resolve the account for a login. Always provisions (create/link). When
+ * `syncRoles` is set, the IdP is authoritative: the role is forced to
+ * `groupRole` on every login (so group changes take effect and demotions
+ * apply). Otherwise `groupRole` only seeds a newly-created account and the
+ * stored role is preserved.
+ */
+export async function loginUser(
+  repo: Repository,
+  identity: OidcIdentity,
+  groupRole: UserRole,
+  syncRoles: boolean,
+): Promise<User> {
+  const user = await provisionUser(repo, identity, groupRole);
+  if (syncRoles && user.role !== groupRole) {
+    return repo.updateUserRole(user.id, groupRole);
+  }
+  return user;
+}

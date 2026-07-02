@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { startAppServer } from "../src/app.js";
+import type { OidcConfig } from "../src/auth/oidc.js";
 import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
@@ -14,7 +15,7 @@ const SECRET = "test-session-secret";
 
 async function withAuthApi(
   run: (base: string, repo: Repository) => Promise<void>,
-  opts: { adminEmail?: string; adminToken?: string } = {},
+  opts: { adminEmail?: string; adminToken?: string; oidc?: OidcConfig } = {},
 ): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
@@ -200,3 +201,36 @@ test("env admin: skill token is the configured ADMIN_TOKEN", () =>
     assert.equal(body.configured, true);
     assert.equal(body.token, ENV_ADMIN.adminToken);
   }, ENV_ADMIN));
+
+// When roles are delegated to the IdP (OIDC role-sync on), local role editing is
+// disabled and /me advertises the flag so the UI can render roles read-only.
+const OIDC_SYNC: { oidc: OidcConfig } = {
+  oidc: {
+    issuer: "https://idp.example/application/o/app/",
+    clientId: "c",
+    clientSecret: "",
+    scopes: "openid",
+    groupsClaim: "groups",
+    groupRoleMap: {},
+    syncRoles: true,
+    defaultRole: "viewer",
+    apiUrl: "",
+    apiToken: "",
+  },
+};
+
+test("roles managed externally: PATCH /users/:id/role is rejected + /me advertises it", () =>
+  withAuthApi(async (base, repo) => {
+    const { token: admin } = await makeSession(repo, SECRET, "admin");
+    const { user: viewer } = await makeSession(repo, SECRET, "viewer");
+
+    const me = (await (await fetch(`${base}/api/auth/me`, { headers: authHeaders(admin) })).json()) as any;
+    assert.equal(me.rolesManagedExternally, true);
+
+    const res = await fetch(`${base}/api/users/${viewer.id}/role`, {
+      method: "PATCH",
+      headers: authHeaders(admin),
+      body: JSON.stringify({ role: "member" }),
+    });
+    assert.equal(res.status, 409);
+  }, OIDC_SYNC));

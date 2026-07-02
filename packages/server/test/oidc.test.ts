@@ -7,7 +7,7 @@ import {
   oidcEnabled,
   parseGroupRoleMap,
 } from "../src/auth/oidc.js";
-import { provisionUser } from "../src/auth/provision.js";
+import { loginUser, provisionUser } from "../src/auth/provision.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 
@@ -52,6 +52,8 @@ const baseCfg = (over: Partial<OidcConfig> = {}): OidcConfig => ({
   scopes: "openid profile email",
   groupsClaim: "groups",
   groupRoleMap: { "reviewpilot-admins": "admin", "reviewpilot-members": "member" },
+  syncRoles: false,
+  defaultRole: "viewer",
   apiUrl: "",
   apiToken: "",
   ...over,
@@ -91,9 +93,11 @@ test("exchangeCode: verifies the ID token and resolves the identity + groups", a
 test("verifyIdToken: rejects tampered signature, wrong aud, expiry, and nonce", async () => {
   const c = new OidcClient(baseCfg(), stubFetch(""));
   const good = makeIdToken(validPayload());
-  // tamper: flip the last char of the signature
-  const tampered = good.slice(0, -1) + (good.at(-1) === "A" ? "B" : "A");
-  await assert.rejects(c.verifyIdToken(tampered, "n1", NOW), /signature/);
+  // tamper: flip the FIRST char of the signature segment (always significant;
+  // the last base64url char can carry only a couple of bits and flip to a no-op).
+  const parts = good.split(".");
+  parts[2] = (parts[2]![0] === "A" ? "B" : "A") + parts[2]!.slice(1);
+  await assert.rejects(c.verifyIdToken(parts.join("."), "n1", NOW), /signature/);
   await assert.rejects(c.verifyIdToken(makeIdToken(validPayload({ aud: "other" })), "n1", NOW), /audience/);
   await assert.rejects(
     c.verifyIdToken(makeIdToken(validPayload({ exp: Math.floor(NOW / 1000) - 10 })), "n1", NOW),
@@ -102,12 +106,30 @@ test("verifyIdToken: rejects tampered signature, wrong aud, expiry, and nonce", 
   await assert.rejects(c.verifyIdToken(makeIdToken(validPayload()), "wrong-nonce", NOW), /nonce/);
 });
 
-test("roleForGroups: highest-ranked mapped group wins; default viewer", () => {
+test("roleForGroups: highest-ranked mapped group wins; else defaultRole", () => {
   const c = new OidcClient(baseCfg());
   assert.equal(c.roleForGroups([]), "viewer");
   assert.equal(c.roleForGroups(["unmapped"]), "viewer");
   assert.equal(c.roleForGroups(["reviewpilot-members"]), "member");
   assert.equal(c.roleForGroups(["reviewpilot-members", "reviewpilot-admins"]), "admin");
+  // A configurable default applies when nothing matches.
+  const c2 = new OidcClient(baseCfg({ defaultRole: "member" }));
+  assert.equal(c2.roleForGroups([]), "member");
+  assert.equal(c2.roleForGroups(["reviewpilot-admins"]), "admin");
+});
+
+test("loginUser: syncRoles=false seeds only; true re-syncs (incl. demotion) every login", async () => {
+  const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
+  await repo.init();
+  const id = { sub: "s1", email: "e@x.com", name: "", preferredUsername: "e", groups: [] };
+  // First login creates the account seeded from groups.
+  assert.equal((await loginUser(repo, id, "viewer", false)).role, "viewer");
+  // syncRoles=false: an existing account keeps its stored role (local authoritative).
+  assert.equal((await loginUser(repo, id, "admin", false)).role, "viewer");
+  // syncRoles=true: IdP authoritative — promote…
+  assert.equal((await loginUser(repo, id, "admin", true)).role, "admin");
+  // …and demote when the group no longer maps to admin.
+  assert.equal((await loginUser(repo, id, "viewer", true)).role, "viewer");
 });
 
 test("provisionUser: create by sub, then link by email, idempotent on sub", async () => {

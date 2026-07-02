@@ -57,6 +57,8 @@ interface AuthConfig {
   sessionTtlMs: number;
   /** Built-in env-configured admin (not in the DB), or null when disabled. */
   envAdmin: EnvAdmin | null;
+  /** When true, roles are synced from the IdP → local role editing is disabled. */
+  rolesManagedExternally: boolean;
 }
 
 /** Public user view for the env admin (synthetic; no DB timestamps). */
@@ -224,12 +226,13 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/auth\/me$/,
     handler: async ({ principal, auth }, repo) => {
       const p = requirePrincipal(principal);
+      const rolesManagedExternally = auth.rolesManagedExternally;
       if (p.userId === ENV_ADMIN_ID && auth.envAdmin) {
-        return ok({ user: envAdminUser(auth.envAdmin), via: p.via });
+        return ok({ user: envAdminUser(auth.envAdmin), via: p.via, rolesManagedExternally });
       }
       const user = await repo.getUserById(p.userId);
       if (!user) throw new HttpError(401, "unauthorized");
-      return ok({ user: publicUser(user), via: p.via });
+      return ok({ user: publicUser(user), via: p.via, rolesManagedExternally });
     },
   },
   {
@@ -304,7 +307,10 @@ const ROUTES: Route[] = [
   {
     method: "PATCH",
     pattern: /^\/api\/users\/(?<id>[^/]+)\/role$/,
-    handler: async ({ params, body }, repo) => {
+    handler: async ({ params, body, auth }, repo) => {
+      if (auth.rolesManagedExternally) {
+        throw new HttpError(409, "roles are managed by the identity provider; change group membership there");
+      }
       const role = asEnum((body as Record<string, unknown>)?.role, ROLES, "role");
       const user = await repo.updateUserRole(params.id!, role);
       return ok(publicUser(user));
@@ -893,6 +899,8 @@ export interface ApiOptions {
   adminEmail?: string;
   /** Config-only PAT for the env admin (bearer auth without a DB row); enables it. */
   adminToken?: string;
+  /** When true, roles are IdP-managed → the role-change route is disabled. */
+  rolesManagedExternally?: boolean;
   /** Required for the POST /api/tasks route. */
   taskService?: TaskService;
   /** Required for the /api/schedules routes. */
@@ -907,6 +915,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
     secret,
     sessionTtlMs: options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS,
     envAdmin: envAdminFrom(options.adminEmail ?? "", options.adminToken ?? ""),
+    rolesManagedExternally: options.rolesManagedExternally ?? false,
   };
   const tasks = options.taskService;
   const schedules = options.scheduleStore;
