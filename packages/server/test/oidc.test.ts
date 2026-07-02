@@ -198,4 +198,14 @@ test("provisionUser: create by sub, then link by email, idempotent on sub", asyn
   assert.equal(linked.id, legacy.id, "matched by email");
   assert.equal(linked.externalId, "sub-legacy");
   assert.equal(linked.role, "admin", "existing role preserved");
+
+  // A different subject presenting the SAME email must NOT rebind the account.
+  await assert.rejects(
+    provisionUser(
+      repo,
+      { sub: "sub-other", email: "legacy@x.com", name: "", preferredUsername: "legacy", groups: [] },
+      "viewer",
+    ),
+    /already linked to a different identity/,
+  );
 });

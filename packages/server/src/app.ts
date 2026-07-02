@@ -11,6 +11,7 @@ import { envAdminFrom } from "./auth/env-admin.js";
 import {
   type OidcConfig,
   OidcClient,
+  OidcLoginError,
   oidcEnabled,
   pkceChallenge,
   randomUrlToken,
@@ -82,6 +83,11 @@ export function createAppHandler(deps: AppDeps) {
   // handshake requires a signing secret, so fail closed if it's missing.
   if (oidcEnabled(deps.oidc) && !secret) {
     throw new Error("OIDC is configured but SESSION_SECRET is empty; refusing to start (set SESSION_SECRET)");
+  }
+  // The OIDC redirect URI must be an absolute, stable origin — derive it from
+  // configuration, not request headers (which a proxy/attacker can spoof).
+  if (oidcEnabled(deps.oidc) && !deps.publicBaseUrl) {
+    throw new Error("OIDC is configured but PUBLIC_BASE_URL is empty; refusing to start (set PUBLIC_BASE_URL to this service's public origin)");
   }
   const oidc = oidcEnabled(deps.oidc) ? new OidcClient(deps.oidc) : null;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -161,8 +167,12 @@ export function createAppHandler(deps: AppDeps) {
         res.end();
         return;
       } catch (err) {
+        // Only surface messages we deem safe; log the rest server-side and show
+        // a generic message so internal error detail never reaches the client.
+        const safe = err instanceof OidcLoginError ? err.message : "login failed";
+        if (!(err instanceof OidcLoginError)) console.error("OIDC login error:", err);
         res.writeHead(302, {
-          Location: `${baseUrl || ""}/#oidc_error=${encodeURIComponent((err as Error).message)}`,
+          Location: `${baseUrl || ""}/#oidc_error=${encodeURIComponent(safe)}`,
           "Set-Cookie": "rp_oidc=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
         });
         res.end();

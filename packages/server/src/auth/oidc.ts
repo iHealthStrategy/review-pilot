@@ -8,6 +8,21 @@ import {
 } from "node:crypto";
 import type { UserRole } from "../domain/entities.js";
 
+/** Timeout for outbound calls to the IdP so a hung provider can't stall login. */
+const OIDC_HTTP_TIMEOUT_MS = 10_000;
+
+/**
+ * A login failure whose message is safe to surface to the end user (e.g. a
+ * validation/conflict). Unexpected errors are logged server-side and shown as a
+ * generic message instead.
+ */
+export class OidcLoginError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OidcLoginError";
+  }
+}
+
 /**
  * OpenID Connect relying-party client for delegating authentication to an
  * external identity provider (authentik). Authentication + registration live in
@@ -98,7 +113,7 @@ export class OidcClient {
   private async getDiscovery(): Promise<Discovery> {
     if (this.discovery) return this.discovery;
     const url = `${this.cfg.issuer.replace(/\/+$/, "")}/.well-known/openid-configuration`;
-    const res = await this.fetchFn(url);
+    const res = await this.fetchFn(url, { signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`OIDC discovery failed: HTTP ${res.status}`);
     this.discovery = (await res.json()) as Discovery;
     return this.discovery;
@@ -154,6 +169,7 @@ export class OidcClient {
       method: "POST",
       headers,
       body: body.toString(),
+      signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`OIDC token exchange failed: HTTP ${res.status}`);
     const tok = (await res.json()) as { id_token?: string };
@@ -215,7 +231,7 @@ export class OidcClient {
 
   private async loadJwks(): Promise<void> {
     const d = await this.getDiscovery();
-    const res = await this.fetchFn(d.jwks_uri);
+    const res = await this.fetchFn(d.jwks_uri, { signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS) });
     if (!res.ok) throw new Error(`JWKS fetch failed: HTTP ${res.status}`);
     this.jwks = (await res.json()) as { keys: Jwk[] };
   }
@@ -259,6 +275,7 @@ export class OidcClient {
       : `email=${encodeURIComponent(id.email)}`;
     const res = await this.fetchFn(`${base}/core/users/?${q}`, {
       headers: { Authorization: `Bearer ${this.cfg.apiToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) return [];
     const data = (await res.json()) as {

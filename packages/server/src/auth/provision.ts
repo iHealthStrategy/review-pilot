@@ -1,7 +1,7 @@
 import type { User, UserRole } from "../domain/entities.js";
 import type { Repository } from "../persistence/repository.js";
 import { slugify } from "../skill/review-skill.js";
-import type { OidcIdentity } from "./oidc.js";
+import { type OidcIdentity, OidcLoginError } from "./oidc.js";
 
 /** Derive a candidate public handle from an email local-part (or any seed). */
 export function handleFromEmail(seed: string): string {
@@ -47,7 +47,15 @@ export async function provisionUser(
   if (byExternal) return byExternal;
   if (identity.email) {
     const byEmail = await repo.getUserByEmail(identity.email);
-    if (byEmail) return repo.setUserExternalId(byEmail.id, identity.sub);
+    if (byEmail) {
+      // Only adopt an UNLINKED account by email. If this email already belongs
+      // to a different external subject, refuse rather than rebind it — else a
+      // recreated/changed IdP account could inherit another user's role/data.
+      if (byEmail.externalId) {
+        throw new OidcLoginError("this email is already linked to a different identity");
+      }
+      return repo.setUserExternalId(byEmail.id, identity.sub);
+    }
   }
   const seed = identity.preferredUsername || identity.email || identity.sub;
   const handle = await generateHandle(seed, repo, []);

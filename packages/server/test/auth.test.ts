@@ -15,7 +15,7 @@ const SECRET = "test-session-secret";
 
 async function withAuthApi(
   run: (base: string, repo: Repository) => Promise<void>,
-  opts: { adminEmail?: string; adminToken?: string; oidc?: OidcConfig } = {},
+  opts: { adminEmail?: string; adminToken?: string; oidc?: OidcConfig; publicBaseUrl?: string } = {},
 ): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();
@@ -204,7 +204,8 @@ test("env admin: skill token is the configured ADMIN_TOKEN", () =>
 
 // When roles are delegated to the IdP (OIDC role-sync on), local role editing is
 // disabled and /me advertises the flag so the UI can render roles read-only.
-const OIDC_SYNC: { oidc: OidcConfig } = {
+const OIDC_SYNC: { oidc: OidcConfig; publicBaseUrl: string } = {
+  publicBaseUrl: "https://test.local",
   oidc: {
     issuer: "https://idp.example/application/o/app/",
     clientId: "c",
