@@ -118,6 +118,46 @@ test("roleForGroups: highest-ranked mapped group wins; else defaultRole", () => 
   assert.equal(c2.roleForGroups(["reviewpilot-admins"]), "admin");
 });
 
+test("verifyIdToken: refetches JWKS on an unknown kid (key rotation), no wrong-key fallback", async () => {
+  const kp0 = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const kp1 = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const jwk0 = { ...(kp0.publicKey.export({ format: "jwk" }) as object), kid: "old" };
+  const jwk1 = { ...(kp1.publicKey.export({ format: "jwk" }) as object), kid: "new" };
+  const signWith = (priv: import("node:crypto").KeyObject, kid: string): string => {
+    const s = `${b64url({ alg: "RS256", typ: "JWT", kid })}.${b64url(validPayload())}`;
+    return `${s}.${cryptoSign("RSA-SHA256", Buffer.from(s), priv).toString("base64url")}`;
+  };
+  let current = [jwk0];
+  let jwksHits = 0;
+  const fetchFn = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.endsWith("/.well-known/openid-configuration")) {
+      return jsonRes({
+        issuer: ISS,
+        authorization_endpoint: `${ISS}authorize`,
+        token_endpoint: `${ISS}token`,
+        jwks_uri: `${ISS}jwks`,
+      });
+    }
+    if (u === `${ISS}jwks`) {
+      jwksHits += 1;
+      return jsonRes({ keys: current });
+    }
+    return jsonRes({}, 404);
+  }) as unknown as typeof fetch;
+
+  const c = new OidcClient(baseCfg(), fetchFn);
+  // First login with the old key → caches JWKS [old].
+  await c.verifyIdToken(signWith(kp0.privateKey, "old"), "n1", NOW);
+  // Provider rotates: cache still has [old], token carries the new kid → must
+  // refetch JWKS and verify against the new key rather than failing.
+  current = [jwk1];
+  await c.verifyIdToken(signWith(kp1.privateKey, "new"), "n1", NOW);
+  assert.ok(jwksHits >= 2, "JWKS was refetched on the unknown kid");
+  // A kid present nowhere → clear error, never a silent wrong-key fallback.
+  await assert.rejects(c.verifyIdToken(signWith(kp1.privateKey, "ghost"), "n1", NOW), /no JWKS key for kid/);
+});
+
 test("loginUser: syncRoles=false seeds only; true re-syncs (incl. demotion) every login", async () => {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
   await repo.init();

@@ -213,16 +213,27 @@ export class OidcClient {
     return payload;
   }
 
+  private async loadJwks(): Promise<void> {
+    const d = await this.getDiscovery();
+    const res = await this.fetchFn(d.jwks_uri);
+    if (!res.ok) throw new Error(`JWKS fetch failed: HTTP ${res.status}`);
+    this.jwks = (await res.json()) as { keys: Jwk[] };
+  }
+
   private async publicKeyFor(kid?: string) {
-    if (!this.jwks) {
-      const d = await this.getDiscovery();
-      const res = await this.fetchFn(d.jwks_uri);
-      if (!res.ok) throw new Error(`JWKS fetch failed: HTTP ${res.status}`);
-      this.jwks = (await res.json()) as { keys: Jwk[] };
+    const pick = (): Jwk | undefined => {
+      const keys = this.jwks?.keys ?? [];
+      return kid ? keys.find((k) => k.kid === kid) : keys[0];
+    };
+    if (!this.jwks) await this.loadJwks();
+    let jwk = pick();
+    // Key rotation: a kid we don't have cached → refetch the JWKS once and retry.
+    // Never silently fall back to another key when a specific kid was requested.
+    if (!jwk && kid) {
+      await this.loadJwks();
+      jwk = pick();
     }
-    const keys = this.jwks.keys ?? [];
-    const jwk = (kid ? keys.find((k) => k.kid === kid) : keys[0]) ?? keys[0];
-    if (!jwk) throw new Error("no usable JWKS key");
+    if (!jwk) throw new Error(kid ? `no JWKS key for kid '${kid}'` : "no usable JWKS key");
     return createPublicKey(
       { key: jwk, format: "jwk" } as unknown as Parameters<typeof createPublicKey>[0],
     );
