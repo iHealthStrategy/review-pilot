@@ -172,21 +172,60 @@ export class OidcClient {
       signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`OIDC token exchange failed: HTTP ${res.status}`);
-    const tok = (await res.json()) as { id_token?: string };
+    const tok = (await res.json()) as { id_token?: string; access_token?: string };
     if (!tok.id_token) throw new Error("OIDC token response missing id_token");
-    const claims = await this.verifyIdToken(tok.id_token, opts.nonce, opts.now);
-    const identity = this.claimsToIdentity(claims);
-    console.log(`[oidc] id_token claims: sub=${identity.sub} groups(claim)=${JSON.stringify(identity.groups)}`);
-    // The `groups` claim is the per-request source of truth, but authentik's
-    // default profile mapping historically omits it; fall back to the REST API.
-    if (!identity.groups.length && this.cfg.apiUrl && this.cfg.apiToken) {
-      console.log(`[oidc] groups claim empty for sub=${identity.sub}; trying REST API fallback`);
-      identity.groups = await this.fetchGroupsViaApi(identity).catch((e) => {
-        console.error("[oidc] REST group fallback threw:", (e as Error).message);
-        return [];
+    let claims = await this.verifyIdToken(tok.id_token, opts.nonce, opts.now);
+    console.log(`[oidc] id_token claim keys=${JSON.stringify(Object.keys(claims))}`);
+    // authentik commonly returns profile/email/groups only from the userinfo
+    // endpoint (not the id_token); enrich from userinfo when we have a token.
+    if (tok.access_token) {
+      const info = await this.fetchUserinfo(tok.access_token).catch((e) => {
+        console.error("[oidc] userinfo fetch failed:", (e as Error).message);
+        return null;
       });
+      if (info) {
+        console.log(`[oidc] userinfo keys=${JSON.stringify(Object.keys(info))}`);
+        claims = { ...claims, ...info };
+      }
+    } else {
+      console.log("[oidc] token response had no access_token; cannot query userinfo");
+    }
+    const identity = this.claimsToIdentity(claims);
+    console.log(
+      `[oidc] resolved claims sub=${identity.sub} email=${identity.email || "(none)"}` +
+        ` preferred_username=${identity.preferredUsername || "(none)"} groups=${JSON.stringify(identity.groups)}`,
+    );
+    // REST fallback for groups, only when we have an identifier to query by.
+    if (!identity.groups.length && this.cfg.apiUrl && this.cfg.apiToken) {
+      if (!identity.preferredUsername && !identity.email) {
+        console.error("[oidc] REST group fallback skipped: no username/email to query by");
+      } else {
+        console.log(`[oidc] groups empty for sub=${identity.sub}; trying REST API fallback`);
+        identity.groups = await this.fetchGroupsViaApi(identity).catch((e) => {
+          console.error("[oidc] REST group fallback threw:", (e as Error).message);
+          return [];
+        });
+      }
     }
     return identity;
+  }
+
+  /** Fetch the OIDC userinfo claims with the access token (or null on failure). */
+  private async fetchUserinfo(accessToken: string): Promise<Record<string, unknown> | null> {
+    const d = await this.getDiscovery();
+    if (!d.userinfo_endpoint) {
+      console.error("[oidc] discovery has no userinfo_endpoint");
+      return null;
+    }
+    const res = await this.fetchFn(d.userinfo_endpoint, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`[oidc] userinfo -> HTTP ${res.status}`);
+      return null;
+    }
+    return (await res.json()) as Record<string, unknown>;
   }
 
   /** Verify an ID token's signature + standard claims and return its payload. */

@@ -90,6 +90,41 @@ test("exchangeCode: verifies the ID token and resolves the identity + groups", a
   assert.deepEqual(id.groups, ["reviewpilot-members"]);
 });
 
+test("exchangeCode: enriches a sparse id_token from the userinfo endpoint", async () => {
+  // id_token carries only sub; email/preferred_username/groups come from userinfo.
+  const idToken = makeIdToken({
+    iss: ISS,
+    aud: "client-1",
+    exp: Math.floor(NOW / 1000) + 300,
+    sub: "u-sparse",
+    nonce: "n1",
+  });
+  const fetchFn = (async (url: string | URL) => {
+    const u = String(url);
+    if (u.endsWith("/.well-known/openid-configuration")) {
+      return jsonRes({
+        issuer: ISS,
+        authorization_endpoint: `${ISS}authorize`,
+        token_endpoint: `${ISS}token`,
+        jwks_uri: `${ISS}jwks`,
+        userinfo_endpoint: `${ISS}userinfo`,
+      });
+    }
+    if (u === `${ISS}jwks`) return jsonRes({ keys: [jwk] });
+    if (u === `${ISS}token`) return jsonRes({ id_token: idToken, access_token: "at-123" });
+    if (u === `${ISS}userinfo`) {
+      return jsonRes({ sub: "u-sparse", email: "Sparse@Ex.com", preferred_username: "sparse", groups: ["reviewpilot-admins"] });
+    }
+    return jsonRes({}, 404);
+  }) as unknown as typeof fetch;
+  const c = new OidcClient(baseCfg(), fetchFn);
+  const id = await c.exchangeCode({ code: "x", redirectUri: "r", codeVerifier: "v", nonce: "n1", now: NOW });
+  assert.equal(id.email, "sparse@ex.com");
+  assert.equal(id.preferredUsername, "sparse");
+  assert.deepEqual(id.groups, ["reviewpilot-admins"]);
+  assert.equal(c.roleForGroups(id.groups), "admin");
+});
+
 test("verifyIdToken: rejects tampered signature, wrong aud, expiry, and nonce", async () => {
   const c = new OidcClient(baseCfg(), stubFetch(""));
   const good = makeIdToken(validPayload());
