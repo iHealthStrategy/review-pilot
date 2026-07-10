@@ -209,3 +209,18 @@ test("provisionUser: create by sub, then link by email, idempotent on sub", asyn
     /already linked to a different identity/,
   );
 });
+
+test("provisionUser: emailless IdP accounts each get a distinct (placeholder) record", async () => {
+  const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });
+  await repo.init();
+  const mk = (sub: string) => ({ sub, email: "", name: "", preferredUsername: sub, groups: [] });
+  const a = await provisionUser(repo, mk("hex-a"), "viewer");
+  const b = await provisionUser(repo, mk("hex-b"), "viewer");
+  // No email → keyed on sub; distinct users, distinct non-empty placeholder emails.
+  assert.notEqual(a.id, b.id);
+  assert.equal(a.externalId, "hex-a");
+  assert.equal(b.externalId, "hex-b");
+  assert.ok(a.email && b.email && a.email !== b.email, "distinct placeholder emails");
+  // Idempotent on the same subject (no duplicate record on re-login).
+  assert.equal((await provisionUser(repo, mk("hex-a"), "member")).id, a.id);
+});

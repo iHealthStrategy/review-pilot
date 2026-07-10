@@ -9,6 +9,17 @@ export function handleFromEmail(seed: string): string {
 }
 
 /**
+ * A unique, non-routable placeholder email for an IdP account that has no email.
+ * The `users.email` column is NOT NULL + UNIQUE, so without this every emailless
+ * user would collapse onto the same empty string and only the first could be
+ * created. Keyed on the stable subject so it's deterministic per identity.
+ */
+export function placeholderEmail(sub: string): string {
+  const local = (sub || "user").replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 64) || "user";
+  return `no-email+${local}@users.noreply.local`;
+}
+
+/**
  * Generate a unique handle from a seed, appending `-N` on collision against
  * existing DB users or the supplied reserved set (e.g. the env admin's handle).
  */
@@ -60,7 +71,9 @@ export async function provisionUser(
   const seed = identity.preferredUsername || identity.email || identity.sub;
   const handle = await generateHandle(seed, repo, []);
   return repo.createUser({
-    email: identity.email,
+    // Emailless IdP accounts get a unique placeholder so they don't collide on
+    // the NOT NULL/UNIQUE email column (identity is keyed on `sub`, not email).
+    email: identity.email || placeholderEmail(identity.sub),
     handle,
     externalId: identity.sub,
     role: seedRole,
