@@ -151,12 +151,14 @@ export function createAppHandler(deps: AppDeps) {
           nonce: saved.nonce,
         });
         // Create/link the account; when role-sync is on, the IdP is authoritative.
-        const user = await loginUser(
-          deps.repo,
-          identity,
-          oidc.roleForGroups(identity.groups),
-          deps.oidc!.syncRoles,
+        const groupRole = oidc.roleForGroups(identity.groups);
+        console.log(
+          `[oidc] login sub=${identity.sub} preferred_username=${identity.preferredUsername || "(none)"}` +
+            ` email=${identity.email || "(none)"} groups=${JSON.stringify(identity.groups)}` +
+            ` mappedRole=${groupRole} syncRoles=${deps.oidc!.syncRoles}`,
         );
+        const user = await loginUser(deps.repo, identity, groupRole, deps.oidc!.syncRoles);
+        console.log(`[oidc] resolved user id=${user.id} handle=${user.handle} finalRole=${user.role}`);
         const token = signSession({ sub: user.id, role: user.role }, secret, sessionTtlMs);
         // Deliver the session token to the SPA via the URL fragment (kept out of
         // server logs / Referer); the app stores it and uses Authorization: Bearer.

@@ -176,10 +176,15 @@ export class OidcClient {
     if (!tok.id_token) throw new Error("OIDC token response missing id_token");
     const claims = await this.verifyIdToken(tok.id_token, opts.nonce, opts.now);
     const identity = this.claimsToIdentity(claims);
+    console.log(`[oidc] id_token claims: sub=${identity.sub} groups(claim)=${JSON.stringify(identity.groups)}`);
     // The `groups` claim is the per-request source of truth, but authentik's
     // default profile mapping historically omits it; fall back to the REST API.
     if (!identity.groups.length && this.cfg.apiUrl && this.cfg.apiToken) {
-      identity.groups = await this.fetchGroupsViaApi(identity).catch(() => []);
+      console.log(`[oidc] groups claim empty for sub=${identity.sub}; trying REST API fallback`);
+      identity.groups = await this.fetchGroupsViaApi(identity).catch((e) => {
+        console.error("[oidc] REST group fallback threw:", (e as Error).message);
+        return [];
+      });
     }
     return identity;
   }
@@ -273,16 +278,23 @@ export class OidcClient {
     const q = id.preferredUsername
       ? `username=${encodeURIComponent(id.preferredUsername)}`
       : `email=${encodeURIComponent(id.email)}`;
-    const res = await this.fetchFn(`${base}/core/users/?${q}`, {
+    // include_groups=true so the User serializer populates groups_obj (names).
+    const url = `${base}/core/users/?${q}&include_groups=true`;
+    const res = await this.fetchFn(url, {
       headers: { Authorization: `Bearer ${this.cfg.apiToken}`, Accept: "application/json" },
       signal: AbortSignal.timeout(OIDC_HTTP_TIMEOUT_MS),
     });
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.error(`[oidc] REST users query (${q}) -> HTTP ${res.status}`);
+      return [];
+    }
     const data = (await res.json()) as {
       results?: Array<{ groups_obj?: Array<{ name?: string }> }>;
     };
-    const u = data.results?.[0];
-    return (u?.groups_obj ?? []).map((g) => g.name ?? "").filter(Boolean);
+    const matched = data.results?.length ?? 0;
+    const names = (data.results?.[0]?.groups_obj ?? []).map((g) => g.name ?? "").filter(Boolean);
+    console.log(`[oidc] REST fallback query=(${q}) matched=${matched} groups=${JSON.stringify(names)}`);
+    return names;
   }
 
   /** Map authentik groups to a local role (highest rank wins; else default). */
