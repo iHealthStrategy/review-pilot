@@ -364,6 +364,7 @@ export class MemoryRepository implements Repository {
       id: this.idGen("usr"),
       email: input.email,
       handle: input.handle,
+      name: input.name,
       externalId: input.externalId,
       role: input.role,
       createdAt: now,
@@ -412,6 +413,15 @@ export class MemoryRepository implements Repository {
     const user = this.data.users[id];
     if (!user) throw new EntityNotFoundError("User", id);
     const next: User = { ...user, externalId, updatedAt: this.clock() };
+    this.data.users[id] = next;
+    await this.persist();
+    return next;
+  }
+
+  async setUserName(id: string, name: string): Promise<User> {
+    const user = this.data.users[id];
+    if (!user) throw new EntityNotFoundError("User", id);
+    const next: User = { ...user, name, updatedAt: this.clock() };
     this.data.users[id] = next;
     await this.persist();
     return next;

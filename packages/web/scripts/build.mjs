@@ -502,7 +502,9 @@ const html = `<!doctype html>
         const bar = document.getElementById("userbar");
         if (me) {
           bar.style.display = "";
-          document.getElementById("user-email").textContent = me.email;
+          // Prefer the IdP display name; fall back to a real email, else the handle.
+          const realEmail = me.email && !me.email.endsWith("@users.noreply.local") ? me.email : "";
+          document.getElementById("user-email").textContent = me.name || realEmail || ("@" + me.handle);
           document.getElementById("user-handle").textContent = me.handle ? "@" + me.handle : "";
           const rb = document.getElementById("user-role");
           rb.textContent = ROLE_LABEL[me.role] || me.role;
@@ -1105,14 +1107,16 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         const roleCell = (u) => rolesManagedExt
           ? \`<td><span class="status role-\${esc(u.role)}">\${esc(ROLE_LABEL[u.role] || u.role)}</span></td>\`
           : \`<td><select data-role-for="\${esc(u.id)}">\${roleOpts(u.role)}</select></td>\`;
+        // Hide the synthetic placeholder email for accounts the IdP gave no email.
+        const emailOf = (u) => (u.email && !u.email.endsWith("@users.noreply.local") ? u.email : "—");
         const rows = users.map((u) =>
-          \`<tr><td>\${esc(u.email)}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
+          \`<tr><td>\${esc(u.name || "—")}</td><td class="muted">\${esc(emailOf(u))}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
         ).join("");
         const note = rolesManagedExt
           ? '<p class="muted">角色由身份提供方(authentik)按用户组统一管理,此处只读。请在 authentik 中调整用户所属的组。</p>'
           : "";
         document.querySelector("#users").innerHTML =
-          note + \`<table><thead><tr><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
+          note + \`<table><thead><tr><th>名称</th><th>邮箱</th><th>角色</th><th>创建时间</th></tr></thead><tbody>\${rows}</tbody></table>\`;
         wrapTables(document.querySelector("#users"));
         document.querySelectorAll('#users [data-role-for]').forEach((sel) => {
           sel.onchange = async () => {

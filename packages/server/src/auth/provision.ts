@@ -75,6 +75,7 @@ export async function provisionUser(
     // the NOT NULL/UNIQUE email column (identity is keyed on `sub`, not email).
     email: identity.email || placeholderEmail(identity.sub),
     handle,
+    name: identity.name,
     externalId: identity.sub,
     role: seedRole,
   });
@@ -93,9 +94,13 @@ export async function loginUser(
   groupRole: UserRole,
   syncRoles: boolean,
 ): Promise<User> {
-  const user = await provisionUser(repo, identity, groupRole);
+  let user = await provisionUser(repo, identity, groupRole);
   if (syncRoles && user.role !== groupRole) {
-    return repo.updateUserRole(user.id, groupRole);
+    user = await repo.updateUserRole(user.id, groupRole);
+  }
+  // Keep the display name current with the IdP (only when it provides one).
+  if (identity.name && identity.name !== user.name) {
+    user = await repo.setUserName(user.id, identity.name);
   }
   return user;
 }

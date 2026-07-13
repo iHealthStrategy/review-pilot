@@ -124,6 +124,8 @@ export interface User {
   readonly email: string;
   /** Public, unique handle (e.g. for community discovery `…/u/<handle>`). */
   readonly handle: string;
+  /** Human display name from the IdP (OIDC `name` claim); "" if unknown. */
+  readonly name: string;
   /** External IdP subject (OIDC `sub`). Stable identity key; "" if unlinked. */
   readonly externalId: string;
   readonly role: UserRole;

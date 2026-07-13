@@ -158,6 +158,7 @@ function toUser(d: MongoDoc): User {
     id: d.id as string,
     email: d.email as string,
     handle: (d.handle as string) ?? "",
+    name: (d.name as string) ?? "",
     externalId: (d.externalId as string) ?? "",
     role: d.role as UserRole,
     createdAt: d.createdAt as string,
@@ -575,6 +576,7 @@ export class MongoRepository implements Repository {
       id: this.idGen("usr"),
       email: input.email,
       handle: input.handle,
+      name: input.name,
       externalId: input.externalId,
       role: input.role,
       createdAt: now,
@@ -632,6 +634,14 @@ export class MongoRepository implements Repository {
     const updatedAt = this.clock();
     await this.col(COLLECTIONS.users).updateOne({ id }, { $set: { externalId, updatedAt } });
     return { ...user, externalId, updatedAt };
+  }
+
+  async setUserName(id: string, name: string): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.col(COLLECTIONS.users).updateOne({ id }, { $set: { name, updatedAt } });
+    return { ...user, name, updatedAt };
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {

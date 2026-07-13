@@ -224,7 +224,7 @@ test("provisionUser: create by sub, then link by email, idempotent on sub", asyn
   assert.equal(u1again.role, "member", "local role is authoritative; not overwritten on login");
 
   // A pre-existing email-only account gets linked to its subject on first login.
-  const legacy = await repo.createUser({ email: "legacy@x.com", handle: "legacy", externalId: "", role: "admin" });
+  const legacy = await repo.createUser({ email: "legacy@x.com", handle: "legacy", name: "", externalId: "", role: "admin" });
   const linked = await provisionUser(
     repo,
     { sub: "sub-legacy", email: "legacy@x.com", name: "", preferredUsername: "legacy", groups: [] },

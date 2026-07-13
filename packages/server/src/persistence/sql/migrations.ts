@@ -202,6 +202,11 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_users_external_id ON users(external_id);
     `,
   },
+  {
+    // Human display name from the IdP (OIDC `name` claim), for the UI.
+    id: "0010_user_name",
+    up: () => `ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT '';`,
+  },
 ];
 
 /**

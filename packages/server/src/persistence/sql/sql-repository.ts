@@ -198,6 +198,7 @@ interface UserRow {
   id: string;
   email: string;
   handle: string;
+  name: string | null;
   external_id: string | null;
   role: string;
   created_at: string;
@@ -208,6 +209,7 @@ function toUser(r: UserRow): User {
     id: r.id,
     email: r.email,
     handle: r.handle ?? "",
+    name: r.name ?? "",
     externalId: r.external_id ?? "",
     role: r.role as UserRole,
     createdAt: r.created_at,
@@ -767,6 +769,7 @@ export class SqlRepository implements Repository {
       id: this.idGen("usr"),
       email: input.email,
       handle: input.handle,
+      name: input.name,
       externalId: input.externalId,
       role: input.role,
       createdAt: now,
@@ -774,9 +777,9 @@ export class SqlRepository implements Repository {
     };
     // `password_hash` is a retired NOT NULL column kept for back-compat; write "".
     await this.client.run(
-      `INSERT INTO users (id, email, handle, password_hash, external_id, role, created_at, updated_at)
-       VALUES (${placeholderList(this.client.dialect, 8)})`,
-      [user.id, user.email, user.handle, "", user.externalId, user.role, user.createdAt, user.updatedAt],
+      `INSERT INTO users (id, email, handle, password_hash, name, external_id, role, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 9)})`,
+      [user.id, user.email, user.handle, "", user.name, user.externalId, user.role, user.createdAt, user.updatedAt],
     );
     return user;
   }
@@ -848,6 +851,17 @@ export class SqlRepository implements Repository {
       [externalId, updatedAt, id],
     );
     return { ...user, externalId, updatedAt };
+  }
+
+  async setUserName(id: string, name: string): Promise<User> {
+    const user = await this.getUserById(id);
+    if (!user) throw new EntityNotFoundError("User", id);
+    const updatedAt = this.clock();
+    await this.client.run(
+      `UPDATE users SET name = ${this.ph(1)}, updated_at = ${this.ph(2)} WHERE id = ${this.ph(3)}`,
+      [name, updatedAt, id],
+    );
+    return { ...user, name, updatedAt };
   }
 
   async createApiToken(input: CreateApiTokenInput): Promise<ApiToken> {

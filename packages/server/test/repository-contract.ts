@@ -278,10 +278,11 @@ export function runRepositoryContract(
   test(`${name}: users — create, fetch by id/email/external, count, role update, link`, async () => {
     const repo = await makeRepo();
     assert.equal(await repo.countUsers(), 0);
-    const u = await repo.createUser({ email: "a@x.com", handle: "alice", externalId: "sub-1", role: "admin" });
+    const u = await repo.createUser({ email: "a@x.com", handle: "alice", name: "Alice A", externalId: "sub-1", role: "admin" });
     assert.equal(u.role, "admin");
     assert.equal(u.handle, "alice");
     assert.equal(u.externalId, "sub-1");
+    assert.equal(u.name, "Alice A");
     assert.equal((await repo.getUserById(u.id))?.email, "a@x.com");
     assert.equal((await repo.getUserByEmail("a@x.com"))?.id, u.id);
     assert.equal((await repo.getUserByHandle("alice"))?.id, u.id);
@@ -295,16 +296,18 @@ export function runRepositoryContract(
     assert.equal(upgraded.role, "member");
     assert.equal((await repo.getUserById(u.id))?.role, "member");
     // Link an unlinked account to an external subject (first OIDC login path).
-    const linked = await repo.createUser({ email: "b@x.com", handle: "bob", externalId: "", role: "viewer" });
+    const linked = await repo.createUser({ email: "b@x.com", handle: "bob", name: "", externalId: "", role: "viewer" });
     const after = await repo.setUserExternalId(linked.id, "sub-2");
     assert.equal(after.externalId, "sub-2");
+    const renamed = await repo.setUserName(linked.id, "Bob B");
+    assert.equal(renamed.name, "Bob B");
     assert.equal((await repo.getUserByExternalId("sub-2"))?.id, linked.id);
     await repo.close();
   });
 
   test(`${name}: api tokens — create, lookup by hash, list, owner-scoped revoke`, async () => {
     const repo = await makeRepo();
-    const u = await repo.createUser({ email: "t@x.com", handle: "tom", externalId: "sub-tom", role: "member" });
+    const u = await repo.createUser({ email: "t@x.com", handle: "tom", name: "Tom", externalId: "sub-tom", role: "member" });
     const tok = await repo.createApiToken({
       userId: u.id,
       name: "ci",

@@ -13,12 +13,13 @@ export async function makeSession(
   repo: Repository,
   secret: string,
   role: UserRole,
-  opts: { email?: string; handle?: string; externalId?: string } = {},
+  opts: { email?: string; handle?: string; name?: string; externalId?: string } = {},
 ): Promise<{ user: User; token: string }> {
   seq += 1;
   const user = await repo.createUser({
     email: opts.email ?? `u${seq}@x.com`,
     handle: opts.handle ?? `u${seq}`,
+    name: opts.name ?? `User ${seq}`,
     externalId: opts.externalId ?? `ext-${seq}`,
     role,
   });

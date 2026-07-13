@@ -89,6 +89,8 @@ export interface CreateUserInput {
   email: string;
   /** Unique public handle (caller ensures uniqueness). */
   handle: string;
+  /** Human display name from the IdP; "" when unknown. */
+  name: string;
   /** External IdP subject (OIDC `sub`); "" when not yet linked. */
   externalId: string;
   role: UserRole;
@@ -251,6 +253,8 @@ export interface Repository {
   updateUserRole(id: string, role: UserRole): Promise<User>;
   /** Link an existing account to an external IdP subject (first OIDC login). */
   setUserExternalId(id: string, externalId: string): Promise<User>;
+  /** Refresh the display name from the IdP (kept current on each login). */
+  setUserName(id: string, name: string): Promise<User>;
 
   createApiToken(input: CreateApiTokenInput): Promise<ApiToken>;
   listApiTokensByUser(userId: string): Promise<ApiToken[]>;
