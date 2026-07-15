@@ -1,0 +1,89 @@
+name: "ReviewPilot Attestation Verify"
+description: >-
+  Offline-verify the ReviewPilot review attestation on a pull request's head
+  commit. Confirms a valid, unexpired, project-scoped, passing review token that
+  covers the exact code being merged. No network — verification uses a
+  pre-configured public key, so CI never calls the ReviewPilot server.
+inputs:
+  public-key:
+    description: "Ed25519 PUBLIC key (PEM) that verifies the attestation. Store it in a secret/var. Required unless public-keys is set."
+    required: false
+    default: ""
+  public-keys:
+    description: 'Optional JSON map of kid→PEM for key rotation, e.g. {"rp-2026":"-----BEGIN PUBLIC KEY-----\n..."}. Takes precedence over public-key.'
+    required: false
+    default: ""
+  project:
+    description: "Expected normalized project key (e.g. github.com/acme/app). Defaults to github.com/<owner>/<repo>."
+    required: false
+    default: ""
+  require:
+    description: "When true (default), a missing attestation fails the job. Set false for an advisory/soft rollout."
+    required: false
+    default: "true"
+  commit:
+    description: "Commit sha to verify. Defaults to the PR head sha, then github.sha."
+    required: false
+    default: ""
+outputs:
+  verdict:
+    description: "pass | fail | skipped"
+    value: ${{ steps.verify.outputs.verdict }}
+  handle:
+    description: "The reviewing user's handle, when verified."
+    value: ${{ steps.verify.outputs.handle }}
+  reason:
+    description: "Failure reason code, when it failed."
+    value: ${{ steps.verify.outputs.reason }}
+runs:
+  using: "composite"
+  steps:
+    - name: Verify ReviewPilot attestation
+      id: verify
+      shell: bash
+      # Secrets/PEMs are passed via env (never interpolated into the script body)
+      # so a crafted value can't inject shell.
+      env:
+        RP_PUBLIC_KEY: ${{ inputs.public-key }}
+        RP_PUBLIC_KEYS: ${{ inputs.public-keys }}
+        RP_REQUIRE: ${{ inputs.require }}
+        RP_INPUT_PROJECT: ${{ inputs.project }}
+        RP_INPUT_COMMIT: ${{ inputs.commit }}
+        RP_REPO: ${{ github.repository }}
+        RP_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        RP_GITHUB_SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        echo "::group::ReviewPilot attestation"
+
+        SHA="${RP_INPUT_COMMIT:-}"
+        [ -n "$SHA" ] || SHA="${RP_PR_HEAD_SHA:-}"
+        [ -n "$SHA" ] || SHA="${RP_GITHUB_SHA:-}"
+        if [ -z "$SHA" ]; then
+          echo "::error::could not determine which commit to verify"
+          exit 1
+        fi
+
+        # The head commit's TREE (code snapshot) the token must bind to. Empty
+        # means the commit isn't in the local history — the caller must
+        # checkout with fetch-depth: 0.
+        RP_TREE_SHA="$(git rev-parse "${SHA}^{tree}" 2>/dev/null || true)"
+        if [ -z "$RP_TREE_SHA" ]; then
+          echo "::error::cannot resolve the tree for ${SHA} — check out the code with 'actions/checkout@v4' and 'fetch-depth: 0'"
+          exit 1
+        fi
+
+        # The signed token, read from the commit's Reviewed-Token trailer.
+        RP_TOKEN="$(git log -1 --format='%(trailers:key=Reviewed-Token,valueonly)' "$SHA" 2>/dev/null | tr -d '\r' | head -n1 || true)"
+
+        # Expected project key: explicit input, else github.com/<owner>/<repo>.
+        if [ -n "${RP_INPUT_PROJECT:-}" ]; then
+          RP_EXPECTED_PROJECT="$RP_INPUT_PROJECT"
+        else
+          RP_EXPECTED_PROJECT="github.com/${RP_REPO}"
+        fi
+        RP_EXPECTED_PROJECT="$(printf '%s' "$RP_EXPECTED_PROJECT" | tr '[:upper:]' '[:lower:]')"
+
+        export RP_TOKEN RP_TREE_SHA RP_EXPECTED_PROJECT
+        node "$GITHUB_ACTION_PATH/verify.mjs"
+        echo "::endgroup::"

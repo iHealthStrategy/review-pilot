@@ -68,6 +68,11 @@ const SKILL_ALLOWED_TOOLS =
   "Bash(echo *) Bash(cd *) Bash(find *) Bash(grep *) Bash(ls *) Bash(rg *) " +
   "Bash(git remote get-url *) Bash(git diff *) Bash(git log *) Bash(git show *) " +
   "Bash(git ls-files *) Bash(git merge-base *) Bash(git rev-parse *) Bash(git status *) " +
+  // Write path for the one-shot "ship it" pipeline (branch → commit → fix →
+  // attest → push → PR). `git commit` covers --amend (writes the signed
+  // attestation trailer; only the message changes, the bound tree stays intact).
+  "Bash(git switch *) Bash(git checkout *) Bash(git add *) Bash(git commit *) " +
+  "Bash(git push *) Bash(gh pr create *) Bash(gh pr view *) Bash(gh auth status*) " +
   "Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
   "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
 
@@ -161,8 +166,10 @@ description: >-
   auto-grows your own project rules from each review. Use when the user asks to
   review / 评审 / 审查 their local changes, a working-tree diff, a branch diff, or a
   checked-out pull request — or asks someone (by handle) to review ("让 X 帮我 review").
-  Reports only must-fix (major/critical) issues by default; threshold adjustable in
-  natural language ("也看次要的" / "显示全部").
+  Can also take over the FULL submit flow (review → auto-fix → attest → push → open
+  the PR) when asked to 提交 PR / 一键提 PR / ship a PR. Reports only must-fix
+  (major/critical) issues by default; threshold adjustable in natural language
+  ("也看次要的" / "显示全部").
 allowed-tools: ${SKILL_ALLOWED_TOOLS}
 ---
 
@@ -348,6 +355,125 @@ if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
     >/dev/null 2>&1 || true
 fi
 \`\`\`
+
+## 11. Commit attestation (提交前门禁凭证 — use when the team enforces the gate)
+Do this ONLY when the user is preparing to push and the team enforces the
+"reviewed-before-merge" gate, or the user asks for it explicitly (生成提交凭证 /
+提交前 review / attest / 准备推送). It produces a server-SIGNED token that GitHub
+verifies before allowing a merge. Three rules govern it:
+- **It binds the HEAD commit's _tree_ (code snapshot)** — so the change MUST
+  already be committed. Review the **committed** state (scope \`branch\`, or the
+  HEAD commit), NOT uncommitted working-tree edits: anything not committed is
+  not covered by the token.
+- **The SERVER decides pass/fail** under the team's policy; you only send finding
+  COUNTS (count ALL severities, regardless of the display threshold). You cannot
+  and must not try to influence the verdict.
+- **Only amend on \`pass\`.** If the server returns \`verdict":"fail"\`, do NOT
+  amend — the policy blocks these findings; tell the user what to fix and re-run.
+
+### Steps
+1. Confirm the change is committed, then read the tree + base (two SIMPLE
+   commands — keep them auto-approvable):
+
+\`\`\`sh
+git rev-parse HEAD^{tree}
+git merge-base main HEAD
+\`\`\`
+Keep \`TREE\` = the first output; \`BASE_SHA\` = the second (leave empty if it fails).
+
+2. Request the attestation (send ONLY counts — never code):
+
+\`\`\`sh
+BASE=${urlExpr}
+TOKEN=${tokenExpr}
+if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
+  # CRIT/MAJ/MIN/INFO = counts you identified at each severity (0 if none).
+  curl -fsS -X POST "$BASE/api/attest" \\
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
+    -d "{\\"project\\":\\"$PROJECT\\",\\"treeSha\\":\\"$TREE\\",\\"baseSha\\":\\"$BASE_SHA\\",\\"scope\\":\\"branch\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO}"
+fi
+\`\`\`
+The response is \`{ token, verdict, policy, blockSeverity, expiresAt }\`.
+
+3. Gate on \`verdict\`:
+- \`"fail"\` → the policy blocks these findings. List the remaining must-fix issues
+  and STOP (no amend). After the user fixes them and you re-review, start again
+  from step 1 (the tree has changed, so a new attestation is required).
+- \`"pass"\` → write the token into the HEAD commit as a trailer, then finish:
+
+\`\`\`sh
+git commit --amend --no-edit --trailer "Reviewed-Token: $ATT_TOKEN"
+\`\`\`
+Set \`ATT_TOKEN\` to the response's \`token\` field. The amend rewrites the HEAD
+commit sha but leaves the tree unchanged, so the token stays valid. Then tell the
+user to \`git push\` (use \`--force-with-lease\` if the commit was already pushed).
+
+Remind the user: **any later edit to the code changes the tree and invalidates
+the attestation** — they must re-run this step before pushing again.
+
+## 12. One-shot "ship it" — review → fix → attest → push → PR
+Run this ONLY when the user explicitly asks to submit/ship a pull request
+(提交 PR / 一键提 PR / 帮我提个 PR / review 完直接提 PR / ship it). You then drive the
+WHOLE pipeline end-to-end. Because pushing and opening a PR are outward-facing and
+hard to undo, **aggregate everything and confirm ONCE before the push**, then run
+the rest automatically. If the user said "全自动 / 别问 / no confirm", skip the
+confirmation.
+
+### Order matters (why this sequence)
+Fixes change the code → they change the **tree**. The attestation binds the tree.
+So you must apply ALL fixes FIRST, let the code settle, and attest LAST — the
+\`Reviewed-Token\` trailer only changes the commit message, not the tree, so the
+token keeps covering exactly what ships. Never attest before fixing.
+
+### Pipeline
+1. **Branch — never commit to the default branch.** Get the current branch:
+   \`\`\`sh
+   git rev-parse --abbrev-ref HEAD
+   \`\`\`
+   If it is \`main\` or \`master\`, create a feature branch:
+   \`\`\`sh
+   git switch -c <branch>
+   \`\`\`
+   Name it FLAT and parse-safe: ASCII letters, digits, \`-\`/\`_\` only — no
+   slashes, spaces, or \`feat/\`-style prefixes (e.g. \`fix-auth-null-check\`).
+   Derive the name from the change.
+2. **Commit the change** so there is a committed state to review:
+   \`\`\`sh
+   git add -A
+   git commit -m "<concise message>"
+   \`\`\`
+3. **Review** the committed change — do steps 1–7 above with scope \`branch\`.
+4. **Fix loop.** If there are must-fix findings, run the one-shot fix (step 8) for
+   the mechanical ones, then fold them into the commit:
+   \`\`\`sh
+   git add -A
+   git commit --amend --no-edit
+   \`\`\`
+   Then **re-review the amended code**. Repeat until either no must-fix findings
+   remain, OR the only ones left need human judgement — in that case list them and
+   STOP (do not open a PR that the gate will just block).
+5. **Attest the FINAL code** — do step 11 now that the tree is stable. On
+   \`verdict: "pass"\`, it amends the \`Reviewed-Token\` trailer in. On
+   \`verdict: "fail"\`, STOP and report; the merge gate would block it.
+6. **Show the plan & confirm once** (skip if pre-authorized): branch name, final
+   commit message, files changed, a review summary (counts + what was auto-fixed),
+   and the PR title/body you will use. Ask a single yes/no.
+7. **Push** the branch:
+   \`\`\`sh
+   git push -u origin <branch>
+   \`\`\`
+   Add \`--force-with-lease\` if the branch was pushed before and you amended.
+8. **Open the PR** (requires \`gh\` installed + authenticated — check
+   \`gh auth status\`; if not available, stop after the push and tell the user to
+   open the PR manually):
+   \`\`\`sh
+   gh pr create --base main --title "<title>" --body "<body>"
+   \`\`\`
+   Put the review summary in the body plus a line like
+   \`🤖 reviewed locally via ReviewPilot (attested)\`. Show the returned PR URL.
+
+Keep the whole run in this session; report each stage briefly (branch → commit →
+review → fixes → attest verdict → push → PR URL) so the user can follow along.
 `;
 }
 

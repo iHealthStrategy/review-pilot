@@ -26,9 +26,20 @@ export function roleAtLeast(role: UserRole, min: UserRole): boolean {
  */
 export function requiredRole(method: string, pathname: string): UserRole | "public" {
   if (pathname === "/api/health") return "public";
+  // The attestation PUBLIC key: unauthenticated so GitHub Actions can verify
+  // tokens offline without ever calling an authenticated endpoint here.
+  if (pathname === "/api/attest/pubkey") return "public";
   // Public ruleset discovery by handle — the local orchestrator skill fetches
   // "let X review my changes" without credentials (only public rulesets returned).
   if (pathname.startsWith("/api/u/")) return "public";
+  // Issuing an attestation authenticates as the reviewing user (any role): the
+  // server, not the caller, decides the verdict, so viewer is enough.
+  if (pathname === "/api/attest") return "viewer";
+  // The enforcement policy: anyone may VIEW it; only an admin may CHANGE it
+  // (it governs whether merges are blocked — a security control).
+  if (pathname === "/api/attest/policy") {
+    return method.toUpperCase() === "GET" ? "viewer" : "admin";
+  }
   // User administration is admin-only.
   if (pathname === "/api/users" || pathname.startsWith("/api/users/")) return "admin";
   // Self-service (own identity, own tokens, own rulesets) needs only auth.

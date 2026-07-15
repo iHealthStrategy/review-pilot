@@ -12,6 +12,7 @@ import { ProcessCommandRunner } from "./review/command-runner.js";
 import { createReviewEngine } from "./review/engine-factory.js";
 import { ReviewService } from "./review/review-service.js";
 import { GraphCacheService } from "./review/graph-cache.js";
+import { createAttestPolicyStore } from "./attest/policy-store-factory.js";
 import { ScheduledScanService } from "./schedule/scan-service.js";
 import { createScheduleStore } from "./schedule/schedule-store-factory.js";
 import { Scheduler } from "./schedule/scheduler.js";
@@ -118,6 +119,9 @@ export function startApp(
     timeoutMs: config.worker.engineTimeoutMs,
   });
 
+  // Runtime attestation enforcement policy (Web-UI managed; env seeds it).
+  const attestPolicyStore = createAttestPolicyStore(config);
+
   // Scheduled daily scans: per-branch review of the day's changes + delivery.
   const scheduleStore = createScheduleStore(config);
   const scanService = new ScheduledScanService({
@@ -174,6 +178,8 @@ export function startApp(
       webDistDir: config.webDistDir,
       scheduleStore,
       scheduler,
+      attest: config.attest,
+      attestPolicyStore,
     },
     config.port,
   );
@@ -184,6 +190,7 @@ export function startApp(
   // The drain/poller gate on this so they never touch uninitialised storage.
   const ready = (async () => {
     await repo.init();
+    await attestPolicyStore.init();
     await scheduleStore.init();
     // Clear any `running` flags stranded by a previous crash/redeploy.
     await scheduler.reconcileRunning();
@@ -223,6 +230,7 @@ export function startApp(
       scheduler.stop();
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await scheduleStore.close();
+      await attestPolicyStore.close();
       await repo.close();
     },
   };

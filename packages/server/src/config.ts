@@ -8,8 +8,17 @@
  * no external credentials.
  */
 
-import type { UserRole } from "./domain/entities.js";
+import type { Severity, UserRole } from "./domain/entities.js";
 import { parseGroupRoleMap } from "./auth/oidc.js";
+import type { AttestEnforce } from "./auth/attestation.js";
+import { EMBEDDED_SIGNING_KEY } from "./attest/signing-key.js";
+
+/**
+ * Seed enforcement policy, baked in (no env). Used only to seed the policy store
+ * on first run; afterwards the policy is managed from the Web UI.
+ */
+const DEFAULT_ATTEST_ENFORCE: AttestEnforce = "warn";
+const DEFAULT_ATTEST_BLOCK_SEVERITY: Severity = "major";
 
 export type DbDriver = "mock" | "sqlite" | "postgres" | "mongo";
 export type ReviewEngineKind =
@@ -119,6 +128,36 @@ export interface AppConfig {
   readonly sessionSecret: string;
   /** Session token lifetime in ms (default 7 days). */
   readonly sessionTtlMs: number;
+  /**
+   * Review-attestation signing. The server signs a per-commit review verdict
+   * with an Ed25519 PRIVATE key; GitHub Actions verifies it with the matching
+   * PUBLIC key offline (CI never calls back here). Developers hold neither key,
+   * so tokens can't be forged. Issuance is disabled when `signingKey` is empty.
+   */
+  readonly attest: {
+    /** Ed25519 PKCS#8 PEM private key; `\n`-escaped newlines are unescaped. Empty disables issuance. */
+    readonly signingKey: string;
+    /** Public-key id (kid) for rotation; empty derives it from the public key. */
+    readonly keyId: string;
+    /**
+     * SEED enforcement policy for the FIRST run only — thereafter the policy is
+     * managed from the Web UI and read from {@link ../attest/policy-store}. The
+     * "后台开关" for whether findings must be fixed:
+     *  - `off`   — always sign `pass` (attestation is advisory only);
+     *  - `warn`  — always sign `pass`, findings surfaced but never block;
+     *  - `block` — sign `fail` when a finding at/above `blockSeverity` exists.
+     */
+    readonly enforce: AttestEnforce;
+    /** SEED severity at/above which findings block under `enforce: block`. */
+    readonly blockSeverity: Severity;
+    /** Token lifetime in ms — keep short so a stale `pass` can't be reused. */
+    readonly ttlMs: number;
+    /**
+     * JSON file backing the runtime policy store when the DB driver is not
+     * `mongo`. Put it on a volume for stateless deploys, or use `mongo`.
+     */
+    readonly storeFile: string;
+  };
   /**
    * Built-in admin configured from the environment — NOT stored in the DB and
    * needs no maintenance. Enabled only when `adminToken` is set. Acts as a
@@ -322,6 +361,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     sessionSecret: str(env, "SESSION_SECRET", ""),
     sessionTtlMs: int(env, "SESSION_TTL_MS", 604800000),
+    attest: {
+      // Key is baked into the image at build time (see attest/signing-key.ts);
+      // ATTEST_SIGNING_KEY still overrides it for a secret-injected production key.
+      signingKey: str(env, "ATTEST_SIGNING_KEY", "").replace(/\\n/g, "\n") || EMBEDDED_SIGNING_KEY,
+      keyId: str(env, "ATTEST_KEY_ID", ""),
+      // Enforcement policy is Web-UI managed; these are only the first-run seeds.
+      enforce: DEFAULT_ATTEST_ENFORCE,
+      blockSeverity: DEFAULT_ATTEST_BLOCK_SEVERITY,
+      ttlMs: int(env, "ATTEST_TTL_MS", 86400000), // 24h
+      storeFile: str(env, "ATTEST_POLICY_STORE_FILE", "./.reviewpilot/attest-policy.json"),
+    },
     adminEmail: str(env, "ADMIN_EMAIL", "admin@reviewpilot.local"),
     adminToken: str(env, "ADMIN_TOKEN", ""),
     publicBaseUrl: str(env, "PUBLIC_BASE_URL", "").replace(/\/+$/, ""),

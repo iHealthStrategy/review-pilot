@@ -20,6 +20,16 @@ import {
 } from "../auth/authorize.js";
 import { generateApiToken } from "../auth/tokens.js";
 import { skillTokenFor } from "../auth/skill-token.js";
+import {
+  type AttestClaims,
+  type AttestEnforce,
+  type AttestSigner,
+  buildAttestSigner,
+  deriveVerdict,
+  signAttestation,
+} from "../auth/attestation.js";
+import type { AttestPolicyStore } from "../attest/policy-store.js";
+import type { Severity } from "../domain/entities.js";
 import { handleFromEmail } from "../auth/provision.js";
 import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
@@ -82,6 +92,10 @@ type Handler = (
     /** The authenticated caller, or null (absent/invalid credential, or auth off). */
     principal: Principal | null;
     auth: AuthConfig;
+    /** Review-attestation signer, or null when no signing key is configured. */
+    attest: AttestSigner | null;
+    /** Runtime attestation policy store (Web-UI managed), or null when absent. */
+    attestPolicy: AttestPolicyStore | null;
   },
   repo: Repository,
   tasks: TaskService | undefined,
@@ -257,6 +271,129 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/auth\/logout$/,
     // Stateless: the client discards its token. Endpoint exists for symmetry.
     handler: async () => ok({ ok: true }),
+  },
+  // --- Review attestations (the local-review → remote-gate bridge) ---
+  {
+    // The public verification key. UNAUTHENTICATED by design: GitHub Actions
+    // fetches it (or bakes it in) to verify tokens OFFLINE, so CI never has to
+    // call any authenticated endpoint on this server. A public key is not secret.
+    method: "GET",
+    pattern: /^\/api\/attest\/pubkey$/,
+    handler: async ({ attest, attestPolicy }) => {
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      const policy = attestPolicy ? await attestPolicy.get() : null;
+      return ok({
+        kid: attest.kid,
+        algorithm: "EdDSA",
+        // Report the LIVE policy (Web-UI managed), falling back to the signer seed.
+        enforce: policy?.enforce ?? attest.enforce,
+        blockSeverity: policy?.blockSeverity ?? attest.blockSeverity,
+        publicKey: attest.publicKeyPem,
+      });
+    },
+  },
+  {
+    // View the current global enforcement policy (any authenticated user).
+    method: "GET",
+    pattern: /^\/api\/attest\/policy$/,
+    handler: async ({ attest, attestPolicy }) => {
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      if (!attestPolicy) throw new HttpError(503, "attestation policy store not available");
+      return ok(await attestPolicy.get());
+    },
+  },
+  {
+    // Change the global enforcement policy — the Web-UI "是否强制修复" control.
+    // Admin-only (gated in requiredRole): it governs whether merges are blocked.
+    method: "PUT",
+    pattern: /^\/api\/attest\/policy$/,
+    handler: async ({ principal, body, attest, attestPolicy, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      if (!attestPolicy) throw new HttpError(503, "attestation policy store not available");
+      const b = (body ?? {}) as Record<string, unknown>;
+      const patch: { enforce?: AttestEnforce; blockSeverity?: Severity } = {};
+      if (b.enforce !== undefined) {
+        patch.enforce = asEnum(b.enforce, ["off", "warn", "block"] as const, "enforce");
+      }
+      if (b.blockSeverity !== undefined) {
+        patch.blockSeverity = asEnum(
+          b.blockSeverity,
+          ["info", "minor", "major", "critical"] as const,
+          "blockSeverity",
+        );
+      }
+      if (patch.enforce === undefined && patch.blockSeverity === undefined) {
+        throw new HttpError(400, "provide 'enforce' and/or 'blockSeverity'");
+      }
+      const handle = await principalHandle(p, repo, auth);
+      const by = handle ? `@${handle}` : await principalEmail(p, repo, auth);
+      return ok(await attestPolicy.set(patch, by));
+    },
+  },
+  {
+    // Issue a signed attestation for a locally-run review. The caller (the local
+    // skill, authenticated as the reviewing user) sends the reviewed commit's
+    // TREE sha + finding COUNTS (never code); the SERVER decides the verdict
+    // under the current policy and signs it. The developer cannot influence the
+    // verdict or forge the signature — the private key never leaves the server.
+    method: "POST",
+    pattern: /^\/api\/attest$/,
+    handler: async ({ principal, body, attest, attestPolicy, auth }, repo) => {
+      const p = requirePrincipal(principal);
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      const b = (body ?? {}) as Record<string, unknown>;
+      const project = normalizeProjectKey(asString(b.project, "project"));
+      const treeSha = asString(b.treeSha, "treeSha");
+      const scope = asEnum(b.scope, ["working", "branch", "whole", "commit"] as const, "scope");
+      const count = (k: string): number => {
+        const v = b[k];
+        const n = typeof v === "number" ? v : Number(v);
+        return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+      };
+      const findings = {
+        critical: count("critical"),
+        major: count("major"),
+        minor: count("minor"),
+        info: count("info"),
+      };
+      // The enforcement policy is Web-UI managed at runtime; read it live per
+      // request (fall back to the signer's env-seeded values if no store).
+      const policy = attestPolicy
+        ? await attestPolicy.get()
+        : { enforce: attest.enforce, blockSeverity: attest.blockSeverity };
+      const verdict = deriveVerdict(findings, policy.enforce, policy.blockSeverity);
+      const handle = await principalHandle(p, repo, auth);
+      const now = Date.now();
+      const claims: AttestClaims = {
+        v: 1,
+        project,
+        treeSha,
+        scope,
+        findings,
+        verdict,
+        policy: policy.enforce,
+        blockSeverity: policy.blockSeverity as Severity,
+        sub: p.userId,
+        handle,
+        iat: now,
+        exp: now + attest.ttlMs,
+        kid: attest.kid,
+        ...(typeof b.baseSha === "string" && b.baseSha ? { baseSha: b.baseSha } : {}),
+      };
+      const token = signAttestation(claims, attest);
+      return ok(
+        {
+          token,
+          verdict,
+          policy: policy.enforce,
+          blockSeverity: policy.blockSeverity,
+          treeSha,
+          expiresAt: new Date(claims.exp).toISOString(),
+        },
+        201,
+      );
+    },
   },
   // --- Personal access tokens (self-service) ---
   {
@@ -909,6 +1046,20 @@ export interface ApiOptions {
   scheduleStore?: ScheduleStore;
   /** Refreshed after schedule mutations; drives manual run-now. */
   scheduler?: Scheduler;
+  /**
+   * Review-attestation signing config. Built into a signer once at startup; when
+   * `signingKey` is empty the attestation endpoints answer 503. A malformed key
+   * throws here (fail fast).
+   */
+  attest?: {
+    signingKey: string;
+    keyId: string;
+    enforce: AttestEnforce;
+    blockSeverity: Severity;
+    ttlMs: number;
+  };
+  /** Runtime attestation policy store (Web-UI managed enforcement policy). */
+  attestPolicy?: AttestPolicyStore;
 }
 
 export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
@@ -922,6 +1073,9 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
   const tasks = options.taskService;
   const schedules = options.scheduleStore;
   const scheduler = options.scheduler;
+  // Build the attestation signer once (throws on a malformed key → fail fast).
+  const attest: AttestSigner | null = options.attest ? buildAttestSigner(options.attest) : null;
+  const attestPolicy: AttestPolicyStore | null = options.attestPolicy ?? null;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = req.method ?? "GET";
     const parsed = new URL(req.url ?? "/", "http://localhost");
@@ -961,7 +1115,7 @@ export function createApiHandler(repo: Repository, options: ApiOptions = {}) {
         body = raw ? JSON.parse(raw) : {};
       }
       const result = await route.handler(
-        { params, body, query: parsed.searchParams, principal, auth },
+        { params, body, query: parsed.searchParams, principal, auth, attest, attestPolicy },
         repo,
         tasks,
         schedules,

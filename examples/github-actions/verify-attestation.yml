@@ -1,0 +1,30 @@
+# Enforce that every PR carries a valid ReviewPilot attestation before it can
+# merge. Add this workflow, then make the "attestation" check REQUIRED in your
+# branch protection / ruleset (see the repo docs / step ③).
+#
+# The verify step is OFFLINE: it uses a pre-configured PUBLIC key and never calls
+# the ReviewPilot server. Fetch the server's Ed25519 public key from
+# GET /api/attest/pubkey and store it in a repo/org secret
+# REVIEWPILOT_ATTEST_PUBLIC_KEY.
+name: ReviewPilot Gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  attestation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Required: the head commit must be in local history so its tree +
+          # Reviewed-Token trailer can be read.
+          fetch-depth: 0
+      - uses: iHealthStrategy/review-pilot/verify-attestation@v1
+        with:
+          public-key: ${{ secrets.REVIEWPILOT_ATTEST_PUBLIC_KEY }}
+          # For key rotation, use public-keys instead (JSON kid→PEM):
+          # public-keys: ${{ secrets.REVIEWPILOT_ATTEST_PUBLIC_KEYS }}
+          #
+          # Advisory rollout: warn but don't block while the team adopts it.
+          # Flip to "true" (the default) once everyone is on board.
+          # require: "false"

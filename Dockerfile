@@ -28,6 +28,14 @@ RUN npm ci
 # touching the committed lockfile.
 RUN npm install --no-save mongodb@^6 @anthropic-ai/claude-agent-sdk
 COPY . .
+# Bake a fresh Ed25519 attestation signing key INTO the image: generate it here
+# (node's crypto — no extra tools) and compile it into the bundle via
+# attest/signing-key.ts, so the server needs no runtime key file or env var. The
+# matching PUBLIC key is printed below and is also served at /api/attest/pubkey.
+# In production, override with the ATTEST_SIGNING_KEY env var (from a secret)
+# instead of baking the key into the image (anyone who can pull the image can
+# otherwise extract the private key and forge attestations).
+RUN node -e "const c=require('crypto');const fs=require('fs');const {privateKey,publicKey}=c.generateKeyPairSync('ed25519');const priv=privateKey.export({type:'pkcs8',format:'pem'}).toString();fs.writeFileSync('packages/server/src/attest/signing-key.ts','// generated at image build — do not edit\nexport const EMBEDDED_SIGNING_KEY = '+JSON.stringify(priv)+';\n');process.stdout.write('=== ReviewPilot attestation PUBLIC key (also at /api/attest/pubkey) ===\n'+publicKey.export({type:'spki',format:'pem'}).toString()+'\n');"
 # Build only the deployable workspaces. The VS Code extension (packages/extension)
 # is a separate dev artifact whose esbuild devDependency isn't installed here, and
 # it is never shipped in the server image.

@@ -6,6 +6,9 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createApiHandler } from "./api/rest-api.js";
+import type { AttestEnforce } from "./auth/attestation.js";
+import type { AttestPolicyStore } from "./attest/policy-store.js";
+import type { Severity } from "./domain/entities.js";
 import { resolvePrincipal } from "./auth/authorize.js";
 import { envAdminFrom } from "./auth/env-admin.js";
 import {
@@ -53,6 +56,16 @@ export interface AppDeps {
   scheduleStore?: ScheduleStore;
   /** Refreshed on schedule changes; runs schedules on demand. */
   scheduler?: Scheduler;
+  /** Review-attestation signing config (see AppConfig.attest). */
+  attest?: {
+    signingKey: string;
+    keyId: string;
+    enforce: AttestEnforce;
+    blockSeverity: Severity;
+    ttlMs: number;
+  };
+  /** Runtime attestation policy store (Web-UI managed enforcement policy). */
+  attestPolicyStore?: AttestPolicyStore;
 }
 
 /**
@@ -72,6 +85,8 @@ export function createAppHandler(deps: AppDeps) {
     taskService: deps.taskService,
     ...(deps.scheduleStore ? { scheduleStore: deps.scheduleStore } : {}),
     ...(deps.scheduler ? { scheduler: deps.scheduler } : {}),
+    ...(deps.attest ? { attest: deps.attest } : {}),
+    ...(deps.attestPolicyStore ? { attestPolicy: deps.attestPolicyStore } : {}),
   });
   const serveStatic = createStaticHandler(resolveWebDistDir(deps.webDistDir ?? ""));
   // MCP endpoint auth: resolve the bearer credential (PAT or session) the same
