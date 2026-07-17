@@ -50,7 +50,7 @@ test("buildOrchestratorSkill: derives a per-project key and auto-grows candidate
   assert.match(md, /\/api\/u\/\$HANDLE\/rulesets\?project=\$PROJECT/); // project-scoped fetch
   assert.match(md, /\/api\/rulesets\/candidates/); // auto-grow submit
   assert.match(md, /REVIEWPILOT_TOKEN/); // PAT for the write
-  assert.match(md, /pending/i); // candidates land pending
+  assert.match(md, /take effect immediately|disable it later/i); // candidates apply now, opt-out later
   // Submit uses the SAME normalized $PROJECT key as the fetch (not raw $REMOTE),
   // so auto-grown rules match next time and no-remote repos don't 400.
   assert.match(md, /\\"project\\":\\"\$PROJECT\\"/);

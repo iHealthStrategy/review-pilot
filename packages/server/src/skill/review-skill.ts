@@ -314,8 +314,9 @@ none. Turn each into a candidate rule object:
 \`{ title, instruction, globs[], languages[], topics[] }\` — set selectors so the
 rule only loads for the relevant files (e.g. migrations → \`globs:["**/migrations/**"]\`).
 
-Submit them to YOUR OWN project ruleset (they land as **pending** candidates for you
-to confirm later in the web UI; they do not affect others until you promote them).
+Submit them to YOUR OWN project ruleset — they **take effect immediately** (applied
+on your next review, and discoverable if the ruleset is public). If one turns out to
+be a poor fit, disable it later in the web UI (no confirmation step needed).
 ${tokenNote} Skip silently if there are no key points or no token.
 
 \`\`\`sh
@@ -326,7 +327,7 @@ if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
   curl -fsS -X POST "$BASE/api/rulesets/candidates" \\
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
     -d "{\\"project\\":\\"$PROJECT\\",\\"projectLabel\\":\\"$PROJECT\\",\\"rules\\":$RULES_JSON}" \\
-    && echo "✓ 已提交候选规则,去平台「评审规则集」确认采纳" \\
+    && echo "✓ 规则已采纳生效,如某条不合适可到平台「评审规则集」停用" \\
     || echo "(提交候选规则失败,已跳过)"
 fi
 \`\`\`
@@ -503,7 +504,8 @@ export function buildReviewSkill(ruleset?: ReviewRuleset): string {
         ruleset.instructions.trim(),
       );
     }
-    if (ruleset.rules.length) {
+    const activeRules = ruleset.rules.filter((r) => !r.pending && !r.disabled);
+    if (activeRules.length) {
       rulesetSections.push(
         "",
         "## Conditional rules (apply only when the selector matches the changed files)",
@@ -511,7 +513,7 @@ export function buildReviewSkill(ruleset?: ReviewRuleset): string {
         "apply a rule only when its non-empty selectors all match (empty = always):",
         "",
       );
-      for (const r of ruleset.rules) {
+      for (const r of activeRules) {
         const sel: string[] = [];
         if (r.globs.length) sel.push(`paths ${r.globs.join(", ")}`);
         if (r.languages.length) sel.push(`langs ${r.languages.join(", ")}`);

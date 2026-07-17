@@ -837,16 +837,32 @@ const html = `<!doctype html>
       const csv = (a) => (Array.isArray(a) ? a : []).join(", ");
       const parseCsv = (s) => (s || "").split(",").map((x) => x.trim()).filter(Boolean);
       function addRuleRow(rule) {
-        const r = rule || { title: "", instruction: "", globs: [], languages: [], topics: [], pending: false };
+        const r = rule || { title: "", instruction: "", globs: [], languages: [], topics: [], pending: false, disabled: false };
         const row = document.createElement("div");
-        row.className = "rule-row" + (r.pending ? " rule-pending" : "");
         row.dataset.pending = r.pending ? "1" : "0";
-        // Pending (auto-extracted) candidates get a badge + a 采纳 toggle.
-        const badge = r.pending
-          ? '<span class="badge-pending">候选 · 待采纳</span> <button type="button" class="secondary" data-adopt-rule>采纳</button>'
-          : "";
+        row.dataset.disabled = r.disabled ? "1" : "0";
+        // One unified 启用/停用 switch. A rule is IN EFFECT unless it is a legacy
+        // pending candidate OR has been disabled; both read as "已停用" here.
+        // Enabling clears BOTH flags (promotes a legacy pending rule); disabling
+        // sets the disabled flag and leaves any legacy pending flag untouched.
+        const syncHead = () => {
+          const off = row.dataset.pending === "1" || row.dataset.disabled === "1";
+          row.className = "rule-row" + (off ? " rule-pending" : "");
+          const head = row.querySelector(".rule-head");
+          head.innerHTML = off
+            ? '<span class="badge-pending">已停用</span> <button type="button" class="secondary" data-toggle-rule>启用</button>'
+            : '<button type="button" class="secondary" data-toggle-rule>停用</button>';
+          head.querySelector("[data-toggle-rule]").onclick = () => {
+            if (row.dataset.pending === "1" || row.dataset.disabled === "1") {
+              row.dataset.pending = "0"; row.dataset.disabled = "0";
+            } else {
+              row.dataset.disabled = "1";
+            }
+            syncHead();
+          };
+        };
         row.innerHTML =
-          \`<div class="rule-head">\${badge}</div>
+          \`<div class="rule-head"></div>
            <div class="rule-grid">
              <input data-rk="title" placeholder="规则标题(如:SQL 注入)" value="\${esc(r.title || "")}" />
              <input data-rk="globs" placeholder="路径 globs,如 src/db/**, **/*.sql" value="\${esc(csv(r.globs))}" />
@@ -858,12 +874,7 @@ const html = `<!doctype html>
              <button type="button" class="secondary" data-rm-rule>移除</button>
            </div>\`;
         row.querySelector("[data-rm-rule]").onclick = () => row.remove();
-        const adopt = row.querySelector("[data-adopt-rule]");
-        if (adopt) adopt.onclick = () => {
-          row.dataset.pending = "0";
-          row.classList.remove("rule-pending");
-          row.querySelector(".rule-head").innerHTML = "";
-        };
+        syncHead();
         document.getElementById("rs-rules").appendChild(row);
       }
       function collectRules() {
@@ -879,6 +890,7 @@ const html = `<!doctype html>
             languages: parseCsv(get("languages")),
             topics: parseCsv(get("topics")),
             pending: row.dataset.pending === "1",
+            disabled: row.dataset.disabled === "1",
           });
         });
         return rules;
@@ -942,16 +954,16 @@ const html = `<!doctype html>
           ? \`curl -fsSL \${o}/skill/ruleset/\${r.id}/install.sh | sh\`
           : \`curl -fsSL -H "Authorization: Bearer rpat_…" \${o}/skill/ruleset/\${r.id}/install.sh | sh\`;
         const ruleCount = (r) => (r.rules ? r.rules.length : 0);
-        const pendingCount = (r) => (r.rules ? r.rules.filter((x) => x.pending).length : 0);
+        const offCount = (r) => (r.rules ? r.rules.filter((x) => x.pending || x.disabled).length : 0);
 
         const mineRows = mine.map((r) => {
-          const pend = pendingCount(r);
-          const pendTag = pend ? \` <span class="badge-pending">\${pend} 候选待采纳</span>\` : "";
-          return \`<tr\${pend ? ' class="row-has-pending"' : ""}>
+          const off = offCount(r);
+          const offTag = off ? \` <span class="badge-pending">\${off} 条已停用</span>\` : "";
+          return \`<tr\${off ? ' class="row-has-pending"' : ""}>
           <td>\${esc(r.name)}</td>
           <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
-          <td class="muted">\${ruleCount(r)} 条规则\${pendTag}</td>
+          <td class="muted">\${ruleCount(r)} 条规则\${offTag}</td>
           <td><code>\${esc(cmd(r))}</code></td>
           <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
         </tr>\`;
@@ -975,12 +987,12 @@ const html = `<!doctype html>
              <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
              <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
              <h3>③ 自动沉淀规则</h3>
-             <p class="muted">用上面「已内置 token」的安装命令装好后即自动开启:每次 review 会把发现的关键点作为<strong>候选规则</strong>提交到当前项目的规则集,你在此页确认采纳后才会生效。</p>
+             <p class="muted">用上面「已内置 token」的安装命令装好后即自动开启:每次 review 会把发现的关键点<strong>自动采纳</strong>为当前项目规则集的规则、立即生效;若某条不合适,可在下方规则集「编辑」里把它<strong>停用</strong>。</p>
            </div>\`;
 
         document.querySelector("#rulesets").innerHTML =
           orchestrator
-          + \`<p class="muted">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。带「候选待采纳」的规则由 skill 自动提交,需在编辑里点「采纳」后才生效或对外公开。</p>
+          + \`<p class="muted">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。skill 自动沉淀的规则<strong>默认采纳生效</strong>,可在「编辑」里随时<strong>停用</strong>某条(停用的既不应用、也不对外公开)。</p>
              <h3>我的规则集</h3>\`
           + (mine.length
               ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
