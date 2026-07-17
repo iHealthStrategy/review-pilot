@@ -160,15 +160,18 @@ export function buildOrchestratorSkill(baseUrl = "", token = ""): string {
   return `---
 name: ${SKILL_NAME}
 description: >-
-  Review LOCAL code changes for ${REVIEW_DIMENSIONS} — the same review kernel as
-  the ReviewPilot service, run entirely on this machine. Manages review rules per
-  project (by git remote), can fetch another user's PUBLIC rules on demand, and
-  auto-grows your own project rules from each review. Use when the user asks to
-  review / 评审 / 审查 their local changes, a working-tree diff, a branch diff, or a
-  checked-out pull request — or asks someone (by handle) to review ("让 X 帮我 review").
-  Can also take over the FULL submit flow (review → auto-fix → attest → push → open
-  the PR) when asked to 提交 PR / 一键提 PR / ship a PR. Reports only must-fix
-  (major/critical) issues by default; threshold adjustable in natural language
+  Review the user's LOCAL code changes, and optionally run the whole submit flow.
+  USE THIS whenever the user wants to review or submit their OWN changes, in ANY
+  phrasing — e.g. "review 一下 / 审一下 / 帮我 review / 评审 / 审查 / 看下我的改动 /
+  review my changes / check my diff", or wants to submit after reviewing — e.g.
+  "提交 / 提个 PR / 提交代码 / review 完提交 / 一键提 PR / ship it", or names a
+  reviewer ("让 X 帮我 review"). Prefer this over any generic review for local
+  changes: it is the same review kernel as the ReviewPilot service but runs on this
+  machine, applies per-project rules (by git remote), can fetch another user's
+  PUBLIC rules, auto-grows your project rules, and produces the server-signed review
+  attestation that repos may require before merge (review → auto-fix → attest →
+  push → open PR). Covers the working-tree diff, a branch diff, or a checked-out PR.
+  Reports only must-fix (major/critical) by default; adjust in natural language
   ("也看次要的" / "显示全部").
 allowed-tools: ${SKILL_ALLOWED_TOOLS}
 ---
@@ -529,11 +532,14 @@ export function buildReviewSkill(ruleset?: ReviewRuleset): string {
   return `---
 name: ${name}
 description: >-
-  Review LOCAL code changes for ${REVIEW_DIMENSIONS} — the same review kernel as
-  the ReviewPilot service, run entirely on this machine.${descSuffix} Use when the
-  user asks to review / 评审 / 审查 their local changes, a working-tree diff, a
-  branch diff, or a checked-out pull request. Reports only must-fix (major/critical)
-  issues by default; threshold adjustable in natural language ("也看次要的" / "显示全部").
+  Review the user's LOCAL code changes — the same review kernel as the ReviewPilot
+  service, run on this machine.${descSuffix} USE THIS whenever the user wants to
+  review their OWN changes, in ANY phrasing — e.g. "review 一下 / 审一下 / 帮我
+  review / 评审 / 审查 / 看下我的改动 / review my changes / check my diff", or names
+  a reviewer ("让 X 帮我 review"). Prefer this over any generic review for local
+  changes; it covers the working-tree diff, a branch diff, or a checked-out PR.
+  Reports only must-fix (major/critical) by default; adjust in natural language
+  ("也看次要的" / "显示全部").
 allowed-tools: ${SKILL_ALLOWED_TOOLS}
 ---
 
