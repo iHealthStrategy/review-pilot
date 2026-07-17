@@ -281,7 +281,7 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/attest\/pubkey$/,
     handler: async ({ attest, attestPolicy }) => {
       if (!attest) throw new HttpError(503, "attestation is not configured on this server");
-      const policy = attestPolicy ? await attestPolicy.get() : null;
+      const policy = attestPolicy ? await attestPolicy.getGlobal() : null;
       return ok({
         kid: attest.kid,
         algorithm: "EdDSA",
@@ -293,13 +293,44 @@ const ROUTES: Route[] = [
     },
   },
   {
-    // View the current global enforcement policy (any authenticated user).
+    // View a policy (any authenticated user). `?project=<key>` returns the
+    // EFFECTIVE policy for that project (its override if any, else the global,
+    // with a `source` field); no query returns the global default.
     method: "GET",
     pattern: /^\/api\/attest\/policy$/,
+    handler: async ({ attest, attestPolicy, query }) => {
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      if (!attestPolicy) throw new HttpError(503, "attestation policy store not available");
+      const project = normalizeProjectKey(query.get("project") ?? "");
+      if (project) return ok(await attestPolicy.getEffective(project));
+      return ok(await attestPolicy.getGlobal());
+    },
+  },
+  {
+    // The global default plus every per-project override (admin overview).
+    method: "GET",
+    pattern: /^\/api\/attest\/policies$/,
     handler: async ({ attest, attestPolicy }) => {
       if (!attest) throw new HttpError(503, "attestation is not configured on this server");
       if (!attestPolicy) throw new HttpError(503, "attestation policy store not available");
-      return ok(await attestPolicy.get());
+      return ok({
+        global: await attestPolicy.getGlobal(),
+        overrides: await attestPolicy.listOverrides(),
+      });
+    },
+  },
+  {
+    // Remove a per-project override → that project falls back to the global
+    // default. Admin-only (gated in requiredRole). Requires ?project=.
+    method: "DELETE",
+    pattern: /^\/api\/attest\/policy$/,
+    handler: async ({ attest, attestPolicy, query }) => {
+      if (!attest) throw new HttpError(503, "attestation is not configured on this server");
+      if (!attestPolicy) throw new HttpError(503, "attestation policy store not available");
+      const project = normalizeProjectKey(query.get("project") ?? "");
+      if (!project) throw new HttpError(400, "provide ?project= to delete a per-project override");
+      await attestPolicy.deleteOverride(project);
+      return ok({ ok: true });
     },
   },
   {
@@ -326,9 +357,11 @@ const ROUTES: Route[] = [
       if (patch.enforce === undefined && patch.blockSeverity === undefined) {
         throw new HttpError(400, "provide 'enforce' and/or 'blockSeverity'");
       }
+      // Empty/absent project → the global default; a key → a per-project override.
+      const project = normalizeProjectKey(typeof b.project === "string" ? b.project : "");
       const handle = await principalHandle(p, repo, auth);
       const by = handle ? `@${handle}` : await principalEmail(p, repo, auth);
-      return ok(await attestPolicy.set(patch, by));
+      return ok(await attestPolicy.set(patch, by, project));
     },
   },
   {
@@ -360,7 +393,7 @@ const ROUTES: Route[] = [
       // The enforcement policy is Web-UI managed at runtime; read it live per
       // request (fall back to the signer's env-seeded values if no store).
       const policy = attestPolicy
-        ? await attestPolicy.get()
+        ? await attestPolicy.getEffective(project)
         : { enforce: attest.enforce, blockSeverity: attest.blockSeverity };
       const verdict = deriveVerdict(findings, policy.enforce, policy.blockSeverity);
       const handle = await principalHandle(p, repo, auth);
