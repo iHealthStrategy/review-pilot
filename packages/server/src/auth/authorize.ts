@@ -37,6 +37,10 @@ export function requiredRole(method: string, pathname: string): UserRole | "publ
   if (pathname === "/api/attest") return "viewer";
   // The enforcement policy: anyone may VIEW it; only an admin may CHANGE it
   // (it governs whether merges are blocked — a security control).
+  // Listing all per-project overrides is an admin overview.
+  if (pathname === "/api/attest/policies") return "admin";
+  // The enforcement policy (global default or a per-project override): anyone
+  // may VIEW it; only an admin may CHANGE (PUT) or REMOVE (DELETE) it.
   if (pathname === "/api/attest/policy") {
     return method.toUpperCase() === "GET" ? "viewer" : "admin";
   }

@@ -246,6 +246,7 @@ const html = `<!doctype html>
         <div class="nav-group">账户与接入</div>
         <a href="#account" data-view="account">API Key</a>
         <a href="#usage" data-view="usage">Token 用量</a>
+        <a href="#gate" data-view="gate" id="nav-gate" style="display:none">评审门禁</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
       </nav>
       <main>
@@ -289,6 +290,10 @@ const html = `<!doctype html>
             </div>
           </div>
           <section id="usage"><div data-loading>加载中…</div></section>
+        </div>
+        <div class="view" id="view-gate">
+          <div class="view-head"><h2>评审门禁策略</h2></div>
+          <section id="gate"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-users">
           <div class="view-head"><h2>用户管理</h2></div>
@@ -510,6 +515,7 @@ const html = `<!doctype html>
           rb.textContent = ROLE_LABEL[me.role] || me.role;
           rb.className = "status role-" + me.role;
           document.getElementById("nav-users").style.display = isAdmin() ? "" : "none";
+          document.getElementById("nav-gate").style.display = isAdmin() ? "" : "none";
           document.getElementById("open-schedule-modal").style.display = canWrite() ? "" : "none";
           document.getElementById("open-task-modal").style.display = canWrite() ? "" : "none";
         } else {
@@ -549,7 +555,7 @@ const html = `<!doctype html>
         const [rawView, sub] = String(name || "").split("/");
         const alias = { schedules: "tasks", dashboard: "tasks", integrations: "account" };
         const mapped = alias[rawView] || rawView;
-        const valid = ["tasks", "account", "rulesets", "usage", "users"];
+        const valid = ["tasks", "account", "rulesets", "usage", "users", "gate"];
         const view = valid.includes(mapped) ? mapped : "tasks";
         localStorage.setItem("rp_view", view); // fallback for a bare URL (no hash)
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
@@ -560,6 +566,7 @@ const html = `<!doctype html>
         if (view === "users") renderUsers();
         if (view === "usage") renderUsage();
         if (view === "rulesets") renderRulesets();
+        if (view === "gate") renderGate();
         if (view === "tasks") {
           if (sub) showJob(sub);                       // restore the open job detail
           else { const d = document.getElementById("detail"); if (d) d.innerHTML = ""; }
@@ -1110,6 +1117,81 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
       }
 
       // --- Users (admin only) ---
+      // --- Review gate: per-project attestation enforcement policy (admin) ---
+      async function renderGate() {
+        const host = document.getElementById("gate");
+        let data;
+        try { data = await api("/api/attest/policies"); }
+        catch (e) {
+          host.innerHTML = '<p class="muted">评审门禁不可用:服务器未配置签名密钥(ATTEST_SIGNING_KEY),或你不是管理员。</p>';
+          return;
+        }
+        const ENF = ["off", "warn", "block"];
+        const SEV = ["info", "minor", "major", "critical"];
+        const opt = (list, v) => list.map((o) => \`<option\${o === v ? " selected" : ""}>\${o}</option>\`).join("");
+        const g = data.global || { enforce: "warn", blockSeverity: "major" };
+        const ovs = data.overrides || [];
+        const ovRows = ovs.map((o) => \`
+          <tr data-proj="\${esc(o.project)}">
+            <td class="muted">\${esc(o.project)}</td>
+            <td><select data-ok="enforce">\${opt(ENF, o.enforce)}</select></td>
+            <td><select data-ok="blockSeverity">\${opt(SEV, o.blockSeverity)}</select></td>
+            <td><button class="secondary" data-save-ov>保存</button> <button class="secondary" data-del-ov>删除</button></td>
+          </tr>\`).join("");
+        host.innerHTML =
+          \`<p class="muted">门禁强度<strong>按项目独立</strong>配置。<strong>全局默认</strong>适用于未单独设置的项目;<strong>项目覆盖</strong>只影响该项目。<code>enforce</code>:off/warn 不拦截,block 时在 <code>blockSeverity</code> 及以上严重度拦截合并。</p>
+           <h3>全局默认</h3>
+           <div class="rule-row" id="gate-global">
+             <div class="rule-grid2" style="align-items:center;gap:10px;flex-wrap:wrap">
+               <span class="muted">enforce</span><select data-gk="enforce">\${opt(ENF, g.enforce)}</select>
+               <span class="muted">blockSeverity</span><select data-gk="blockSeverity">\${opt(SEV, g.blockSeverity)}</select>
+               <button data-save-global>保存全局</button>
+             </div>
+           </div>
+           <h3>项目覆盖</h3>
+           \${ovs.length
+             ? \`<table><thead><tr><th>项目</th><th>enforce</th><th>blockSeverity</th><th></th></tr></thead><tbody>\${ovRows}</tbody></table>\`
+             : '<p class="muted">暂无项目覆盖 —— 所有项目都用全局默认。</p>'}
+           <h3>新增项目覆盖</h3>
+           <div class="rule-row">
+             <div class="rule-grid2" style="align-items:center;gap:10px;flex-wrap:wrap">
+               <input id="ov-project" placeholder="项目 key,如 github.com/acme/app" style="min-width:280px" />
+               <select id="ov-enforce">\${opt(ENF, "block")}</select>
+               <select id="ov-sev">\${opt(SEV, "major")}</select>
+               <button id="ov-add">添加覆盖</button>
+             </div>
+           </div>
+           <p class="muted result" id="gate-result"></p>\`;
+
+        const out = document.getElementById("gate-result");
+        const put = async (payload) => {
+          out.textContent = "";
+          try {
+            await api("/api/attest/policy", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+            renderGate();
+          } catch (e) { out.textContent = "✗ " + e.message; }
+        };
+        document.querySelector("[data-save-global]").onclick = () => {
+          const box = document.getElementById("gate-global");
+          put({ enforce: box.querySelector('[data-gk="enforce"]').value, blockSeverity: box.querySelector('[data-gk="blockSeverity"]').value });
+        };
+        document.querySelectorAll("[data-save-ov]").forEach((b) => (b.onclick = () => {
+          const row = b.closest("tr");
+          put({ project: row.dataset.proj, enforce: row.querySelector('[data-ok="enforce"]').value, blockSeverity: row.querySelector('[data-ok="blockSeverity"]').value });
+        }));
+        document.querySelectorAll("[data-del-ov]").forEach((b) => (b.onclick = async () => {
+          const row = b.closest("tr");
+          if (!confirm("删除该项目覆盖?该项目将回退到全局默认。")) return;
+          try { await api("/api/attest/policy?project=" + encodeURIComponent(row.dataset.proj), { method: "DELETE" }); renderGate(); }
+          catch (e) { out.textContent = "✗ " + e.message; }
+        }));
+        document.getElementById("ov-add").onclick = () => {
+          const proj = document.getElementById("ov-project").value.trim();
+          if (!proj) { out.textContent = "✗ 请填写项目 key"; return; }
+          put({ project: proj, enforce: document.getElementById("ov-enforce").value, blockSeverity: document.getElementById("ov-sev").value });
+        };
+      }
+
       async function renderUsers() {
         if (!isAdmin()) { document.querySelector("#users").innerHTML = '<p class="muted">仅管理员可见。</p>'; return; }
         const users = await load("/api/users", []);

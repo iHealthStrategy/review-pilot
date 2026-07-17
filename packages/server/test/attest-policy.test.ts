@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAppServer } from "../src/app.js";
@@ -84,9 +84,9 @@ test("policy store: file round-trip seeds from defaults then persists changes", 
 
   const a = new FileAttestPolicyStore({ defaults, filePath, clock: () => "2026-01-01T00:00:00Z" });
   await a.init();
-  assert.deepEqual(await a.get(), { enforce: "warn", blockSeverity: "major", updatedAt: "", updatedBy: "default" });
+  assert.deepEqual(await a.getGlobal(), { enforce: "warn", blockSeverity: "major", updatedAt: "", updatedBy: "default" });
   await a.set({ enforce: "block", blockSeverity: "critical" }, "@admin");
-  assert.deepEqual(await a.get(), {
+  assert.deepEqual(await a.getGlobal(), {
     enforce: "block",
     blockSeverity: "critical",
     updatedAt: "2026-01-01T00:00:00Z",
@@ -96,7 +96,7 @@ test("policy store: file round-trip seeds from defaults then persists changes", 
   // A fresh store over the same file loads the persisted value, not the default.
   const b = new FileAttestPolicyStore({ defaults, filePath });
   await b.init();
-  const loaded = await b.get();
+  const loaded = await b.getGlobal();
   assert.equal(loaded.enforce, "block");
   assert.equal(loaded.blockSeverity, "critical");
   assert.equal(loaded.updatedBy, "@admin");
@@ -161,5 +161,109 @@ test("attest issuance reflects the live Web-UI policy, not the env seed", async 
     assert.ok(claims);
     assert.equal(claims.verdict, "fail");
     assert.equal(claims.treeSha, "tree-1");
+  });
+});
+
+test("policy store: migrates a legacy flat file into the global default", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rp-policy-legacy-"));
+  const filePath = join(dir, "policy.json");
+  // Pre per-project format: a single flat policy object, no { global, projects }.
+  writeFileSync(
+    filePath,
+    JSON.stringify({ enforce: "block", blockSeverity: "critical", updatedAt: "2025-12-31T00:00:00Z", updatedBy: "@old" }),
+  );
+  const defaults: AttestPolicyDefaults = { enforce: "warn", blockSeverity: "major" };
+  const s = new FileAttestPolicyStore({ defaults, filePath, clock: () => "2026-02-02T00:00:00Z" });
+  await s.init();
+  // The legacy value became the global default; no overrides.
+  const g = await s.getGlobal();
+  assert.equal(g.enforce, "block");
+  assert.equal(g.blockSeverity, "critical");
+  assert.equal(g.updatedBy, "@old");
+  assert.equal((await s.listOverrides()).length, 0);
+  // Adding an override re-persists in the new shape, preserving the migrated global.
+  await s.set({ enforce: "warn" }, "@admin", "github.com/acme/app");
+  const s2 = new FileAttestPolicyStore({ defaults, filePath });
+  await s2.init();
+  assert.equal((await s2.getGlobal()).enforce, "block");
+  assert.equal((await s2.getEffective("github.com/acme/app")).source, "project");
+});
+
+test("policy store: per-project override resolves over the global; delete restores fallback", async () => {
+  const defaults: AttestPolicyDefaults = { enforce: "warn", blockSeverity: "major" };
+  const s = new FileAttestPolicyStore({ defaults, clock: () => "2026-01-01T00:00:00Z" });
+  await s.init();
+
+  // No override → effective == global default.
+  const eff0 = await s.getEffective("github.com/acme/app");
+  assert.equal(eff0.enforce, "warn");
+  assert.equal(eff0.source, "global");
+
+  // Set an override for ONE project.
+  await s.set({ enforce: "block", blockSeverity: "info" }, "@admin", "github.com/acme/app");
+  const eff1 = await s.getEffective("github.com/acme/app");
+  assert.equal(eff1.enforce, "block");
+  assert.equal(eff1.blockSeverity, "info");
+  assert.equal(eff1.source, "project");
+  // A different project still falls back to the global default.
+  const other = await s.getEffective("github.com/acme/other");
+  assert.equal(other.enforce, "warn");
+  assert.equal(other.source, "global");
+  // The global default itself is untouched.
+  assert.equal((await s.getGlobal()).enforce, "warn");
+  // Listed as the sole override.
+  const list = await s.listOverrides();
+  assert.equal(list.length, 1);
+  assert.equal(list[0]!.project, "github.com/acme/app");
+
+  // Delete → falls back to the global again.
+  await s.deleteOverride("github.com/acme/app");
+  const eff2 = await s.getEffective("github.com/acme/app");
+  assert.equal(eff2.enforce, "warn");
+  assert.equal(eff2.source, "global");
+  assert.equal((await s.listOverrides()).length, 0);
+});
+
+test("attest issuance uses the per-project policy; global stays independent", async () => {
+  await withApi(async (base, repo) => {
+    const dev = await makeSession(repo, SECRET, "member");
+    const admin = await makeSession(repo, SECRET, "admin");
+
+    // Global stays warn; set block+major for ONE project only.
+    await req(base, "PUT", "/api/attest/policy", admin.token, {
+      project: "github.com/acme/app", enforce: "block", blockSeverity: "major",
+    });
+
+    // The overridden project: a major finding now fails.
+    const a = await req(base, "POST", "/api/attest", dev.token, {
+      project: "github.com/acme/app", treeSha: "t1", scope: "branch", major: 1,
+    });
+    assert.equal(a.json.verdict, "fail");
+
+    // A different project still follows the global (warn) → passes.
+    const b = await req(base, "POST", "/api/attest", dev.token, {
+      project: "github.com/acme/other", treeSha: "t2", scope: "branch", major: 1,
+    });
+    assert.equal(b.json.verdict, "pass");
+
+    // GET policy?project= reports the effective policy + its source.
+    const eff = await req(base, "GET", "/api/attest/policy?project=github.com/acme/app", dev.token);
+    assert.equal(eff.json.enforce, "block");
+    assert.equal(eff.json.source, "project");
+
+    // Listing overrides is admin-only.
+    const listByDev = await req(base, "GET", "/api/attest/policies", dev.token);
+    assert.equal(listByDev.status, 403);
+    const list = await req(base, "GET", "/api/attest/policies", admin.token);
+    assert.equal(list.status, 200);
+    assert.equal(list.json.overrides.length, 1);
+
+    // Delete the override → the project falls back to the global (warn) → passes.
+    const del = await req(base, "DELETE", "/api/attest/policy?project=github.com/acme/app", admin.token);
+    assert.equal(del.status, 200);
+    const a2 = await req(base, "POST", "/api/attest", dev.token, {
+      project: "github.com/acme/app", treeSha: "t3", scope: "branch", major: 1,
+    });
+    assert.equal(a2.json.verdict, "pass");
   });
 });
