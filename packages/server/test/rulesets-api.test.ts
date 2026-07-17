@@ -150,11 +150,12 @@ test("rulesets: register assigns a handle; public discovery by handle is unauthe
     assert.equal(none.rulesets.length, 0);
   }));
 
-test("candidates: skill auto-grows the caller's per-project ruleset (pending) and discovery hides pending", () =>
+test("candidates: skill auto-grows the caller's per-project ruleset (in effect by default); disabling / legacy pending hide a rule", () =>
   withApi(async (base, repo) => {
     const alice = await register(repo, "alice@x.com");
 
-    // First submit: no ruleset for this project yet → creates one (private), pending rules.
+    // First submit: no ruleset for this project yet → creates one (private).
+    // Candidates now take effect immediately — no pending confirmation step.
     const sub1 = await fetch(`${base}/api/rulesets/candidates`, {
       method: "POST", headers: auth(alice),
       body: JSON.stringify({
@@ -168,7 +169,8 @@ test("candidates: skill auto-grows the caller's per-project ruleset (pending) an
     assert.equal(r1.added, 1);
     assert.equal(r1.ruleset.project, "github.com/acme/app");
     assert.equal(r1.ruleset.visibility, "private");
-    assert.equal(r1.ruleset.rules[0].pending, true);
+    assert.notEqual(r1.ruleset.rules[0].pending, true); // in effect, not pending
+    assert.notEqual(r1.ruleset.rules[0].disabled, true);
 
     // Second submit, same project (different remote spelling) → upserts same ruleset.
     const sub2 = await fetch(`${base}/api/rulesets/candidates`, {
@@ -188,21 +190,29 @@ test("candidates: skill auto-grows the caller's per-project ruleset (pending) an
     assert.equal(r2.skipped, 1);
     assert.equal(r2.ruleset.rules.length, 2);
 
-    // Make it public — discovery must still hide pending candidates.
+    // Make it public — both rules are in effect, so discovery exposes them.
     await fetch(`${base}/api/rulesets/${r1.ruleset.id}`, {
       method: "PUT", headers: auth(alice), body: JSON.stringify({ visibility: "public" }),
     });
     const disc = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/app`)).json()) as any;
     assert.equal(disc.rulesets.length, 1);
-    assert.equal(disc.rulesets[0].rules.length, 0, "pending candidates hidden from discovery");
+    assert.equal(disc.rulesets[0].rules.length, 2, "in-effect candidates are visible");
 
-    // Owner promotes one candidate (clear pending) via PUT → discovery now shows it.
-    const promoted = r2.ruleset.rules.map((x: any, i: number) => ({ ...x, pending: i === 0 ? false : x.pending }));
+    // Owner disables one rule via PUT → discovery hides just that one.
+    const toggled = r2.ruleset.rules.map((x: any, i: number) => ({ ...x, disabled: i === 0 }));
     await fetch(`${base}/api/rulesets/${r1.ruleset.id}`, {
-      method: "PUT", headers: auth(alice), body: JSON.stringify({ rules: promoted }),
+      method: "PUT", headers: auth(alice), body: JSON.stringify({ rules: toggled }),
     });
     const disc2 = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/app`)).json()) as any;
-    assert.equal(disc2.rulesets[0].rules.length, 1, "promoted rule now visible");
+    assert.equal(disc2.rulesets[0].rules.length, 1, "disabled rule hidden from discovery");
+
+    // Legacy `pending` flag still hides a rule (backward-compat, no migration).
+    const withPending = r2.ruleset.rules.map((x: any, i: number) => ({ ...x, disabled: false, pending: i === 1 }));
+    await fetch(`${base}/api/rulesets/${r1.ruleset.id}`, {
+      method: "PUT", headers: auth(alice), body: JSON.stringify({ rules: withPending }),
+    });
+    const disc3 = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/app`)).json()) as any;
+    assert.equal(disc3.rulesets[0].rules.length, 1, "legacy pending rule hidden; the other in effect");
 
     // A different project filter excludes this project-scoped ruleset.
     const other = (await (await fetch(`${base}/api/u/alice/rulesets?project=github.com/acme/other`)).json()) as any;

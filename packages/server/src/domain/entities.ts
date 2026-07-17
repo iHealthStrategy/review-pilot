@@ -217,11 +217,18 @@ export interface ReviewRule {
   /** Semantic topics (e.g. "security", "performance"); empty = always. */
   readonly topics: string[];
   /**
-   * Auto-extracted candidate rule awaiting the owner's confirmation. Pending
-   * rules are stored (auto-submitted by the skill) but NOT applied during review
-   * and NOT exposed via public discovery until the owner promotes them.
+   * LEGACY opt-in flag. Historically the skill auto-submitted rules as `pending`
+   * and they stayed inert until the owner promoted them. New candidates are no
+   * longer created pending — they take effect immediately (see `disabled`). This
+   * flag is kept only so PRE-EXISTING pending rules remain inert until enabled.
    */
   readonly pending?: boolean;
+  /**
+   * Opt-out flag. Auto-grown rules now apply by default; set `disabled` to turn a
+   * rule off without deleting it. A rule is IN EFFECT (applied during review and
+   * exposed via public discovery) only when it is neither `pending` nor `disabled`.
+   */
+  readonly disabled?: boolean;
 }
 
 /**

@@ -208,8 +208,10 @@ async function principalHandle(
 
 /**
  * Coerce request `rules` into validated ReviewRule[] (selectors default to []).
- * When `forcePending` is set, every rule is marked pending (the candidate path);
- * otherwise the per-rule `pending` flag is honoured (the UI promote/keep path).
+ * The per-rule `pending` and `disabled` flags are honoured so the UI can promote
+ * a legacy pending rule (clear `pending`) or toggle a rule off (`disabled`).
+ * `forcePending` is retained for legacy callers but is no longer used by the
+ * auto-grow candidate path, which now stores rules in effect by default.
  */
 function parseRules(v: unknown, forcePending = false): ReviewRule[] {
   if (!Array.isArray(v)) return [];
@@ -229,6 +231,7 @@ function parseRules(v: unknown, forcePending = false): ReviewRule[] {
       languages: asStrArray(r.languages),
       topics: asStrArray(r.topics),
       ...(forcePending || r.pending === true ? { pending: true } : {}),
+      ...(r.disabled === true ? { disabled: true } : {}),
     });
   }
   return rules;
@@ -582,9 +585,10 @@ const ROUTES: Route[] = [
     },
   },
   {
-    // Auto-grow: the local skill submits extracted key points as PENDING
-    // candidate rules into the caller's OWN per-project ruleset (upsert by
-    // (owner, project)). PAT/session-authenticated; the owner promotes them later.
+    // Auto-grow: the local skill submits extracted key points as candidate rules
+    // into the caller's OWN per-project ruleset (upsert by (owner, project)).
+    // PAT/session-authenticated. Candidates now take effect immediately (opt-out):
+    // the owner can disable any rule later rather than having to promote each one.
     method: "POST",
     pattern: /^\/api\/rulesets\/candidates$/,
     handler: async ({ principal, body, auth }, repo) => {
@@ -592,7 +596,7 @@ const ROUTES: Route[] = [
       const b = (body ?? {}) as Record<string, unknown>;
       const project = normalizeProjectKey(asString(b.project, "project"));
       const projectLabel = typeof b.projectLabel === "string" && b.projectLabel ? b.projectLabel : project;
-      const candidates = parseRules(b.rules, true); // forced pending
+      const candidates = parseRules(b.rules); // in effect by default (opt-out)
       if (!candidates.length) throw new HttpError(400, "field 'rules' must contain at least one rule");
 
       const existing = await repo.findRulesetByOwnerAndProject(p.userId, project);
@@ -680,10 +684,11 @@ const ROUTES: Route[] = [
         .filter((r) => !projectFilter || r.project === "" || r.project === projectFilter)
         // Strip PII: this endpoint is unauthenticated, so never leak the owner's
         // email or internal id. `handle` is the intended public identifier.
-        // Pending candidates are private to the owner — never expose them either.
+        // Only rules IN EFFECT are exposed — never legacy pending candidates nor
+        // rules the owner has disabled.
         .map(({ ownerId: _ownerId, ownerEmail: _ownerEmail, ...pub }) => ({
           ...pub,
-          rules: pub.rules.filter((rule) => !rule.pending),
+          rules: pub.rules.filter((rule) => !rule.pending && !rule.disabled),
         }));
       return ok({
         handle,
