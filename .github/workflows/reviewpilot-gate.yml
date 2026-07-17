@@ -1,0 +1,30 @@
+# ReviewPilot 自举门禁(dogfood):每个 PR 必须携带一枚有效的 ReviewPilot
+# attestation —— 即本地用 reviewpilot-review skill 评审、由 ReviewPilot 服务实例
+# 按策略(本仓库要求 block + major:必须评审过且无 major 问题)签发的令牌 ——
+# 才能合并。验证在 CI 内**离线**完成:用预置公钥校验签名/过期/tree 绑定/项目
+# 作用域/verdict,从不回调 ReviewPilot 服务器。用的是本仓库自带的
+# verify-attestation action(./),这正是"用自己的产品守自己的仓库"。
+#
+# 公钥存于仓库 secret REVIEWPILOT_ATTEST_PUBLIC_KEY(= 部署实例
+# GET /api/attest/pubkey 返回的 publicKey)。
+#
+# ⚠️ 信任根:pull_request 事件会用 PR 分支里的 workflow 定义来跑,所以这个文件
+# 和 verify-attestation/ 目录由 .github/CODEOWNERS 保护 —— 改动它们的 PR 必须经
+# code owner 批准(配合 ruleset 的 require code-owner-review),被改弱的门禁才无法
+# 合入默认分支。
+name: ReviewPilot Gate
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  attestation: # ← job 名即 status-check 名,必须与 ruleset 里的 context 一致
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 必须:要读 head commit 的 tree 与 Reviewed-Token trailer
+      - uses: ./verify-attestation
+        with:
+          public-key: ${{ secrets.REVIEWPILOT_ATTEST_PUBLIC_KEY }}
+          # project 不填:默认 github.com/<owner>/<repo>,与本地 skill 计算的一致。
+          # require 默认 true:缺失/无效 attestation 即失败。

@@ -1,0 +1,10 @@
+# 信任根:门禁的定义(workflows)与验证器(verify-attestation)只能由受信任的
+# 维护者改动。否则任何人都能提一个把门禁改成"永远通过"的 PR,并让这个被改弱的
+# workflow 跑在自己的 PR 上,从而绕过门禁。
+#
+# 配合分支 ruleset 的 "require code owner review",改动下面这些路径的 PR 必须经
+# code owner 批准才能合入默认分支 —— 被削弱的门禁因此永远到不了 main。
+#
+# 把 @huangyilord 换成你的受信任维护者账号或团队(如 @iHealthStrategy/platform-admins)。
+/.github/               @huangyilord
+/verify-attestation/    @huangyilord
