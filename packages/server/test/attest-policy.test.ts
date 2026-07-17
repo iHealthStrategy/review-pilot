@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAppServer } from "../src/app.js";
@@ -162,6 +162,31 @@ test("attest issuance reflects the live Web-UI policy, not the env seed", async 
     assert.equal(claims.verdict, "fail");
     assert.equal(claims.treeSha, "tree-1");
   });
+});
+
+test("policy store: migrates a legacy flat file into the global default", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rp-policy-legacy-"));
+  const filePath = join(dir, "policy.json");
+  // Pre per-project format: a single flat policy object, no { global, projects }.
+  writeFileSync(
+    filePath,
+    JSON.stringify({ enforce: "block", blockSeverity: "critical", updatedAt: "2025-12-31T00:00:00Z", updatedBy: "@old" }),
+  );
+  const defaults: AttestPolicyDefaults = { enforce: "warn", blockSeverity: "major" };
+  const s = new FileAttestPolicyStore({ defaults, filePath, clock: () => "2026-02-02T00:00:00Z" });
+  await s.init();
+  // The legacy value became the global default; no overrides.
+  const g = await s.getGlobal();
+  assert.equal(g.enforce, "block");
+  assert.equal(g.blockSeverity, "critical");
+  assert.equal(g.updatedBy, "@old");
+  assert.equal((await s.listOverrides()).length, 0);
+  // Adding an override re-persists in the new shape, preserving the migrated global.
+  await s.set({ enforce: "warn" }, "@admin", "github.com/acme/app");
+  const s2 = new FileAttestPolicyStore({ defaults, filePath });
+  await s2.init();
+  assert.equal((await s2.getGlobal()).enforce, "block");
+  assert.equal((await s2.getEffective("github.com/acme/app")).source, "project");
 });
 
 test("policy store: per-project override resolves over the global; delete restores fallback", async () => {
