@@ -203,6 +203,44 @@ const html = `<!doctype html>
       .badge-pending { display: inline-block; font-size: 11px; font-weight: 600; color: var(--amber); background: var(--amber-bg); border: 1px solid rgba(231,176,110,.35); border-radius: 999px; padding: 2px 9px; margin-right: 8px; }
       .row-has-pending td { background: var(--amber-bg); }
 
+      /* ── Ruleset cards (community list) ────────────────────────────
+         Community entries carry a few unavoidably long values: 64-char
+         owner handles, a one-liner invocation command and prose
+         descriptions. In a table each column stretches to its widest cell
+         and the rest wrap into very tall rows, so they render as a card
+         grid instead — every long value gets its own line and is clamped
+         or ellipsised, with the full text in a title tooltip + a copy button. */
+      .rs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 14px; }
+      .rs-card { display: flex; flex-direction: column; gap: 10px; padding: 15px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); transition: border-color .12s, transform .12s; }
+      .rs-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+      .rs-card h4 { margin: 0; font-size: 14px; font-weight: 620; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+      .rs-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+      .rs-tag { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; font-size: 11.5px; color: var(--text-dim); background: var(--surface-3); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
+      .rs-tag > b { font-weight: 500; color: var(--text); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .rs-desc { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+      .rs-call { margin-top: auto; }
+      .rs-call > label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); font-weight: 600; margin-bottom: 5px; }
+      .rs-call-row { display: flex; gap: 8px; align-items: center; }
+      .rs-call-row code { flex: 1; min-width: 0; padding: 5px 9px; font-size: 11.5px; white-space: nowrap; word-break: normal; overflow: hidden; text-overflow: ellipsis; }
+      .rs-card button { padding: 5px 12px; font-size: 12px; }
+      .rs-copy { flex: 0 0 auto; }
+      .rs-copy.copied { color: var(--green); border-color: rgba(110,231,135,.4); }
+      .rs-foot { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 11px; }
+
+      /* Editing someone else's ruleset as an admin — say so up front */
+      .rs-admin-note { margin: 0 0 15px; padding: 9px 12px; border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.55; color: var(--amber); background: var(--amber-bg); border: 1px solid rgba(231,176,110,.35); }
+
+      /* Read-only ruleset detail (community inspect) */
+      .rs-view-sec { margin-top: 16px; }
+      .rs-view-sec > label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); font-weight: 600; margin-bottom: 6px; }
+      .rs-view-sec > p { margin: 0; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+      .rs-view-sec > pre { margin: 0; }
+      .rule-view { border: 1px solid var(--border-strong); border-radius: var(--r); padding: 11px 13px; margin-bottom: 9px; background: var(--surface-2); }
+      .rule-view:last-child { margin-bottom: 0; }
+      .rule-view.off { border-color: rgba(231,176,110,.35); background: var(--amber-bg); }
+      .rule-view h5 { margin: 0 0 7px; font-size: 13px; font-weight: 620; }
+      .rule-view p { margin: 8px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--text-dim); white-space: pre-wrap; }
+
       /* ── Info card (orchestrator install) ──────────────────────── */
       .card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 18px 20px; margin-bottom: 18px; background: linear-gradient(180deg, var(--surface-2), var(--surface)); box-shadow: var(--shadow); }
       .card h3 { margin: 14px 0 6px; font-size: 13.5px; }
@@ -367,6 +405,7 @@ const html = `<!doctype html>
       <div class="modal">
         <div class="modal-head"><h2 id="ruleset-modal-title">新建规则集</h2><button class="close" data-close>×</button></div>
         <form id="ruleset-form">
+          <p class="rs-admin-note" id="ruleset-owner-note" hidden></p>
           <input type="hidden" name="id" />
           <input type="hidden" name="project" />
           <div class="field"><label>名称</label><input name="name" placeholder="我的严格规则" required /></div>
@@ -388,6 +427,14 @@ const html = `<!doctype html>
       </div>
     </div>
 
+    <!-- Read-only ruleset detail: anyone may inspect a community ruleset in full -->
+    <div class="modal-overlay" id="rs-view-modal" data-modal>
+      <div class="modal" style="width:720px">
+        <div class="modal-head"><h2 id="rs-view-title">规则集详情</h2><button class="close" data-close>×</button></div>
+        <div id="rs-view-body"></div>
+      </div>
+    </div>
+
     <!-- Scheduled-scan result detail modal -->
     <div class="modal-overlay" id="scan-modal" data-modal>
       <div class="modal" style="width:780px">
@@ -400,6 +447,32 @@ const html = `<!doctype html>
     <script>
       const MOCK = JSON.parse(document.getElementById("mock-data").textContent);
       const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+      // Copy arbitrary text, falling back to a throwaway textarea where the
+      // async clipboard API is unavailable (non-secure origins, old Safari).
+      async function copyPlain(text) {
+        try { await navigator.clipboard.writeText(text); return; } catch {}
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch {}
+        ta.remove();
+      }
+      // Flash "已复制" on a copy button, then restore its label.
+      function flashCopied(btn) {
+        const label = btn.textContent;
+        btn.textContent = "已复制"; btn.classList.add("copied");
+        setTimeout(() => { btn.textContent = label; btn.classList.remove("copied"); }, 1500);
+      }
+      // Wire every [data-copy] button under \`root\` to copy its attribute value.
+      function bindCopyButtons(root) {
+        if (!root) return;
+        root.querySelectorAll("[data-copy]").forEach((b) => {
+          b.onclick = async () => { await copyPlain(b.getAttribute("data-copy")); flashCopied(b); };
+        });
+      }
 
       // Wrap every <pre> under \`root\` with a one-click "复制" button (idempotent).
       function addCopyButtons(root) {
@@ -907,7 +980,16 @@ const html = `<!doctype html>
         f.reset();
         document.getElementById("ruleset-result").textContent = "";
         document.getElementById("rs-rules").innerHTML = "";
-        document.getElementById("ruleset-modal-title").textContent = rs ? "编辑规则集" : "新建规则集";
+        // Admins may edit rulesets they don't own — say so, so a moderation edit
+        // is never mistaken for editing one's own copy.
+        const foreign = !!(rs && me && rs.ownerId !== me.id);
+        document.getElementById("ruleset-modal-title").textContent =
+          rs ? (foreign ? "编辑规则集(管理员)" : "编辑规则集") : "新建规则集";
+        const note = document.getElementById("ruleset-owner-note");
+        note.hidden = !foreign;
+        note.textContent = foreign
+          ? "⚠ 你正在以管理员身份修改 " + (rs.ownerHandle || rs.ownerEmail || "他人") + " 的规则集,保存后对其所有使用者立即生效。"
+          : "";
         f.id.value = rs ? rs.id : "";
         f.project.value = rs ? (rs.project || "") : "";
         if (rs) {
@@ -918,6 +1000,46 @@ const html = `<!doctype html>
           (rs.rules || []).forEach(addRuleRow);
         }
         openModal("ruleset-modal");
+      }
+      // Read-only detail for a community ruleset: the full rule text is public
+      // information (the skill installs it verbatim), so any signed-in user may
+      // inspect it — only the owner and admins get the editor.
+      function openRulesetView(rs) {
+        if (!rs) return;
+        const tag = (k, v) => \`<span class="rs-tag">\${esc(k)} <b title="\${esc(v)}">\${esc(v)}</b></span>\`;
+        const sec = (label, html) => \`<div class="rs-view-sec"><label>\${esc(label)}</label>\${html}</div>\`;
+        const rules = rs.rules || [];
+        const selectors = (r) => [
+          r.globs && r.globs.length ? tag("路径", r.globs.join(", ")) : "",
+          r.languages && r.languages.length ? tag("语言", r.languages.join(", ")) : "",
+          r.topics && r.topics.length ? tag("主题", r.topics.join(", ")) : "",
+        ].join("") || '<span class="rs-tag">始终生效</span>';
+        const ruleHtml = rules.length
+          ? rules.map((r) => {
+              const off = r.pending || r.disabled;
+              return \`<div class="rule-view\${off ? " off" : ""}">
+                <h5>\${off ? '<span class="badge-pending">已停用</span>' : ""}\${esc(r.title || "Rule")}</h5>
+                <div class="rs-tags">\${selectors(r)}</div>
+                <p>\${esc(r.instruction || "")}</p>
+              </div>\`;
+            }).join("")
+          : '<p class="muted">(无按需规则)</p>';
+        document.getElementById("rs-view-title").textContent = rs.name || "规则集详情";
+        document.getElementById("rs-view-body").innerHTML =
+          \`<div class="rs-tags">
+             \${tag("作者", rs.ownerHandle || rs.ownerEmail || "—")}
+             \${tag("项目", rs.projectLabel || rs.project || "所有项目")}
+             \${tag("可见性", rs.visibility === "public" ? "公开" : "私有")}
+             \${tag("规则数", String(rules.length))}
+           </div>\`
+          + (rs.description ? sec("描述", \`<p>\${esc(rs.description)}</p>\`) : "")
+          + (rs.language ? sec("评审语言", \`<p>\${esc(rs.language)}</p>\`) : "")
+          + (rs.focus ? sec("评审重点", \`<p>\${esc(rs.focus)}</p>\`) : "")
+          + sec("通用规则(始终生效)", rs.instructions
+              ? \`<pre>\${esc(rs.instructions)}</pre>\`
+              : '<p class="muted">(无)</p>')
+          + sec("按需规则(命中选择器时加载)", ruleHtml);
+        openModal("rs-view-modal");
       }
       document.getElementById("open-ruleset-modal").onclick = () => openRulesetModal(null);
       document.getElementById("rs-add-rule").onclick = () => addRuleRow(null);
@@ -975,14 +1097,34 @@ const html = `<!doctype html>
           <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
         </tr>\`;
         }).join("");
-        const pubRows = pub.map((r) => \`<tr>
-          <td>\${esc(r.name)}</td>
-          <td class="muted">\${esc(r.ownerHandle || r.ownerEmail)}</td>
-          <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
-          <td class="muted">\${esc(r.description || "")}</td>
-          <td>\${r.ownerHandle ? \`<code>让 \${esc(r.ownerHandle)} 帮我 review 我的改动</code>\` : '<span class="muted">—</span>'}</td>
-          <td><button class="secondary" data-fork-rs="\${esc(r.id)}">Fork 到我的</button></td>
-        </tr>\`).join("");
+        // Handles are opaque 64-char ids; shorten for display and keep the full
+        // value in the tooltip + the copy button so the command stays usable.
+        const shortId = (s) => (s.length > 18 ? s.slice(0, 10) + "…" : s);
+        const pubCards = pub.map((r) => {
+          const author = r.ownerHandle || r.ownerEmail || "—";
+          const project = r.projectLabel || r.project || "所有项目";
+          const call = r.ownerHandle ? \`让 \${r.ownerHandle} 帮我 review 我的改动\` : "";
+          const callShort = r.ownerHandle ? \`让 \${shortId(r.ownerHandle)} 帮我 review 我的改动\` : "";
+          return \`<article class="rs-card">
+          <h4 title="\${esc(r.name)}">\${esc(r.name)}</h4>
+          <div class="rs-tags">
+            <span class="rs-tag">作者 <b title="\${esc(author)}">\${esc(shortId(author))}</b></span>
+            <span class="rs-tag">项目 <b title="\${esc(project)}">\${esc(project)}</b></span>
+          </div>
+          \${r.description ? \`<p class="rs-desc" title="\${esc(r.description)}">\${esc(r.description)}</p>\` : ""}
+          <div class="rs-call">
+            <label>一句话调用</label>
+            \${call
+              ? \`<div class="rs-call-row"><code title="\${esc(call)}">\${esc(callShort)}</code><button type="button" class="secondary rs-copy" data-copy="\${esc(call)}">复制</button></div>\`
+              : '<span class="muted">—</span>'}
+          </div>
+          <footer class="rs-foot">
+            <button class="secondary" data-view-rs="\${esc(r.id)}">查看详情</button>
+            \${isAdmin() ? \`<button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button>\` : ""}
+            <button class="secondary" data-fork-rs="\${esc(r.id)}">Fork 到我的</button>
+          </footer>
+        </article>\`;
+        }).join("");
 
         // The orchestrator skill: install once, then call anyone's public rules by handle.
         const orchestrator =
@@ -1006,11 +1148,15 @@ const html = `<!doctype html>
               : \`<p class="muted">还没有规则集,点上方「+ 新建规则集」创建。</p>\`)
           + \`<h3>社区规则集</h3>\`
           + (pub.length
-              ? \`<table><thead><tr><th>名称</th><th>作者</th><th>项目</th><th>描述</th><th>一句话调用</th><th></th></tr></thead><tbody>\${pubRows}</tbody></table>\`
+              ? \`<div class="rs-grid">\${pubCards}</div>\`
               : \`<p class="muted">社区暂无公开规则集。</p>\`);
 
+        // Community entries are indexed too: everyone can open their read-only
+        // detail, and an admin's 编辑 button reuses the same editor.
         const byId = {};
-        mine.forEach((r) => (byId[r.id] = r));
+        [...mine, ...pub].forEach((r) => (byId[r.id] = r));
+        document.querySelectorAll('#rulesets [data-view-rs]').forEach((b) =>
+          (b.onclick = () => openRulesetView(byId[b.getAttribute("data-view-rs")])));
         document.querySelectorAll('#rulesets [data-edit-rs]').forEach((b) =>
           (b.onclick = () => openRulesetModal(byId[b.getAttribute("data-edit-rs")])));
         document.querySelectorAll('#rulesets [data-del-rs]').forEach((b) =>
@@ -1026,6 +1172,7 @@ const html = `<!doctype html>
           }));
         wrapTables(document.querySelector("#rulesets"));
         addCopyButtons(document.querySelector("#rulesets"));
+        bindCopyButtons(document.querySelector("#rulesets"));
       }
 
       // --- Token usage (per configured task; day/week/month) ---

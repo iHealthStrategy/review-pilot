@@ -104,6 +104,61 @@ test("rulesets: cannot edit someone else's; can fork a public one", () =>
     assert.equal((await (await fetch(`${base}/api/rulesets`, { headers: auth(bob) })).json() as any[]).length, 1);
   }));
 
+test("rulesets: anyone may read a public one in full; an admin may edit someone else's", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    const root = await register(repo, "root@x.com", "admin");
+    const rs = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: auth(alice),
+      body: JSON.stringify({
+        name: "Alice Rules",
+        visibility: "public",
+        instructions: "x",
+        rules: [{ title: "SQL", instruction: "no injection", globs: ["**/*.sql"] }],
+      }),
+    })).json()) as any;
+    const hidden = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: auth(alice),
+      body: JSON.stringify({ name: "Hidden", visibility: "private", instructions: "secret" }),
+    })).json()) as any;
+
+    // Read-only detail: a non-owner sees the PUBLIC ruleset in full (rules included).
+    const seen = await fetch(`${base}/api/rulesets/${rs.id}`, { headers: auth(bob) });
+    assert.equal(seen.status, 200);
+    assert.equal(((await seen.json()) as any).rules[0].title, "SQL");
+    // …but a private one stays hidden from a non-owner member.
+    assert.equal((await fetch(`${base}/api/rulesets/${hidden.id}`, { headers: auth(bob) })).status, 404);
+    // An admin may read it (they may also edit it).
+    assert.equal((await fetch(`${base}/api/rulesets/${hidden.id}`, { headers: auth(root) })).status, 200);
+
+    // Reading is not writing: bob still cannot edit Alice's public ruleset.
+    assert.equal(
+      (await fetch(`${base}/api/rulesets/${rs.id}`, {
+        method: "PUT", headers: auth(bob), body: JSON.stringify({ name: "hijack" }),
+      })).status,
+      404,
+    );
+
+    // An admin CAN edit it — and the ruleset stays owned by Alice.
+    const edited = await fetch(`${base}/api/rulesets/${rs.id}`, {
+      method: "PUT",
+      headers: auth(root),
+      body: JSON.stringify({ name: "Moderated", instructions: "y" }),
+    });
+    assert.equal(edited.status, 200);
+    const after = (await edited.json()) as any;
+    assert.equal(after.name, "Moderated");
+    assert.equal(after.instructions, "y");
+    assert.equal(after.ownerId, rs.ownerId, "moderation must not transfer ownership");
+    assert.equal(after.ownerHandle, "alice");
+    // It is still listed as Alice's, not the admin's.
+    const adminOwn = (await (await fetch(`${base}/api/rulesets`, { headers: auth(root) })).json()) as any[];
+    assert.equal(adminOwn.length, 0);
+  }));
+
 test("rulesets: register assigns a handle; public discovery by handle is unauthenticated", () =>
   withApi(async (base, repo) => {
     // Two users share an email local-part → handles must stay unique.

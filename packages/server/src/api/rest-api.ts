@@ -195,6 +195,20 @@ function asVisibility(v: unknown): RulesetVisibility {
   return v === "public" ? "public" : "private";
 }
 
+/**
+ * The owner id a ruleset write must be scoped to: the caller for their own
+ * rulesets, and the ruleset's REAL owner when an admin moderates someone
+ * else's. Keeping the resolution here means the repository contract stays
+ * strictly owner-scoped — there is no privileged bypass below this layer.
+ * An unknown id falls back to the caller so the repository still raises the
+ * usual 404 rather than this layer inventing one.
+ */
+async function rulesetWriteOwner(p: Principal, id: string, repo: Repository): Promise<string> {
+  if (!roleAtLeast(p.role, "admin")) return p.userId;
+  const existing = await repo.getRuleset(id);
+  return existing?.ownerId ?? p.userId;
+}
+
 /** Resolve a principal's public handle (env admin or DB user). */
 async function principalHandle(
   p: Principal,
@@ -667,9 +681,12 @@ const ROUTES: Route[] = [
     handler: async ({ principal, params }, repo) => {
       const p = requirePrincipal(principal);
       const r = await repo.getRuleset(params.id!);
-      if (!r || (r.visibility !== "public" && r.ownerId !== p.userId)) {
-        throw new HttpError(404, "ruleset not found");
-      }
+      // Any authenticated user may read a PUBLIC ruleset in full (read-only
+      // detail view); private ones stay visible to their owner and to admins,
+      // who may also edit them.
+      const mayRead = r
+        && (r.visibility === "public" || r.ownerId === p.userId || roleAtLeast(p.role, "admin"));
+      if (!mayRead) throw new HttpError(404, "ruleset not found");
       return ok(r);
     },
   },
@@ -688,8 +705,10 @@ const ROUTES: Route[] = [
       if (typeof b.instructions === "string") patch.instructions = b.instructions;
       if (typeof b.projectLabel === "string") patch.projectLabel = b.projectLabel;
       if (Array.isArray(b.rules)) patch.rules = parseRules(b.rules);
-      // updateRuleset is owner-scoped → EntityNotFoundError (404) for non-owners.
-      return ok(await repo.updateRuleset(params.id!, p.userId, patch));
+      // updateRuleset is owner-scoped → EntityNotFoundError (404) for non-owners;
+      // an admin's write is scoped to the ruleset's own owner so it goes through.
+      const ownerId = await rulesetWriteOwner(p, params.id!, repo);
+      return ok(await repo.updateRuleset(params.id!, ownerId, patch));
     },
   },
   {
