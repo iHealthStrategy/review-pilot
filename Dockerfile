@@ -66,10 +66,17 @@ RUN if [ -n "$APT_MIRROR" ]; then \
 # stage above (override its source via --build-arg UV_IMAGE). Referencing the
 # stage NAME keeps this working on the legacy builder too.
 COPY --from=uv /uv /uvx /usr/local/bin/
+# tree-sitter-language-pack is a ~100 MB wheel. Over a long-haul link a proxy or
+# CDN edge routinely kills the HTTP/2 stream mid-body ("stream error received:
+# unspecific protocol error"), which uv reports as a distribution-cache write
+# failure. Retry, and keep the parallel stream count low so intermediaries are
+# less likely to reset them in the first place.
 ENV UV_TOOL_DIR=/opt/uv/tools \
     UV_PYTHON_INSTALL_DIR=/opt/uv/python \
     UV_CACHE_DIR=/opt/uv/cache \
-    UV_HTTP_TIMEOUT=300
+    UV_HTTP_TIMEOUT=300 \
+    UV_HTTP_RETRIES=5 \
+    UV_CONCURRENT_DOWNLOADS=4
 # Optional mirrors for restricted networks (China-friendly):
 #   --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
 #   --build-arg UV_PYTHON_INSTALL_MIRROR=https://<mirror>   (Python download)
@@ -79,12 +86,27 @@ ARG UV_PYTHON_INSTALL_MIRROR=
 # Install + pre-warm at BUILD time so reviews never hit PyPI at runtime: uvx
 # reuses the installed tool env (and the cached --from env) offline. Failing
 # here is a loud, visible build error rather than a silently-degraded image.
-RUN if [ -n "$PIP_INDEX_URL" ]; then export UV_DEFAULT_INDEX="$PIP_INDEX_URL"; fi \
- && if [ -n "$UV_PYTHON_INSTALL_MIRROR" ]; then export UV_PYTHON_INSTALL_MIRROR; fi \
- && uv python install 3.12 \
- && uv tool install --python 3.12 code-review-graph \
- && uvx code-review-graph --version \
- && uvx --from code-review-graph python -c "import code_review_graph"
+# A killed stream can leave a half-written cache entry behind, so each retry
+# drops that package's cache before trying again. Five attempts with a growing
+# pause; still a loud build failure if the network never cooperates.
+RUN set -e; \
+    if [ -n "${PIP_INDEX_URL:-}" ]; then export UV_DEFAULT_INDEX="$PIP_INDEX_URL"; fi; \
+    if [ -n "${UV_PYTHON_INSTALL_MIRROR:-}" ]; then export UV_PYTHON_INSTALL_MIRROR; fi; \
+    uv python install 3.12; \
+    n=0; \
+    until uv tool install --python 3.12 code-review-graph; do \
+      n=$((n + 1)); \
+      if [ "$n" -ge 5 ]; then \
+        echo "code-review-graph install failed after $n attempts — if this is a" >&2; \
+        echo "restricted network, rebuild with --build-arg PIP_INDEX_URL=<mirror>" >&2; \
+        exit 1; \
+      fi; \
+      echo "code-review-graph install failed (attempt $n/5), retrying…" >&2; \
+      uv cache clean code-review-graph tree-sitter-language-pack >/dev/null 2>&1 || true; \
+      sleep $((n * 5)); \
+    done; \
+    uvx code-review-graph --version; \
+    uvx --from code-review-graph python -c "import code_review_graph"
 # --- Claude Code CLI (default external review engine) ---
 # Optional npm registry mirror (e.g. https://registry.npmmirror.com).
 ARG NPM_REGISTRY=

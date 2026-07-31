@@ -326,10 +326,26 @@ Or Postgres-backed persistence:
 DB_DRIVER=postgres docker compose --profile postgres up --build
 ```
 
-The image installs `git` (needed to sync full repositories) and the MongoDB
-driver, then starts the unified server. On networks where the Alpine CDN or npm
-registry is slow/unreachable, build with mirror args:
-`docker build --build-arg ALPINE_MIRROR=mirrors.aliyun.com --build-arg NPM_REGISTRY=https://registry.npmmirror.com .` To connect real platforms, set
+The image installs `git` (needed to sync full repositories), the MongoDB driver
+and the structural-context engine (`uv` + `code-review-graph`), then starts the
+unified server. On networks where the upstream registries are slow or
+unreachable, build with mirror args:
+
+```bash
+docker build \
+  --build-arg NODE_IMAGE=docker.m.daocloud.io/library/node:20-slim \
+  --build-arg UV_IMAGE=ghcr.m.daocloud.io/astral-sh/uv:latest \
+  --build-arg APT_MIRROR=mirrors.aliyun.com \
+  --build-arg NPM_REGISTRY=https://registry.npmmirror.com \
+  --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple \
+  .
+```
+
+`PIP_INDEX_URL` matters most on long-haul links: `code-review-graph` pulls
+`tree-sitter-language-pack`, a ~100 MB wheel, and a reset mid-download surfaces
+as `Failed to write to the distribution cache … stream error received`. The
+build retries that install five times on its own; a nearby PyPI mirror avoids
+the problem instead of papering over it. To connect real platforms, set
 `GITHUB_TOKEN` (and/or the GitLab equivalents) so the service can read PRs and
 write back comments/checks, then feed it reviews over `POST /api/tasks` (see
 "Drive the service from GitHub Actions" for the turnkey path).
