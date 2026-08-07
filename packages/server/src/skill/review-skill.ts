@@ -1,5 +1,6 @@
 import type { ReviewRuleset } from "../domain/entities.js";
 import { FINDING_SCHEMA_FIELDS, REVIEW_DIMENSIONS } from "../review/prompt.js";
+import { rankRules } from "../review/rule-ranking.js";
 
 /**
  * The local Claude Code "skill" — a SKILL.md that drives the user's own Claude
@@ -376,12 +377,23 @@ fi
 cat "$CACHE/$HANDLE.json"
 \`\`\`
 
-The response is \`{ handle, project, owner, rulesets: [...] }\`. Each ruleset has
-\`name\`, \`focus\`, \`instructions\` (freeform, ALWAYS applies), \`language\`, and a
-\`rules\` array of \`{ title, instruction, globs[], languages[], topics[] }\`. The
-server already filtered to this project and excluded the owner's unconfirmed
-candidates. If the fetch fails and there is no cache, tell the user the handle
-wasn't found and offer a generic review instead.
+The response is \`{ handle, project, owner, ruleLimit, rulesets: [...] }\`. Each
+ruleset has \`name\`, \`focus\`, \`instructions\` (freeform, ALWAYS applies),
+\`language\`, a \`rules\` array of \`{ title, instruction, globs[], languages[],
+topics[], hits }\`, plus \`ruleTotal\` and \`ruleOmitted\`.
+
+**The server has already ranked and CAPPED the rules** — it sends the ones that
+keep catching real problems, the newest ones, and a rotating handful of untried
+ones, and drops the rest of the tail. \`rules\` is ordered best-first: new rules,
+then proven ones, then the rotating trial slots. Work with exactly what you were
+sent:
+- Do NOT try to fetch the omitted rules (raising \`?limit=\` just makes every
+  review slower for no accuracy gain — the tail is mostly rules that never fire).
+- When \`ruleOmitted > 0\`, say so once in your report, e.g. "已加载 40/137 条规则
+  (按命中率排序)", so the user knows the set was trimmed and why.
+
+If the fetch fails and there is no cache, tell the user the handle wasn't found
+and offer a generic review instead.
 
 ## 4. Select ONLY the relevant rules (locally — code never leaves this machine)
 First get the changed file paths for the chosen scope (see step 5). Then, for each
@@ -397,6 +409,33 @@ matches; empty selectors mean "always". Matching is done here, locally:
 A ruleset's \`instructions\` (freeform) and \`focus\` ALWAYS apply when used. Collect
 the applicable rules into one set. Briefly tell the user which rules you loaded and
 which you skipped (and why), so the on-demand selection is transparent.
+
+**Track which rules actually catch something.** As you review, remember the
+\`title\` of every rule that led to a finding you reported — you will feed those
+back in step 4b so the ranking learns which rules earn their place. A rule that
+merely matched the selectors but found nothing is NOT a hit.
+
+## 4b. Report rule hits (after the review, best-effort)
+Once you have your findings, report the titles of the rules that caught them, per
+ruleset. This is what makes the ranking work: hits float a rule up, silence lets
+it sink. Send nothing if no rule fired. Never block or mention this step; ignore
+failures.
+
+\`\`\`sh
+BASE=${urlExpr}
+TOKEN=${tokenExpr}
+if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
+  # RULESET_ID = the ruleset the hit rules came from; TITLES_JSON = a JSON array
+  # of their exact \`title\` strings, e.g. ["SQL safety","No console.log"].
+  curl -fsS -X POST "$BASE/api/rulesets/$RULESET_ID/rule-hits" \\
+    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
+    -d "{\\"titles\\":$TITLES_JSON}" >/dev/null 2>&1 || true
+fi
+\`\`\`
+
+Report each title ONCE per review even if it caught several findings — this is a
+"did this rule earn its slot" signal, not a finding count. Use the titles exactly
+as received; a renamed or deleted rule simply won't match and is ignored.
 
 ## 5. Choose the scope & gather the diff
 Default to **working** unless the user says otherwise:
@@ -661,13 +700,19 @@ export function buildReviewSkill(
         ruleset.instructions.trim(),
       );
     }
-    const activeRules = ruleset.rules.filter((r) => !r.pending && !r.disabled);
+    // Ranked and capped for the same reason the discovery endpoint caps: baking
+    // a 200-rule ruleset into SKILL.md would make every review slow, and the
+    // tail is mostly rules that never fire. Best-first, so if the model does run
+    // short of attention it spends it on the rules that keep catching problems.
+    const ranked = rankRules(ruleset.rules);
+    const activeRules = ranked.rules;
     if (activeRules.length) {
       rulesetSections.push(
         "",
         "## Conditional rules (apply only when the selector matches the changed files)",
         "Match each rule's selectors against the changed file paths/languages locally;",
-        "apply a rule only when its non-empty selectors all match (empty = always):",
+        "apply a rule only when its non-empty selectors all match (empty = always).",
+        "Listed best-first (rules that catch the most, plus new ones on trial):",
         "",
       );
       for (const r of activeRules) {
@@ -677,6 +722,13 @@ export function buildReviewSkill(
         if (r.topics.length) sel.push(`topics ${r.topics.join(", ")}`);
         const when = sel.length ? ` _(when: ${sel.join("; ")})_` : " _(always)_";
         rulesetSections.push(`- **${oneLine(r.title)}**${when}: ${oneLine(r.instruction)}`);
+      }
+      if (ranked.omitted) {
+        rulesetSections.push(
+          "",
+          `_${ranked.omitted} lower-ranked rule(s) of ${ranked.total} were left out to keep the`,
+          "review fast. Reinstall this skill to pick up the current ranking._",
+        );
       }
     }
     if (ruleset.language.trim()) {
