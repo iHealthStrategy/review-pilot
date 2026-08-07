@@ -34,6 +34,8 @@ import { handleFromEmail } from "../auth/provision.js";
 import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
+import { RULE_LOAD_POLICY } from "../domain/entities.js";
+import { applyRuleHits, rankRules } from "../review/rule-ranking.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
 import { type EnvAdmin, ENV_ADMIN_ID, envAdminFrom } from "../auth/env-admin.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
@@ -227,10 +229,31 @@ async function principalHandle(
  * `forcePending` is retained for legacy callers but is no longer used by the
  * auto-grow candidate path, which now stores rules in effect by default.
  */
-function parseRules(v: unknown, forcePending = false): ReviewRule[] {
+/**
+ * Parse an inbound rules array.
+ *
+ * `createdAt`/`hits`/`lastHitAt` are PASSED THROUGH when the payload carries
+ * them: a ruleset edit from the web UI resends the whole array, so dropping
+ * them here would silently reset every rule's earned ranking on each save.
+ * `stampCreatedAt` gives genuinely new rules (auto-grown candidates) their
+ * creation time so the ranking can grant them a fair-chance slot.
+ */
+function parseRules(
+  v: unknown,
+  forcePending = false,
+  stampCreatedAt?: string,
+): ReviewRule[] {
   if (!Array.isArray(v)) return [];
   const asStrArray = (x: unknown): string[] =>
     Array.isArray(x) ? x.filter((s): s is string => typeof s === "string" && s.length > 0) : [];
+  const asCount = (x: unknown): number | undefined => {
+    const n = typeof x === "number" ? x : Number(x);
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+  };
+  const asIso = (x: unknown): string | undefined => {
+    if (typeof x !== "string" || !x) return undefined;
+    return Number.isFinite(Date.parse(x)) ? x : undefined;
+  };
   const rules: ReviewRule[] = [];
   for (const item of v) {
     if (!item || typeof item !== "object") continue;
@@ -238,6 +261,9 @@ function parseRules(v: unknown, forcePending = false): ReviewRule[] {
     const title = typeof r.title === "string" ? r.title.trim() : "";
     const instruction = typeof r.instruction === "string" ? r.instruction.trim() : "";
     if (!instruction) continue; // a rule with no instruction is meaningless
+    const hits = asCount(r.hits);
+    const lastHitAt = asIso(r.lastHitAt);
+    const createdAt = asIso(r.createdAt) ?? stampCreatedAt;
     rules.push({
       title: title || "Rule",
       instruction,
@@ -246,6 +272,9 @@ function parseRules(v: unknown, forcePending = false): ReviewRule[] {
       topics: asStrArray(r.topics),
       ...(forcePending || r.pending === true ? { pending: true } : {}),
       ...(r.disabled === true ? { disabled: true } : {}),
+      ...(createdAt ? { createdAt } : {}),
+      ...(hits === undefined ? {} : { hits }),
+      ...(lastHitAt ? { lastHitAt } : {}),
     });
   }
   return rules;
@@ -643,7 +672,9 @@ const ROUTES: Route[] = [
       const b = (body ?? {}) as Record<string, unknown>;
       const project = normalizeProjectKey(asString(b.project, "project"));
       const projectLabel = typeof b.projectLabel === "string" && b.projectLabel ? b.projectLabel : project;
-      const candidates = parseRules(b.rules); // in effect by default (opt-out)
+      // In effect by default (opt-out), and stamped so the ranking can give a
+      // brand-new rule a reserved slot in the next few reviews.
+      const candidates = parseRules(b.rules, false, new Date().toISOString());
       if (!candidates.length) throw new HttpError(400, "field 'rules' must contain at least one rule");
 
       const existing = await repo.findRulesetByOwnerAndProject(p.userId, project);
@@ -673,6 +704,39 @@ const ROUTES: Route[] = [
         rules: candidates,
       });
       return ok({ ruleset: created, added: candidates.length, skipped: 0 }, 201);
+    },
+  },
+  {
+    // A review reports which rules actually CAUGHT something, so the ranking can
+    // float them up next time. Allowed for the owner and for any PUBLIC ruleset:
+    // a shared ruleset only improves if the people using it feed hits back.
+    //
+    // Read-modify-write, like the candidates upsert above: two reviews reporting
+    // hits on the same ruleset at the same instant can lose one increment. That
+    // is acceptable for a ranking counter — it is a popularity signal, not a
+    // ledger — and avoids a per-rule row for what is stored as a JSON blob.
+    method: "POST",
+    pattern: /^\/api\/rulesets\/(?<id>[^/]+)\/rule-hits$/,
+    handler: async ({ principal, params, body }, repo) => {
+      const p = requirePrincipal(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const titles = Array.isArray(b.titles)
+        ? b.titles.filter((t): t is string => typeof t === "string")
+        : [];
+      const ruleset = await repo.getRuleset(params.id!);
+      if (!ruleset) throw new HttpError(404, "ruleset not found");
+      const mayReport =
+        ruleset.ownerId === p.userId ||
+        ruleset.visibility === "public" ||
+        roleAtLeast(p.role, "admin");
+      if (!mayReport) throw new HttpError(403, "cannot report hits on a private ruleset you do not own");
+      if (!titles.length) return ok({ matched: 0, updated: false });
+      const { rules, matched } = applyRuleHits(ruleset.rules, titles, new Date().toISOString());
+      if (!matched.length) return ok({ matched: 0, updated: false });
+      // Scope the write to the ruleset's REAL owner: the reporter is often not
+      // the owner, and the repository contract stays strictly owner-scoped.
+      await repo.updateRuleset(ruleset.id, ruleset.ownerId, { rules });
+      return ok({ matched: matched.length, updated: true });
     },
   },
   {
@@ -731,21 +795,40 @@ const ROUTES: Route[] = [
       // Optional project filter: a project-scoped ruleset matches its own key;
       // an "any project" ruleset (project === "") always matches.
       const projectFilter = normalizeProjectKey(query.get("project") ?? "");
+      // Cap how many rules a review has to weigh. Without this a long-lived
+      // project's auto-grown ruleset keeps growing and every review gets slower
+      // for no accuracy gain; `rankRules` keeps the ones that earn their place.
+      // `limit=0` is meaningful ("just tell me the totals"), so test the raw
+      // string first: Number(null) is 0, which would silently turn a plain
+      // request with no ?limit= into "load nothing".
+      const rawLimit = query.get("limit");
+      const parsedLimit = rawLimit === null || rawLimit === "" ? NaN : Number(rawLimit);
+      const limit = Number.isFinite(parsedLimit) && parsedLimit >= 0
+        ? Math.min(Math.floor(parsedLimit), RULE_LOAD_POLICY.maxLimit)
+        : RULE_LOAD_POLICY.defaultLimit;
       const rulesets = all
         .filter((r) => r.ownerHandle === handle)
         .filter((r) => !projectFilter || r.project === "" || r.project === projectFilter)
         // Strip PII: this endpoint is unauthenticated, so never leak the owner's
         // email or internal id. `handle` is the intended public identifier.
-        // Only rules IN EFFECT are exposed — never legacy pending candidates nor
-        // rules the owner has disabled.
-        .map(({ ownerId: _ownerId, ownerEmail: _ownerEmail, ...pub }) => ({
-          ...pub,
-          rules: pub.rules.filter((rule) => !rule.pending && !rule.disabled),
-        }));
+        // Only rules IN EFFECT are exposed (rankRules drops legacy pending and
+        // disabled rules), ranked best-first and capped at `limit`.
+        .map(({ ownerId: _ownerId, ownerEmail: _ownerEmail, ...pub }) => {
+          const ranked = rankRules(pub.rules, { limit });
+          return {
+            ...pub,
+            rules: ranked.rules,
+            // Make the cap visible so the skill (and the UI) can say what was
+            // left out instead of silently pretending this is the whole set.
+            ruleTotal: ranked.total,
+            ruleOmitted: ranked.omitted,
+          };
+        });
       return ok({
         handle,
         ...(projectFilter ? { project: projectFilter } : {}),
         owner: { handle },
+        ruleLimit: limit,
         rulesets,
       });
     },

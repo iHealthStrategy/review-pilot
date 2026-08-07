@@ -201,6 +201,9 @@ const html = `<!doctype html>
       .rule-head:empty { display: none; }
       .rule-pending { border-color: var(--amber); background: var(--amber-bg); }
       .badge-pending { display: inline-block; font-size: 11px; font-weight: 600; color: var(--amber); background: var(--amber-bg); border: 1px solid rgba(231,176,110,.35); border-radius: 999px; padding: 2px 9px; margin-right: 8px; }
+      /* Hit count — the ranking signal, so it reads as earned status. */
+      .badge-hits { display: inline-block; font-size: 11px; font-weight: 600; color: var(--green); background: var(--green-bg); border: 1px solid rgba(110,231,135,.3); border-radius: 999px; padding: 2px 9px; }
+      .badge-hits-none { color: var(--muted); background: var(--surface-3); border-color: var(--border); font-weight: 500; }
       .row-has-pending td { background: var(--amber-bg); }
 
       /* ── Ruleset cards (community list) ────────────────────────────
@@ -431,6 +434,7 @@ const html = `<!doctype html>
           <div class="field">
             <label>按需规则(仅当改动命中选择器时加载)</label>
             <p class="muted" style="margin:.2rem 0 .4rem">选择器留空 = 始终生效。匹配在本地完成,代码不会上传。多个值用逗号分隔。</p>
+            <p class="muted" style="margin:.2rem 0 .4rem">规则多了不会拖慢评审:每次评审只加载<b>排名靠前的 40 条</b> —— <b>命中多的</b>(真抓到过问题)优先,并给<b>新规则</b>留出约三成名额试用。命中数由评审自动累计,长期不命中的会自然沉底(但不会删除)。</p>
             <div id="rs-rules"></div>
             <button type="button" id="rs-add-rule" class="secondary">+ 添加规则</button>
           </div>
@@ -954,6 +958,12 @@ const html = `<!doctype html>
         const row = document.createElement("div");
         row.dataset.pending = r.pending ? "1" : "0";
         row.dataset.disabled = r.disabled ? "1" : "0";
+        // Ranking state is NOT editable here, but it must survive a save: the
+        // form resends the whole rules array, so dropping these would reset
+        // every rule's earned hit count on each edit.
+        row.dataset.hits = String(Number(r.hits) || 0);
+        if (r.createdAt) row.dataset.createdAt = r.createdAt;
+        if (r.lastHitAt) row.dataset.lastHitAt = r.lastHitAt;
         // One unified 启用/停用 switch. A rule is IN EFFECT unless it is a legacy
         // pending candidate OR has been disabled; both read as "已停用" here.
         // Enabling clears BOTH flags (promotes a legacy pending rule); disabling
@@ -962,9 +972,15 @@ const html = `<!doctype html>
           const off = row.dataset.pending === "1" || row.dataset.disabled === "1";
           row.className = "rule-row" + (off ? " rule-pending" : "");
           const head = row.querySelector(".rule-head");
-          head.innerHTML = off
+          // Hit count is the ranking signal — show it so the owner can see which
+          // rules earn their slot and which never fire.
+          const hits = Number(row.dataset.hits) || 0;
+          const hitTag = hits
+            ? \`<span class="badge-hits" title="累计命中次数(该规则真的抓到过问题)">命中 \${hits}</span>\`
+            : '<span class="badge-hits badge-hits-none" title="还没抓到过问题;新规则会先获得几次机会">未命中</span>';
+          head.innerHTML = (off
             ? '<span class="badge-pending">已停用</span> <button type="button" class="secondary" data-toggle-rule>启用</button>'
-            : '<button type="button" class="secondary" data-toggle-rule>停用</button>';
+            : '<button type="button" class="secondary" data-toggle-rule>停用</button>') + " " + hitTag;
           head.querySelector("[data-toggle-rule]").onclick = () => {
             if (row.dataset.pending === "1" || row.dataset.disabled === "1") {
               row.dataset.pending = "0"; row.dataset.disabled = "0";
@@ -1004,6 +1020,10 @@ const html = `<!doctype html>
             topics: parseCsv(get("topics")),
             pending: row.dataset.pending === "1",
             disabled: row.dataset.disabled === "1",
+            // Carry the ranking state through unchanged (see addRuleRow).
+            ...(Number(row.dataset.hits) ? { hits: Number(row.dataset.hits) } : {}),
+            ...(row.dataset.createdAt ? { createdAt: row.dataset.createdAt } : {}),
+            ...(row.dataset.lastHitAt ? { lastHitAt: row.dataset.lastHitAt } : {}),
           });
         });
         return rules;
@@ -1050,8 +1070,9 @@ const html = `<!doctype html>
         const ruleHtml = rules.length
           ? rules.map((r) => {
               const off = r.pending || r.disabled;
+              const hits = Number(r.hits) || 0;
               return \`<div class="rule-view\${off ? " off" : ""}">
-                <h5>\${off ? '<span class="badge-pending">已停用</span>' : ""}\${esc(r.title || "Rule")}</h5>
+                <h5>\${off ? '<span class="badge-pending">已停用</span>' : ""}\${esc(r.title || "Rule")} \${hits ? \`<span class="badge-hits">命中 \${hits}</span>\` : ""}</h5>
                 <div class="rs-tags">\${selectors(r)}</div>
                 <p>\${esc(r.instruction || "")}</p>
               </div>\`;
@@ -1121,15 +1142,23 @@ const html = `<!doctype html>
         };
         const ruleCount = (r) => (r.rules ? r.rules.length : 0);
         const offCount = (r) => (r.rules ? r.rules.filter((x) => x.pending || x.disabled).length : 0);
+        // Rules in effect, and how many of them a single review actually loads —
+        // mirrors RULE_LOAD_POLICY.defaultLimit on the server.
+        const RULE_LOAD_LIMIT = 40;
+        const liveCount = (r) => (r.rules ? r.rules.filter((x) => !x.pending && !x.disabled).length : 0);
 
         const mineRows = mine.map((r) => {
           const off = offCount(r);
           const offTag = off ? \` <span class="badge-pending">\${off} 条已停用</span>\` : "";
+          const live = liveCount(r);
+          const capTag = live > RULE_LOAD_LIMIT
+            ? \` <span class="muted" title="每次评审只加载排名靠前的 \${RULE_LOAD_LIMIT} 条(命中多的和新规则优先)">· 每次加载 \${RULE_LOAD_LIMIT}/\${live}</span>\`
+            : "";
           return \`<tr\${off ? ' class="row-has-pending"' : ""}>
           <td>\${esc(r.name)}</td>
           <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
-          <td class="muted">\${ruleCount(r)} 条规则\${offTag}</td>
+          <td class="muted">\${ruleCount(r)} 条规则\${offTag}\${capTag}</td>
           <td>\${installCopyButtons((h) => cmd(r, h))}</td>
           <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
         </tr>\`;

@@ -229,7 +229,45 @@ export interface ReviewRule {
    * exposed via public discovery) only when it is neither `pending` nor `disabled`.
    */
   readonly disabled?: boolean;
+  /**
+   * When the rule entered the ruleset. Drives the "give a new rule a fair
+   * chance" quota in {@link rankRules}: a rule that has never been loaded
+   * cannot have hits yet, so recency is the only signal it has. Absent on
+   * rules created before hit-tracking existed — those rank as oldest.
+   */
+  readonly createdAt?: string;
+  /**
+   * How many times this rule actually CAUGHT something — i.e. a review reported
+   * a finding it was responsible for. Not "how often it was loaded": the point
+   * is to rank rules that earn their place in the prompt. Absent/0 = never hit.
+   */
+  readonly hits?: number;
+  /** ISO time of the most recent hit; breaks ties between equal hit counts. */
+  readonly lastHitAt?: string;
 }
+
+/**
+ * How many rules a single review loads, and how that budget is split.
+ *
+ * Rulesets grow without bound because every review can auto-grow new rules into
+ * them, and a review that has to weigh 200 rules against every changed file is
+ * slow and no more accurate — the long tail is mostly rules that never fire. So
+ * the server ranks and caps instead of sending everything.
+ *
+ * `newRuleShare` reserves part of the budget for untried rules: pure hit-count
+ * ranking would freeze the top of the list forever, since a rule that never
+ * gets loaded can never record a hit and climb.
+ */
+export const RULE_LOAD_POLICY = {
+  /** Rules sent per ruleset per review. */
+  defaultLimit: 40,
+  /** Hard ceiling a caller may request via `?limit=`. */
+  maxLimit: 200,
+  /** Fraction of the budget reserved for untried-but-recent rules. */
+  newRuleShare: 0.3,
+  /** How long a rule counts as "new" and keeps its reserved-slot claim. */
+  newRuleGraceMs: 14 * 24 * 60 * 60 * 1000,
+} as const;
 
 /**
  * A user-authored set of review rules/preferences. The platform turns it into a

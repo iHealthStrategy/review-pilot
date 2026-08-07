@@ -317,3 +317,179 @@ test("ruleset skill: public installs openly; private needs the owner's token", (
     // An unknown platform segment is not a route — it must not leak a private skill.
     assert.equal((await fetch(`${base}/skill/ruleset/${priv.id}/windsurf/install.sh`)).status, 404);
   }));
+
+// --- Rule load budget + hit counting -----------------------------------------
+// A project's ruleset grows on every auto-grow, so discovery must rank and cap
+// the rules it hands a review rather than shipping the whole tail.
+
+const mkRule = (title: string, extra: Record<string, unknown> = {}) => ({
+  title, instruction: `check ${title}`, globs: [], languages: [], topics: [], ...extra,
+});
+
+test("discovery: ranks and caps the rules a review loads, and says what it dropped", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const rules = Array.from({ length: 60 }, (_, i) => mkRule(`rule ${i}`, { hits: i }));
+    const rs = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({ name: "Big", visibility: "public", rules }),
+    })).json()) as any;
+    assert.equal(rs.rules.length, 60, "all 60 are STORED");
+
+    const disc = (await (await fetch(`${base}/api/u/owner/rulesets`)).json()) as any;
+    const got = disc.rulesets[0];
+    assert.equal(disc.ruleLimit, 40, "default budget");
+    assert.equal(got.rules.length, 40, "only the ranked top 40 are SENT");
+    assert.equal(got.ruleTotal, 60);
+    assert.equal(got.ruleOmitted, 20);
+    // Highest hits first, so the rules that keep catching things lead.
+    assert.equal(got.rules[0].title, "rule 59");
+    assert.ok(!got.rules.some((r: any) => r.title === "rule 0"), "the cold tail is dropped");
+
+    // A bare request must use the DEFAULT budget, never "load nothing":
+    // Number(null) is 0, so an absent ?limit= is easy to mis-parse as a zero cap.
+    assert.ok(got.rules.length > 0, "no ?limit= must not mean zero rules");
+    // limit=0 IS a real request, though: totals without the payload.
+    const none = (await (await fetch(`${base}/api/u/owner/rulesets?limit=0`)).json()) as any;
+    assert.equal(none.ruleLimit, 0);
+    assert.equal(none.rulesets[0].rules.length, 0);
+    assert.equal(none.rulesets[0].ruleTotal, 60, "totals still reported");
+
+    // An explicit smaller budget is honoured...
+    const small = (await (await fetch(`${base}/api/u/owner/rulesets?limit=5`)).json()) as any;
+    assert.equal(small.rulesets[0].rules.length, 5);
+    assert.equal(small.rulesets[0].ruleOmitted, 55);
+    // ...and an absurd one is clamped, so a caller cannot re-create the slow path.
+    const huge = (await (await fetch(`${base}/api/u/owner/rulesets?limit=99999`)).json()) as any;
+    assert.equal(huge.ruleLimit, 200);
+  }));
+
+test("discovery: still hides disabled and legacy pending rules", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({
+        name: "Mixed", visibility: "public",
+        rules: [mkRule("live"), mkRule("off", { disabled: true }), mkRule("legacy", { pending: true })],
+      }),
+    });
+    const disc = (await (await fetch(`${base}/api/u/owner/rulesets`)).json()) as any;
+    assert.deepEqual(disc.rulesets[0].rules.map((r: any) => r.title), ["live"]);
+    assert.equal(disc.rulesets[0].ruleTotal, 1, "ineligible rules are outside the budget");
+  }));
+
+test("rule hits: reporting a hit floats the rule up the ranking", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const rs = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({
+        name: "R", visibility: "public",
+        rules: [mkRule("quiet one"), mkRule("useful one")],
+      }),
+    })).json()) as any;
+
+    const hit = await fetch(`${base}/api/rulesets/${rs.id}/rule-hits`, {
+      method: "POST", headers: auth(owner), body: JSON.stringify({ titles: ["useful one"] }),
+    });
+    assert.equal(hit.status, 200);
+    assert.deepEqual(await hit.json(), { matched: 1, updated: true });
+
+    const after = await repo.getRuleset(rs.id);
+    const useful = after!.rules.find((r) => r.title === "useful one")!;
+    assert.equal(useful.hits, 1);
+    assert.ok(useful.lastHitAt, "stamped");
+    // Discovery now orders the hit rule first.
+    const disc = (await (await fetch(`${base}/api/u/owner/rulesets`)).json()) as any;
+    assert.equal(disc.rulesets[0].rules[0].title, "useful one");
+  }));
+
+test("rule hits: unknown titles are a no-op, not an error", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const rs = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({ name: "R", visibility: "public", rules: [mkRule("a")] }),
+    })).json()) as any;
+    for (const titles of [["renamed away"], [], undefined]) {
+      const res = await fetch(`${base}/api/rulesets/${rs.id}/rule-hits`, {
+        method: "POST", headers: auth(owner), body: JSON.stringify({ titles }),
+      });
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { matched: 0, updated: false });
+    }
+    assert.equal((await fetch(`${base}/api/rulesets/nope/rule-hits`, {
+      method: "POST", headers: auth(owner), body: JSON.stringify({ titles: ["a"] }),
+    })).status, 404);
+  }));
+
+test("rule hits: anyone may report on a PUBLIC ruleset; a private one only its owner", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const stranger = await register(repo, "stranger@x.com");
+    const mk = async (visibility: string) =>
+      (await (await fetch(`${base}/api/rulesets`, {
+        method: "POST", headers: auth(owner),
+        body: JSON.stringify({ name: visibility, visibility, rules: [mkRule("a")] }),
+      })).json()) as any;
+    const pub = await mk("public");
+    const priv = await mk("private");
+    const report = (id: string, token?: string) =>
+      fetch(`${base}/api/rulesets/${id}/rule-hits`, {
+        method: "POST",
+        headers: token ? auth(token) : { "content-type": "application/json" },
+        body: JSON.stringify({ titles: ["a"] }),
+      });
+
+    // A shared ruleset only improves if its users feed hits back.
+    assert.equal((await report(pub.id, stranger)).status, 200);
+    // A private ruleset must not be rankable by outsiders.
+    assert.equal((await report(priv.id, stranger)).status, 403);
+    assert.equal((await report(priv.id, owner)).status, 200);
+    // Reporting is never anonymous.
+    assert.equal((await report(pub.id)).status, 401);
+  }));
+
+test("rule hits survive an owner edit that resends the whole rules array", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const rs = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({ name: "R", visibility: "private", rules: [mkRule("a")] }),
+    })).json()) as any;
+    await fetch(`${base}/api/rulesets/${rs.id}/rule-hits`, {
+      method: "POST", headers: auth(owner), body: JSON.stringify({ titles: ["a"] }),
+    });
+    const withHits = await repo.getRuleset(rs.id);
+    assert.equal(withHits!.rules[0]!.hits, 1);
+
+    // The web editor round-trips the ranking fields; a save must not reset them.
+    const put = await fetch(`${base}/api/rulesets/${rs.id}`, {
+      method: "PUT", headers: auth(owner),
+      body: JSON.stringify({ rules: withHits!.rules.map((r) => ({ ...r, instruction: "edited" })) }),
+    });
+    assert.equal(put.status, 200);
+    const after = await repo.getRuleset(rs.id);
+    assert.equal(after!.rules[0]!.instruction, "edited");
+    assert.equal(after!.rules[0]!.hits, 1, "earned hit count preserved across an edit");
+    assert.equal(after!.rules[0]!.lastHitAt, withHits!.rules[0]!.lastHitAt);
+  }));
+
+test("auto-grown candidates are stamped so the ranking can give them a trial slot", () =>
+  withApi(async (base, repo) => {
+    const owner = await register(repo, "owner@x.com");
+    const res = await fetch(`${base}/api/rulesets/candidates`, {
+      method: "POST", headers: auth(owner),
+      body: JSON.stringify({
+        project: "github.com/acme/app",
+        rules: [{ title: "New rule", instruction: "check it", globs: [], languages: [], topics: [] }],
+      }),
+    });
+    assert.equal(res.status, 201);
+    const rs = (await res.json()) as any;
+    const rule = rs.ruleset.rules[0];
+    assert.ok(rule.createdAt, "stamped with a creation time");
+    assert.ok(Number.isFinite(Date.parse(rule.createdAt)));
+    assert.equal(rule.hits, undefined, "a brand-new rule has no hits yet");
+  }));
