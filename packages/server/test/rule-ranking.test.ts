@@ -47,7 +47,10 @@ test("rankRules: caps at the limit, keeping the highest-hit rules", () => {
   assert.equal(out.total, 50);
   assert.equal(out.rules.length, 5);
   assert.equal(out.omitted, 45);
-  assert.deepEqual(titles(out.rules), ["r49", "r48", "r47", "r46", "r45"]);
+  // r0 has no hits, so it belongs to the exploration tail and takes one slot;
+  // the remaining budget goes to the highest-hit rules, in order, up front.
+  assert.deepEqual(titles(out.rules).slice(0, 4), ["r49", "r48", "r47", "r46"]);
+  assert.deepEqual(titles(out.rules).slice(4), ["r0"], "one rotating exploration slot, read last");
 });
 
 test("rankRules: reserves slots for new rules so they can ever be tried", () => {
@@ -86,7 +89,64 @@ test("rankRules: unused new-rule slots go back to proven rules", () => {
   );
 });
 
-test("rankRules: a rule stops being 'new' once the grace window passes", () => {
+// --- pre-existing data: rules that predate hit-tracking ---------------------
+// These have neither createdAt nor hits. Ranking them purely by value would sort
+// them by title and freeze the same arbitrary top-N forever: never loaded → can
+// never record a hit → can never climb. The dormant rotation is what prevents
+// that, and it matters most for exactly the big old rulesets this policy exists
+// to speed up.
+
+const legacyRules = (n: number) =>
+  Array.from({ length: n }, (_, i) => rule({ title: `legacy-${String(i).padStart(3, "0")}` }));
+
+test("rankRules: legacy rules rotate, so none is starved forever", () => {
+  const rules = legacyRules(137);
+  const day = 24 * 60 * 60 * 1000;
+  const seen = new Set<string>();
+  let periods = 0;
+  for (let d = 0; d < 500; d += 1) {
+    const out = rankRules(rules, { limit: 40, now: NOW + d * day });
+    assert.equal(out.rules.length, 40, "still capped every period");
+    titles(out.rules).forEach((t) => seen.add(t));
+    if (seen.size === rules.length) {
+      periods = d + 1;
+      break;
+    }
+  }
+  assert.equal(seen.size, 137, "every rule eventually gets loaded");
+  assert.ok(periods > 0 && periods <= 10, `full coverage should take a few periods, took ${periods}`);
+});
+
+test("rankRules: the legacy selection actually changes between periods", () => {
+  const rules = legacyRules(137);
+  const day = 24 * 60 * 60 * 1000;
+  const a = new Set(titles(rankRules(rules, { limit: 40, now: NOW }).rules));
+  const b = new Set(titles(rankRules(rules, { limit: 40, now: NOW + day }).rules));
+  const overlap = [...a].filter((t) => b.has(t)).length;
+  assert.ok(overlap < 40, `consecutive periods must not select the same 40 (overlap ${overlap})`);
+});
+
+test("rankRules: rotation is deterministic within a period", () => {
+  const rules = legacyRules(50);
+  const first = titles(rankRules(rules, { limit: 10, now: NOW }).rules);
+  const again = titles(rankRules(rules, { limit: 10, now: NOW + 60_000 }).rules);
+  assert.deepEqual(first, again, "same period → same selection, so ranking stays a pure function");
+});
+
+test("rankRules: rotation never starves proven or new rules to make room", () => {
+  const rules = [
+    ...legacyRules(137),
+    ...Array.from({ length: 6 }, (_, i) => rule({ title: `hot-${i}`, hits: 30 - i, createdAt: daysAgo(200) })),
+    ...Array.from({ length: 5 }, (_, i) => rule({ title: `new-${i}`, createdAt: daysAgo(i / 24) })),
+  ];
+  const chosen = titles(rankRules(rules, { limit: 40, now: NOW }).rules);
+  assert.equal(chosen.filter((t) => t.startsWith("hot-")).length, 6, "all proven rules load");
+  assert.equal(chosen.filter((t) => t.startsWith("new-")).length, 5, "all new rules load");
+  assert.ok(chosen.filter((t) => t.startsWith("legacy-")).length > 0, "dormant rules still get turns");
+  assert.deepEqual(chosen.slice(0, 5), ["new-0", "new-1", "new-2", "new-3", "new-4"], "new leads");
+});
+
+test("rankRules: a rule stops LEADING once its grace window passes", () => {
   const old = daysAgo(RULE_LOAD_POLICY.newRuleGraceMs / 86_400_000 + 1);
   const proven = Array.from({ length: 10 }, (_, i) =>
     rule({ title: `proven${i}`, hits: 5, createdAt: daysAgo(400) }),
@@ -95,29 +155,47 @@ test("rankRules: a rule stops being 'new' once the grace window passes", () => {
     limit: 3,
     now: NOW,
   });
-  assert.ok(!titles(out.rules).includes("stale"), "expired grace → no reserved slot");
+  // It drops out of the "new and topical" block and into the exploration tail:
+  // still reachable (so it can earn hits) but read after the proven rules.
+  assert.ok(titles(out.rules).includes("stale"));
+  assert.notEqual(titles(out.rules)[0], "stale", "expired grace → no longer leads");
+  assert.equal(titles(out.rules).at(-1), "stale");
 });
 
-test("rankRules: a rule that already hit is never treated as untried", () => {
+test("rankRules: proven rules keep a slot even when the budget is 1", () => {
   const out = rankRules(
-    [
-      rule({ title: "new-and-hit", hits: 1, createdAt: daysAgo(1) }),
-      rule({ title: "new-untried", createdAt: daysAgo(1) }),
-    ],
+    [rule({ title: "dormant" }), rule({ title: "hits", hits: 2, createdAt: daysAgo(400) })],
     { limit: 1, now: NOW },
   );
-  // The untried rule takes the single reserved slot; the hit one is "proven".
-  assert.deepEqual(titles(out.rules), ["new-untried"]);
+  assert.deepEqual(titles(out.rules), ["hits"], "a tiny budget is not spent on exploration");
 });
 
-test("rankRules: rules predating hit-tracking rank as oldest, not as new", () => {
-  // No createdAt = created before this feature; it has had its chances, we just
-  // weren't counting. It must not out-rank a rule that demonstrably hits.
+test("rankRules: a rule that already hit is proven, not competing for exploration", () => {
+  // Even a day-old rule counts as proven once it has caught something, so it is
+  // kept via the proven block rather than fighting fresher rules for the
+  // (limited) exploration slots.
+  const fresh = Array.from({ length: 20 }, (_, i) =>
+    rule({ title: `fresh${String(i).padStart(2, "0")}`, createdAt: daysAgo(i / 24) }),
+  );
+  const out = rankRules([...fresh, rule({ title: "new-and-hit", hits: 1, createdAt: daysAgo(0.5) })], {
+    limit: 5,
+    now: NOW,
+  });
+  assert.ok(
+    titles(out.rules).includes("new-and-hit"),
+    "survives via the proven block even though the exploration block is oversubscribed",
+  );
+});
+
+test("rankRules: rules predating hit-tracking never LEAD, but stay reachable", () => {
+  // No createdAt = created before this feature. It must not out-rank a rule that
+  // demonstrably hits, but it must still be loadable — otherwise it could never
+  // record a hit and would be invisible forever.
   const out = rankRules(
     [rule({ title: "legacy-no-dates" }), rule({ title: "hits", hits: 2, createdAt: daysAgo(400) })],
-    { limit: 1, now: NOW },
+    { limit: 2, now: NOW },
   );
-  assert.deepEqual(titles(out.rules), ["hits"]);
+  assert.deepEqual(titles(out.rules), ["hits", "legacy-no-dates"]);
 });
 
 test("rankRules: equal hits break ties by most recent hit, then deterministically", () => {

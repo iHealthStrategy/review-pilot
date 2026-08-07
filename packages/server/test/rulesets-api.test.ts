@@ -344,7 +344,11 @@ test("discovery: ranks and caps the rules a review loads, and says what it dropp
     assert.equal(got.ruleOmitted, 20);
     // Highest hits first, so the rules that keep catching things lead.
     assert.equal(got.rules[0].title, "rule 59");
-    assert.ok(!got.rules.some((r: any) => r.title === "rule 0"), "the cold tail is dropped");
+    // The cold tail is thinned, not banished: a rotating handful of never-hit
+    // rules ride along so they can still earn their way up.
+    const coldLoaded = got.rules.filter((r: any) => !r.hits).length;
+    assert.ok(coldLoaded > 0, "some never-hit rules get a rotating trial slot");
+    assert.ok(coldLoaded < 20, `the tail is still mostly dropped (got ${coldLoaded} of 40)`);
 
     // A bare request must use the DEFAULT budget, never "load nothing":
     // Number(null) is 0, so an absent ?limit= is easy to mis-parse as a zero cap.

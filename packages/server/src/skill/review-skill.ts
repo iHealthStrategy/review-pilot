@@ -383,9 +383,10 @@ ruleset has \`name\`, \`focus\`, \`instructions\` (freeform, ALWAYS applies),
 topics[], hits }\`, plus \`ruleTotal\` and \`ruleOmitted\`.
 
 **The server has already ranked and CAPPED the rules** — it sends the ones that
-keep catching real problems, plus a few new ones getting their first chance, and
-drops the long tail. \`rules\` is ordered best-first. Work with exactly what you
-were sent:
+keep catching real problems, the newest ones, and a rotating handful of untried
+ones, and drops the rest of the tail. \`rules\` is ordered best-first: new rules,
+then proven ones, then the rotating trial slots. Work with exactly what you were
+sent:
 - Do NOT try to fetch the omitted rules (raising \`?limit=\` just makes every
   review slower for no accuracy gain — the tail is mostly rules that never fire).
 - When \`ruleOmitted > 0\`, say so once in your report, e.g. "已加载 40/137 条规则

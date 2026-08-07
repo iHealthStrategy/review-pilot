@@ -263,10 +263,24 @@ export const RULE_LOAD_POLICY = {
   defaultLimit: 40,
   /** Hard ceiling a caller may request via `?limit=`. */
   maxLimit: 200,
-  /** Fraction of the budget reserved for untried-but-recent rules. */
+  /** Fraction of the budget reserved for rules that have never hit. */
   newRuleShare: 0.3,
-  /** How long a rule counts as "new" and keeps its reserved-slot claim. */
+  /** How long a rule counts as "new" and leads the exploration block. */
   newRuleGraceMs: 14 * 24 * 60 * 60 * 1000,
+  /**
+   * Share of the exploration block kept for DORMANT rules — never hit and no
+   * longer new, including every rule that predates hit-tracking. Without this
+   * they could never be loaded, so could never record a hit, so could never
+   * climb: a permanent blind spot in exactly the big old rulesets this policy
+   * exists to speed up.
+   */
+  dormantShareOfExploration: 1 / 3,
+  /**
+   * How often the dormant rotation advances. Dormant rules take turns in their
+   * slots on this cadence, so every rule is eventually tried without needing a
+   * per-rule "last loaded" write on an unauthenticated read.
+   */
+  rotationPeriodMs: 24 * 60 * 60 * 1000,
 } as const;
 
 /**

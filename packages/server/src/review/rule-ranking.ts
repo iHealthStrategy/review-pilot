@@ -57,16 +57,38 @@ const lastHitMs = (r: ReviewRule): number => {
   return Number.isFinite(t) ? t : 0;
 };
 
+/** Never caught anything yet — the rule still has everything to prove. */
+const isUntried = (rule: ReviewRule): boolean => hitsOf(rule) === 0;
+
 /**
- * True when a rule has not had a fair chance yet: never hit, and created within
- * the grace window. Rules with no `createdAt` predate hit-tracking and are NOT
- * new — they have had plenty of chances, we just weren't counting.
+ * Untried AND recently created, so it is the most topical thing to try next.
+ * A rule with no `createdAt` predates hit-tracking, so it is untried but not
+ * new — it goes in the dormant rotation instead.
  */
-function isUntried(rule: ReviewRule, now: number): boolean {
-  if (hitsOf(rule) > 0) return false;
+function isFresh(rule: ReviewRule, now: number): boolean {
+  if (!isUntried(rule)) return false;
   const created = createdMs(rule);
   if (!created) return false;
   return now - created <= RULE_LOAD_POLICY.newRuleGraceMs;
+}
+
+/**
+ * Rotate a list by a time-derived offset, so a fixed number of slots covers the
+ * whole list over successive periods. Deterministic (same list + same period →
+ * same order), which keeps ranking a pure function and avoids writing "last
+ * loaded" state from an unauthenticated read.
+ *
+ * `stride` is how far the window advances per period — set it to the load budget
+ * so consecutive periods take (almost) disjoint windows. Advancing by 1 instead
+ * would take ~100 days to work through a 137-rule backlog; striding by the
+ * budget covers it in a handful.
+ */
+function rotate<T>(items: readonly T[], now: number, stride: number): T[] {
+  if (items.length <= 1) return [...items];
+  const period = Math.floor(now / RULE_LOAD_POLICY.rotationPeriodMs);
+  const raw = period * Math.max(1, stride);
+  const offset = ((raw % items.length) + items.length) % items.length;
+  return [...items.slice(offset), ...items.slice(0, offset)];
 }
 
 /** Proven rules: most hits first, then most recently hit, then newest. */
@@ -107,31 +129,54 @@ export function rankRules(
   const eligible = rules.filter(isRuleInEffect);
   const total = eligible.length;
   if (limit <= 0) return { rules: [], total, omitted: total };
+
+  // Three pools. `proven` earned their slots; `fresh` are new and topical;
+  // `dormant` have never hit and are no longer new — including every rule from
+  // before hit-tracking, which is why they get a rotating share rather than
+  // being ranked into permanent invisibility.
+  const proven = eligible.filter((r) => !isUntried(r)).sort(byValue);
+  const fresh = eligible.filter((r) => isFresh(r, now)).sort(byRecency);
+  const dormant = rotate(
+    eligible
+      .filter((r) => isUntried(r) && !isFresh(r, now))
+      .sort((a, b) => a.title.localeCompare(b.title)),
+    now,
+    limit,
+  );
+
   if (total <= limit) {
-    // Everything fits: still order it, so the most useful rules are read first
-    // even when nothing is dropped.
-    const untried = eligible.filter((r) => isUntried(r, now)).sort(byRecency);
-    const rest = eligible.filter((r) => !isUntried(r, now)).sort(byValue);
-    return { rules: [...untried, ...rest], total, omitted: 0 };
+    // Everything fits: still order it, so the most useful rules are read first.
+    return { rules: [...fresh, ...proven, ...dormant], total, omitted: 0 };
   }
 
-  const untried = eligible.filter((r) => isUntried(r, now)).sort(byRecency);
-  const proven = eligible.filter((r) => !isUntried(r, now)).sort(byValue);
-
-  // Reserve a share for untried rules, but never more than there are, and
-  // never so many that proven rules get no slots at all.
-  const reserved = Math.min(
-    untried.length,
+  // Exploration block: a share of the budget for rules that have never hit,
+  // split so the dormant rotation always gets a turn even when new rules are
+  // plentiful. Proven rules keep at least one slot whenever any exist, so a
+  // tiny budget is never spent entirely on exploration.
+  const maxExplore = proven.length ? Math.max(0, limit - 1) : limit;
+  const exploreBudget = Math.min(
+    fresh.length + dormant.length,
+    maxExplore,
     Math.max(1, Math.ceil(limit * RULE_LOAD_POLICY.newRuleShare)),
   );
-  const takenNew = untried.slice(0, reserved);
-  // Backfill: whatever the untried pool didn't use goes to proven rules, and
-  // vice versa when there are few proven rules.
-  const takenProven = proven.slice(0, limit - takenNew.length);
-  const selected = [...takenNew, ...takenProven];
+  const dormantTarget = dormant.length
+    ? Math.max(1, Math.floor(exploreBudget * RULE_LOAD_POLICY.dormantShareOfExploration))
+    : 0;
+  let takenDormant = dormant.slice(0, Math.min(dormantTarget, exploreBudget));
+  const takenFresh = fresh.slice(0, exploreBudget - takenDormant.length);
+  // Top the block back up when one pool was too small to use its share.
+  if (takenFresh.length + takenDormant.length < exploreBudget) {
+    takenDormant = dormant.slice(0, exploreBudget - takenFresh.length);
+  }
+  const takenProven = proven.slice(0, limit - takenFresh.length - takenDormant.length);
+
+  // Order = what to read first: new rules (most topical), then the rules that
+  // keep catching things, then the rotating exploration tail.
+  const selected = [...takenFresh, ...takenProven, ...takenDormant];
   if (selected.length < limit) {
+    // A pool ran dry: fill the remaining budget from whatever is left over.
     const chosen = new Set(selected);
-    for (const r of [...untried, ...proven]) {
+    for (const r of [...fresh, ...proven, ...dormant]) {
       if (selected.length >= limit) break;
       if (!chosen.has(r)) {
         chosen.add(r);
