@@ -168,22 +168,32 @@ export function rankRules(
   if (takenFresh.length + takenDormant.length < exploreBudget) {
     takenDormant = dormant.slice(0, exploreBudget - takenFresh.length);
   }
-  const takenProven = proven.slice(0, limit - takenFresh.length - takenDormant.length);
-
-  // Order = what to read first: new rules (most topical), then the rules that
-  // keep catching things, then the rotating exploration tail.
-  const selected = [...takenFresh, ...takenProven, ...takenDormant];
-  if (selected.length < limit) {
-    // A pool ran dry: fill the remaining budget from whatever is left over.
-    const chosen = new Set(selected);
-    for (const r of [...fresh, ...proven, ...dormant]) {
-      if (selected.length >= limit) break;
-      if (!chosen.has(r)) {
-        chosen.add(r);
-        selected.push(r);
-      }
+  // Count per pool, then hand any budget a short pool left over to the others,
+  // most-valuable pool first. Counting before assembling keeps the emitted ORDER
+  // fixed (new → proven → rotating tail) no matter which pool ran dry — appending
+  // leftovers to the end would have put a new rule behind the exploration tail.
+  let nFresh = takenFresh.length;
+  let nDormant = takenDormant.length;
+  let nProven = Math.min(proven.length, limit - nFresh - nDormant);
+  let spare = limit - (nFresh + nProven + nDormant);
+  for (const pool of [
+    { size: proven.length, take: (n: number) => (nProven += n), used: () => nProven },
+    { size: fresh.length, take: (n: number) => (nFresh += n), used: () => nFresh },
+    { size: dormant.length, take: (n: number) => (nDormant += n), used: () => nDormant },
+  ]) {
+    if (spare <= 0) break;
+    const grow = Math.min(spare, pool.size - pool.used());
+    if (grow > 0) {
+      pool.take(grow);
+      spare -= grow;
     }
   }
+
+  const selected = [
+    ...fresh.slice(0, nFresh),
+    ...proven.slice(0, nProven),
+    ...dormant.slice(0, nDormant),
+  ];
   return { rules: selected, total, omitted: total - selected.length };
 }
 

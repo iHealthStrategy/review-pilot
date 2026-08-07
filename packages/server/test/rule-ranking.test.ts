@@ -210,6 +210,27 @@ test("rankRules: equal hits break ties by most recent hit, then deterministicall
   assert.deepEqual(titles(out.rules), ["a", "b", "c"], "recent hit wins; then title order");
 });
 
+test("rankRules: read order stays new → proven → trial even when a pool runs dry", () => {
+  // Only one proven rule, so most of the budget is backfilled from the fresh and
+  // dormant pools. The backfilled rules must still land in their proper block —
+  // a new rule must never be emitted behind the exploration tail.
+  const rules = [
+    rule({ title: "hot", hits: 9, createdAt: daysAgo(400) }),
+    ...Array.from({ length: 6 }, (_, i) => rule({ title: `new${i}`, createdAt: daysAgo(i / 24) })),
+    ...Array.from({ length: 6 }, (_, i) => rule({ title: `cold${i}` })),
+  ];
+  const out = rankRules(rules, { limit: 8, now: NOW });
+  assert.equal(out.rules.length, 8);
+  const kind = (t: string) => (t.startsWith("new") ? 0 : t === "hot" ? 1 : 2);
+  const order = titles(out.rules).map(kind);
+  assert.deepEqual(
+    [...order].sort((a, b) => a - b),
+    order,
+    `blocks must not interleave, got ${titles(out.rules).join(",")}`,
+  );
+  assert.ok(titles(out.rules).includes("hot"), "the proven rule is never dropped");
+});
+
 test("rankRules: limit 0 selects nothing but still reports the total", () => {
   const out = rankRules([rule({ title: "x" }), rule({ title: "y" })], { limit: 0, now: NOW });
   assert.deepEqual(out.rules, []);
