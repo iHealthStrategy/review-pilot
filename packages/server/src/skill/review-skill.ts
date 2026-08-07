@@ -17,6 +17,141 @@ import { FINDING_SCHEMA_FIELDS, REVIEW_DIMENSIONS } from "../review/prompt.js";
  */
 export const SKILL_NAME = "reviewpilot-review";
 
+/**
+ * The agent hosts we ship a build of the skill for. All three read the same
+ * Agent-Skills layout (`<dir>/<name>/SKILL.md`, YAML frontmatter + markdown
+ * body), so the review kernel is byte-identical across them; only the
+ * frontmatter fields the host understands, the install directory, and how the
+ * host registers an MCP server differ.
+ */
+export const SKILL_PLATFORMS = ["claude", "codex", "cursor"] as const;
+export type SkillPlatform = (typeof SKILL_PLATFORMS)[number];
+
+interface PlatformSpec {
+  /** Display name used in installer output and docs. */
+  label: string;
+  /**
+   * Skill install directories as shell expressions, given the skill dir name.
+   * The first is written directly; the rest get a copy (Codex reads both the
+   * legacy `~/.codex/skills` and the newer shared `~/.agents/skills`).
+   */
+  dirs: (name: string) => string[];
+  /**
+   * Claude Code pre-authorizes a skill's commands via `allowed-tools`. Codex
+   * and Cursor have no such per-skill field — they gate commands through their
+   * own approval settings — so emitting it there would just be dead frontmatter.
+   */
+  allowedTools: boolean;
+  /** A body note telling the user how THIS host will ask to run the commands. */
+  hostNote: string;
+  /** Closing lines of the installer: how to actually trigger the skill. */
+  invokeHint: string[];
+  /**
+   * Registering the optional code-review-graph MCP. `skipIf` is a shell test
+   * that, when true, means this host isn't installed so we skip silently;
+   * `cmdLabel` is what we tell the user to run by hand; `register` is the body
+   * of the `register_graph_mcp` shell function.
+   */
+  graph: { skipIf: string; skipMsg: string; cmdLabel: string; register: string };
+}
+
+const PLATFORMS: Record<SkillPlatform, PlatformSpec> = {
+  claude: {
+    label: "Claude Code",
+    dirs: (name) => [`$HOME/.claude/skills/${name}`],
+    allowedTools: true,
+    hostNote:
+      "This skill pre-authorizes exactly the commands it runs (see `allowed-tools`), " +
+      "so Claude Code will not prompt for each one while the skill is active.",
+    invokeHint: [
+      "  In Claude Code, just ask: 评审一下我的改动  (or: review my changes)",
+      "  Or:  让 <用户名> 帮我 review 我的改动  (pulls that user's public rules)",
+    ],
+    graph: {
+      skipIf: "! command -v claude >/dev/null 2>&1",
+      skipMsg: "• Structural context optional; Claude Code CLI not found — skipping.",
+      cmdLabel: "claude mcp add -s user code-review-graph -- uvx code-review-graph serve",
+      register: `  if claude mcp list 2>/dev/null | grep -q "code-review-graph"; then
+    echo "✓ code-review-graph MCP already registered (structural context on)"
+  elif claude mcp add -s user code-review-graph -- uvx code-review-graph serve >/dev/null 2>&1; then
+    echo "✓ Registered code-review-graph MCP (user scope) — structural context enabled"
+  else
+    echo "• Could not register the MCP automatically. Run later:  \\$GRAPH_CMD"
+  fi`,
+    },
+  },
+  codex: {
+    label: "Codex",
+    // Codex discovers skills in `~/.codex/skills` (original) and `~/.agents/skills`
+    // (the shared cross-agent location). Install into both so either build finds it.
+    dirs: (name) => [`$HOME/.codex/skills/${name}`, `$HOME/.agents/skills/${name}`],
+    allowedTools: false,
+    hostNote:
+      "Codex gates shell commands through its own approval mode. This skill only runs " +
+      "read-only git, `curl` to the ReviewPilot server, and — after you confirm — file " +
+      "edits and the push/PR steps you explicitly asked for. Approve them when prompted, " +
+      "or pre-approve in your Codex approval settings.",
+    invokeHint: [
+      "  In Codex, just ask: 评审一下我的改动  (or: review my changes)",
+      "  To invoke it explicitly, type  $reviewpilot-review  (or run /skills)",
+      "  Or:  让 <用户名> 帮我 review 我的改动  (pulls that user's public rules)",
+    ],
+    graph: {
+      skipIf: "! command -v codex >/dev/null 2>&1",
+      skipMsg: "• Structural context optional; Codex CLI not found — skipping.",
+      cmdLabel: "codex mcp add code-review-graph -- uvx code-review-graph serve",
+      register: `  if codex mcp list 2>/dev/null | grep -q "code-review-graph"; then
+    echo "✓ code-review-graph MCP already registered (structural context on)"
+  elif codex mcp add code-review-graph -- uvx code-review-graph serve >/dev/null 2>&1; then
+    echo "✓ Registered code-review-graph MCP — structural context enabled"
+  else
+    echo "• Could not register the MCP automatically. Run later:  \\$GRAPH_CMD"
+  fi`,
+    },
+  },
+  cursor: {
+    label: "Cursor",
+    dirs: (name) => [`$HOME/.cursor/skills/${name}`],
+    allowedTools: false,
+    hostNote:
+      "Cursor gates shell commands through its own allowlist. This skill only runs " +
+      "read-only git, `curl` to the ReviewPilot server, and — after you confirm — file " +
+      "edits and the push/PR steps you explicitly asked for. Approve them when prompted, " +
+      "or add them to Cursor's command allowlist.",
+    invokeHint: [
+      "  In Cursor, just ask the agent: 评审一下我的改动  (or: review my changes)",
+      "  Or:  让 <用户名> 帮我 review 我的改动  (pulls that user's public rules)",
+    ],
+    graph: {
+      // Cursor needs no CLI — the MCP lives in a config file, so never skip.
+      skipIf: "false",
+      skipMsg: "",
+      cmdLabel: 'add code-review-graph to the "mcpServers" object in ~/.cursor/mcp.json',
+      // Cursor has no `mcp add` CLI, so we write ~/.cursor/mcp.json ourselves —
+      // but ONLY when it does not exist yet. An existing config may hold other
+      // servers and we will not rewrite JSON blind; we print what to add instead.
+      register: `  CFG="$HOME/.cursor/mcp.json"
+  if [ -f "$CFG" ] && grep -q "code-review-graph" "$CFG"; then
+    echo "✓ code-review-graph MCP already in $CFG (structural context on)"
+  elif [ -f "$CFG" ]; then
+    echo "• $CFG already exists — not rewriting it. Add this under \\"mcpServers\\":"
+    echo '    "code-review-graph": { "command": "uvx", "args": ["code-review-graph", "serve"] }'
+  else
+    mkdir -p "$HOME/.cursor"
+    cat > "$CFG" <<'REVIEWPILOT_MCP_EOF'
+{
+  "mcpServers": {
+    "code-review-graph": { "command": "uvx", "args": ["code-review-graph", "serve"] }
+  }
+}
+REVIEWPILOT_MCP_EOF
+    echo "✓ Wrote $CFG — structural context enabled"
+  fi`,
+    },
+  },
+};
+
+
 /** Filesystem/skill-safe slug from a ruleset name. */
 export function slugify(name: string): string {
   const s = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -50,6 +185,15 @@ export function normalizeProjectKey(remoteUrl: string): string {
   s = s.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
   s = s.toLowerCase();
   return s;
+}
+
+/**
+ * Quote a string as a single-quoted shell word, so NOTHING in it is expanded or
+ * re-parsed — needed because these strings carry `$reviewpilot-review`, `(…)`,
+ * `"…"` and apostrophes. The `'\''` dance closes, escapes, and reopens the quote.
+ */
+function shQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Collapse whitespace so user text is safe inside YAML frontmatter. */
@@ -146,7 +290,12 @@ and how many were suppressed below it, e.g. "（已按 must-fix 过滤，另有 
  * `baseUrl` is baked in at install time (the server origin); when empty the skill
  * falls back to the `REVIEWPILOT_URL` env var.
  */
-export function buildOrchestratorSkill(baseUrl = "", token = ""): string {
+export function buildOrchestratorSkill(
+  baseUrl = "",
+  token = "",
+  platform: SkillPlatform = "claude",
+): string {
+  const spec = PLATFORMS[platform];
   const base = baseUrl.replace(/\/+$/, "");
   // Resolve to a shell expression: prefer the baked origin, else an env var.
   const urlExpr = base ? `"${base}"` : '"${REVIEWPILOT_URL:-}"';
@@ -173,8 +322,7 @@ description: >-
   push → open PR). Covers the working-tree diff, a branch diff, or a checked-out PR.
   Reports only must-fix (major/critical) by default; adjust in natural language
   ("也看次要的" / "显示全部").
-allowed-tools: ${SKILL_ALLOWED_TOOLS}
----
+${spec.allowedTools ? `allowed-tools: ${SKILL_ALLOWED_TOOLS}\n` : ""}---
 
 # ReviewPilot — local code review (orchestrator)
 
@@ -186,6 +334,8 @@ asks (or a ruleset specifies a different output language). The banner line stays
 as-is.
 
 ReviewPilot base URL: ${base ? base : "(not baked — set the REVIEWPILOT_URL env var)"}
+
+_Host: ${spec.label}. ${spec.hostNote}_
 
 ${BANNER_INSTRUCTION}
 
@@ -217,7 +367,7 @@ user already installed). Auto-grow (step 9) still applies to your own project.
 \`\`\`sh
 BASE=${urlExpr}
 HANDLE=<the handle from step 2>
-CACHE="$HOME/.claude/skills/${SKILL_NAME}/cache"
+CACHE="$HOME/.reviewpilot/cache"
 mkdir -p "$CACHE"
 if [ -n "$BASE" ]; then
   curl -fsS "$BASE/api/u/$HANDLE/rulesets?project=$PROJECT" -o "$CACHE/$HANDLE.json" \\
@@ -481,7 +631,11 @@ review → fixes → attest verdict → push → PR URL) so the user can follow 
 `;
 }
 
-export function buildReviewSkill(ruleset?: ReviewRuleset): string {
+export function buildReviewSkill(
+  ruleset?: ReviewRuleset,
+  platform: SkillPlatform = "claude",
+): string {
+  const spec = PLATFORMS[platform];
   const name = ruleset ? rulesetSkillName(ruleset.slug) : SKILL_NAME;
   const descSuffix = ruleset
     ? ` Applies the community ruleset "${oneLine(ruleset.name)}"${ruleset.description ? ` — ${oneLine(ruleset.description)}` : ""}.`
@@ -542,8 +696,7 @@ description: >-
   changes; it covers the working-tree diff, a branch diff, or a checked-out PR.
   Reports only must-fix (major/critical) by default; adjust in natural language
   ("也看次要的" / "显示全部").
-allowed-tools: ${SKILL_ALLOWED_TOOLS}
----
+${spec.allowedTools ? `allowed-tools: ${SKILL_ALLOWED_TOOLS}\n` : ""}---
 
 # ReviewPilot — local code review
 
@@ -553,6 +706,8 @@ noise. Write the ENTIRE review report in **中文 (Chinese)** by default — fin
 explanations, and suggested fixes. Only switch language if the user explicitly
 asks (or a ruleset specifies a different output language). The banner line stays
 as-is.
+
+_Host: ${spec.label}. ${spec.hostNote}_
 
 ${BANNER_INSTRUCTION}
 
@@ -617,36 +772,58 @@ After presenting, offer a single auto-fix pass:
 `;
 }
 
-/** A self-contained installer that writes the skill into ~/.claude/skills/. */
-export function buildInstallScript(skillMd: string, dirName: string = SKILL_NAME): string {
+/**
+ * A self-contained installer that writes the skill into the host's skills
+ * directory (`~/.claude/skills`, `~/.codex/skills` + `~/.agents/skills`, or
+ * `~/.cursor/skills`) and best-effort registers the optional structural-context
+ * MCP the way that host expects.
+ */
+export function buildInstallScript(
+  skillMd: string,
+  dirName: string = SKILL_NAME,
+  platform: SkillPlatform = "claude",
+): string {
+  const spec = PLATFORMS[platform];
+  const [primary, ...mirrors] = spec.dirs(dirName);
+  // Codex reads two locations; write once, then mirror so both layouts find it.
+  const mirrorBlock = mirrors
+    .map(
+      // Non-fatal: the primary install already succeeded, so a failure to mirror
+      // must not abort the script (`set -e`) and skip the MCP setup + hints.
+      (d) => `ALT="${d}"
+if mkdir -p "$ALT" && cp "$DIR/SKILL.md" "$ALT/SKILL.md"; then
+  echo "✓ Also installed → $ALT/SKILL.md"
+else
+  echo "• Could not also install into $ALT (skipped; the install above is enough for current Codex)"
+fi`,
+    )
+    .join("\n");
+  // Single-quoted so the shell expands nothing: Codex's hint mentions the literal
+  // `$reviewpilot-review` mention syntax, which double quotes would eat.
+  const hintBlock = spec.invokeHint.map((l) => `echo ${shQuote(l)}`).join("\n");
+
   return `#!/bin/sh
 set -e
-DIR="$HOME/.claude/skills/${dirName}"
+DIR="${primary}"
 mkdir -p "$DIR"
 cat > "$DIR/SKILL.md" <<'REVIEWPILOT_SKILL_EOF'
 ${skillMd}REVIEWPILOT_SKILL_EOF
-echo "✓ Installed the ReviewPilot review skill → $DIR/SKILL.md"
-
-# Optional structural-context engine: code-review-graph via a USER-scoped MCP, so
+echo "✓ Installed the ReviewPilot review skill (${spec.label}) → $DIR/SKILL.md"
+${mirrorBlock ? mirrorBlock + "\n" : ""}
+# Optional structural-context engine: code-review-graph as a user-scoped MCP, so
 # the skill's risk-hotspot / impacted-caller / test-gap step works in every
 # project. The skill works fine WITHOUT it. uvx fetches the package lazily on
 # first launch. If uv is missing we interactively offer to install it (reading
 # the answer from /dev/tty so it works even under \`curl … | sh\`); skipping is
 # safe, and a non-interactive run (CI) skips automatically. Never fatal.
-GRAPH_CMD="claude mcp add -s user code-review-graph -- uvx code-review-graph serve"
+GRAPH_CMD=${shQuote(spec.graph.cmdLabel)}
 register_graph_mcp() {
-  if claude mcp list 2>/dev/null | grep -q "code-review-graph"; then
-    echo "✓ code-review-graph MCP already registered (structural context on)"
-  elif claude mcp add -s user code-review-graph -- uvx code-review-graph serve >/dev/null 2>&1; then
-    echo "✓ Registered code-review-graph MCP (user scope) — structural context enabled"
-  else
-    echo "• Could not register the MCP automatically. Run later:  \$GRAPH_CMD"
-  fi
+${spec.graph.register}
 }
 if [ -n "\${REVIEWPILOT_NO_GRAPH:-}" ]; then
   echo "• Skipped structural-context setup (REVIEWPILOT_NO_GRAPH set)."
-elif ! command -v claude >/dev/null 2>&1; then
-  echo "• Structural context optional; Claude Code CLI not found — skipping."
+elif ${spec.graph.skipIf}; then
+  echo ${shQuote(spec.graph.skipMsg)}
 elif command -v uvx >/dev/null 2>&1; then
   register_graph_mcp
 else
@@ -681,8 +858,7 @@ else
   esac
 fi
 
-echo "  In Claude Code, just ask: 评审一下我的改动  (or: review my changes)"
-echo "  Or:  让 <用户名> 帮我 review 我的改动  (pulls that user's public rules)"
+${hintBlock}
 echo "  Tip: export REVIEWPILOT_TOKEN=rpat_…  to auto-grow your project's rules (account page)"
 `;
 }
