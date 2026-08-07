@@ -30,6 +30,7 @@ import {
   buildReviewSkill,
   rulesetSkillName,
 } from "./skill/review-skill.js";
+import type { SkillPlatform } from "./skill/review-skill.js";
 import type { ScheduleStore } from "./schedule/schedule.js";
 import type { Scheduler } from "./schedule/scheduler.js";
 import type { TaskService } from "./trigger/trigger-service.js";
@@ -202,20 +203,28 @@ export function createAppHandler(deps: AppDeps) {
     // the download is pre-configured (no manual REVIEWPILOT_TOKEN setup); the token
     // is only ever reflected back to the caller that supplied it.
     const installToken = bearerToken(req);
-    if (path === "/skill/install.sh") {
-      res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
-      res.end(buildInstallScript(buildOrchestratorSkill(baseUrl, installToken)));
-      return;
-    }
-    if (path === `/skill/${SKILL_NAME}/SKILL.md` || path === "/skill/SKILL.md") {
-      res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
-      res.end(buildOrchestratorSkill(baseUrl, installToken));
+    // `/skill/<platform>/…` picks a host build explicitly; the bare `/skill/…`
+    // paths stay on Claude Code for backwards compatibility.
+    const orchestrator = /^\/skill(?:\/(claude|codex|cursor))?\/(install\.sh|SKILL\.md)$/.exec(path);
+    if (orchestrator || path === `/skill/${SKILL_NAME}/SKILL.md`) {
+      const platform = (orchestrator?.[1] ?? "claude") as SkillPlatform;
+      const kind = orchestrator?.[2] ?? "SKILL.md";
+      const md = buildOrchestratorSkill(baseUrl, installToken, platform);
+      if (kind === "install.sh") {
+        res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
+        res.end(buildInstallScript(md, SKILL_NAME, platform));
+      } else {
+        res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
+        res.end(md);
+      }
       return;
     }
     // Per-ruleset skill: public → open; private → requires the owner's token.
-    const rulesetSkill = /^\/skill\/ruleset\/([^/]+)\/(install\.sh|SKILL\.md)$/.exec(path);
+    const rulesetSkill =
+      /^\/skill\/ruleset\/([^/]+)\/(?:(claude|codex|cursor)\/)?(install\.sh|SKILL\.md)$/.exec(path);
     if (rulesetSkill) {
-      const [, id, kind] = rulesetSkill;
+      const [, id, rawPlatform, kind] = rulesetSkill;
+      const platform = (rawPlatform ?? "claude") as SkillPlatform;
       const ruleset = await deps.repo.getRuleset(id!);
       if (!ruleset) {
         res.writeHead(404, { "Content-Type": "application/json" });
@@ -231,10 +240,10 @@ export function createAppHandler(deps: AppDeps) {
           return;
         }
       }
-      const md = buildReviewSkill(ruleset);
+      const md = buildReviewSkill(ruleset, platform);
       if (kind === "install.sh") {
         res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
-        res.end(buildInstallScript(md, rulesetSkillName(ruleset.slug)));
+        res.end(buildInstallScript(md, rulesetSkillName(ruleset.slug), platform));
       } else {
         res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
         res.end(md);

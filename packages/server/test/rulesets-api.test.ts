@@ -305,4 +305,15 @@ test("ruleset skill: public installs openly; private needs the owner's token", (
       (await fetch(`${base}/skill/ruleset/${priv.id}/install.sh`, { headers: { authorization: `Bearer ${owner}` } })).status,
       200,
     );
+
+    // Per-host builds of the SAME ruleset: each lands in that host's skills dir,
+    // and the visibility rules are unchanged by the platform segment.
+    const codex = await (await fetch(`${base}/skill/ruleset/${pub.id}/codex/install.sh`)).text();
+    assert.match(codex, /\$HOME\/\.codex\/skills\/reviewpilot-pub/);
+    assert.match(codex, /rule A/);
+    const cursor = await (await fetch(`${base}/skill/ruleset/${pub.id}/cursor/install.sh`)).text();
+    assert.match(cursor, /\$HOME\/\.cursor\/skills\/reviewpilot-pub/);
+    assert.equal((await fetch(`${base}/skill/ruleset/${priv.id}/codex/install.sh`)).status, 401);
+    // An unknown platform segment is not a route — it must not leak a private skill.
+    assert.equal((await fetch(`${base}/skill/ruleset/${priv.id}/windsurf/install.sh`)).status, 404);
   }));

@@ -8,6 +8,7 @@ import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
 import {
   SKILL_NAME,
+  SKILL_PLATFORMS,
   buildInstallScript,
   buildOrchestratorSkill,
   buildReviewSkill,
@@ -193,6 +194,85 @@ test("buildInstallScript: writes the skill into ~/.claude/skills via a heredoc",
   assert.match(sh, /^REVIEWPILOT_SKILL_EOF$/m); // closing delimiter on its own line
   assert.ok(sh.includes("name: " + SKILL_NAME));
 });
+
+test("skills: every host build shares the identical review kernel", () => {
+  const [claude, codex, cursor] = SKILL_PLATFORMS.map((p) =>
+    buildOrchestratorSkill("https://x.example.com", "rpat_t", p));
+  for (const md of [claude, codex, cursor]) {
+    // Same dimensions, schema, banner, threshold and auto-grow flow everywhere —
+    // only the host-specific frontmatter/notes may differ.
+    assert.ok(md!.includes(FINDING_SCHEMA_FIELDS));
+    assert.match(md!, /🤖 ReviewPilot ▸ scope=/);
+    assert.match(md!, /By DEFAULT report only \*\*must-fix\*\*/);
+    assert.match(md!, /\/api\/rulesets\/candidates/);
+    assert.match(md!, /^name: reviewpilot-review$/m);
+    assert.match(md!, /^description: >-$/m);
+  }
+  // allowed-tools is a Claude Code field; Codex/Cursor gate commands themselves,
+  // so emitting it there would be dead frontmatter.
+  assert.match(claude!.slice(0, claude!.indexOf("\n# ")), /^allowed-tools: /m);
+  for (const md of [codex, cursor]) {
+    assert.doesNotMatch(md!.slice(0, md!.indexOf("\n# ")), /allowed-tools/);
+  }
+  assert.match(codex!, /_Host: Codex\./);
+  assert.match(cursor!, /_Host: Cursor\./);
+});
+
+test("buildInstallScript: installs into each host's skills dir + registers its MCP", () => {
+  const md = buildOrchestratorSkill("https://x.example.com");
+  const claude = buildInstallScript(md, SKILL_NAME, "claude");
+  assert.match(claude, /DIR="\$HOME\/\.claude\/skills\/reviewpilot-review"/);
+  assert.match(claude, /claude mcp add -s user code-review-graph/);
+
+  // Codex reads both the original ~/.codex/skills and the shared ~/.agents/skills.
+  const codex = buildInstallScript(md, SKILL_NAME, "codex");
+  assert.match(codex, /DIR="\$HOME\/\.codex\/skills\/reviewpilot-review"/);
+  assert.match(codex, /ALT="\$HOME\/\.agents\/skills\/reviewpilot-review"/);
+  assert.match(codex, /codex mcp add code-review-graph -- uvx code-review-graph serve/);
+  assert.match(codex, /! command -v codex >\/dev\/null/); // skip when Codex absent
+
+  // Cursor has no `mcp add` CLI: write ~/.cursor/mcp.json, but never clobber one.
+  const cursor = buildInstallScript(md, SKILL_NAME, "cursor");
+  assert.match(cursor, /DIR="\$HOME\/\.cursor\/skills\/reviewpilot-review"/);
+  assert.match(cursor, /CFG="\$HOME\/\.cursor\/mcp\.json"/);
+  assert.match(cursor, /already exists — not rewriting it/);
+
+  // Shared safety net: the opt-out and the uv offer survive on every host.
+  for (const sh of [claude, codex, cursor]) {
+    assert.match(sh, /REVIEWPILOT_NO_GRAPH/);
+    assert.match(sh, /astral\.sh\/uv\/install\.sh/);
+    // Closing hints are single-quoted so nothing (e.g. `$reviewpilot-review`,
+    // an apostrophe in "user's") is re-parsed by the shell.
+    assert.doesNotMatch(sh, /echo '[^']*'[a-z]/);
+  }
+  assert.match(codex, /\$reviewpilot-review/); // Codex's explicit-invocation hint
+});
+
+test("GET /skill/<platform>/install.sh serves that host's build; bare path stays Claude", () =>
+  withApp(async (base) => {
+    for (const [platform, dir] of [
+      ["claude", "\\.claude/skills"],
+      ["codex", "\\.codex/skills"],
+      ["cursor", "\\.cursor/skills"],
+    ] as const) {
+      const res = await fetch(`${base}/skill/${platform}/install.sh`);
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get("content-type") ?? "", /shellscript/);
+      assert.match(await res.text(), new RegExp(dir));
+      const md = await fetch(`${base}/skill/${platform}/SKILL.md`);
+      assert.equal(md.status, 200);
+      assert.match(md.headers.get("content-type") ?? "", /markdown/);
+      assert.match(await md.text(), /name: reviewpilot-review/);
+    }
+    // Back-compat: the un-prefixed paths still serve the Claude Code build.
+    assert.match(await (await fetch(`${base}/skill/install.sh`)).text(), /\.claude\/skills/);
+    assert.match(await (await fetch(`${base}/skill/SKILL.md`)).text(), /allowed-tools:/);
+    // The token is baked into every host build, not just Claude's.
+    const codexSh = await (await fetch(`${base}/skill/codex/install.sh`, {
+      headers: { authorization: "Bearer rpat_hostbake" },
+    })).text();
+    assert.match(codexSh, /TOKEN="rpat_hostbake"/);
+  }));
 
 async function withApp(run: (base: string) => Promise<void>): Promise<void> {
   const repo = new MemoryRepository({ clock: fixedClock(), idGen: seqIdGen() });

@@ -253,6 +253,19 @@ const html = `<!doctype html>
       .codeblock > .copy:hover { background: var(--surface-2); color: #fff; border-color: var(--accent); filter: none; transform: none; }
       .codeblock > .copy.copied { color: var(--green); border-color: rgba(110,231,135,.4); }
 
+      /* ── Per-host install commands (Claude Code / Codex / Cursor) ──
+         All three are shown at once — the command differs per host (different
+         skills directory, different MCP registration), so a user should copy
+         the one matching the agent they actually run. */
+      .inst-grid { display: grid; gap: 12px; margin: 8px 0 4px; }
+      .inst > label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
+      .inst > label .inst-dir { font-weight: 400; font-size: 11px; color: var(--muted); font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+      .inst pre { margin: 0; }
+      /* Compact per-host copy buttons, for table cells where a full command block
+         would blow out the column width. */
+      .inst-copy { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+      .inst-copy button { padding: 3px 10px; font-size: 11.5px; }
+
       /* ── Auth gate ─────────────────────────────────────────────── */
       .auth-gate { position: fixed; inset: 0; background: var(--bg-grad); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
       .auth-gate.open { display: flex; }
@@ -834,27 +847,48 @@ const html = `<!doctype html>
         if (!_skillTok) _skillTok = await load("/api/auth/skill-token", { kind: "user", token: "", configured: false });
         return _skillTok;
       }
-      // The one-line install command — ALWAYS carries a token when available
-      // (admin without ADMIN_TOKEN configured → an honest placeholder).
-      function skillInstallCmd(skill) {
-        const o = location.origin;
-        if (skill && skill.token) return 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + o + '/skill/install.sh | sh';
-        if (skill && skill.kind === "admin") return 'curl -fsSL -H "Authorization: Bearer <ADMIN_TOKEN>" ' + o + '/skill/install.sh | sh';
-        return 'curl -fsSL ' + o + '/skill/install.sh | sh';
+      // The agent hosts we ship a skill build for. Each gets its own installer
+      // route because the skills directory and the MCP registration differ.
+      const SKILL_HOSTS = [
+        { id: "claude", label: "Claude Code", dir: "~/.claude/skills/" },
+        { id: "codex", label: "Codex", dir: "~/.codex/skills/ + ~/.agents/skills/" },
+        { id: "cursor", label: "Cursor", dir: "~/.cursor/skills/" },
+      ];
+      // The one-line install command for one host — ALWAYS carries a token when
+      // available (admin without ADMIN_TOKEN configured → an honest placeholder).
+      function skillInstallCmd(skill, host) {
+        const url = location.origin + "/skill/" + (host || "claude") + "/install.sh";
+        if (skill && skill.token) return 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + url + ' | sh';
+        if (skill && skill.kind === "admin") return 'curl -fsSL -H "Authorization: Bearer <ADMIN_TOKEN>" ' + url + ' | sh';
+        return 'curl -fsSL ' + url + ' | sh';
+      }
+      // One labelled command block per host. cmdFor(hostId) builds the command,
+      // so the same layout serves the orchestrator skill and a single ruleset.
+      function installBlocks(cmdFor) {
+        return '<div class="inst-grid">' + SKILL_HOSTS.map((h) =>
+          \`<div class="inst"><label>\${esc(h.label)}<span class="inst-dir">\${esc(h.dir)}</span></label><pre>\${esc(cmdFor(h.id))}</pre></div>\`
+        ).join("") + "</div>";
+      }
+      // The same three commands as compact copy-only buttons (for table cells).
+      function installCopyButtons(cmdFor) {
+        return '<span class="inst-copy">' + SKILL_HOSTS.map((h) =>
+          \`<button type="button" class="secondary" data-copy="\${esc(cmdFor(h.id))}">\${esc(h.label)}</button>\`
+        ).join("") + "</span>";
       }
       function skillInstallCard(skill) {
+        const blocks = installBlocks((h) => skillInstallCmd(skill, h));
         if (skill.kind === "admin" && !skill.configured) {
           return \`<div class="card"><h3>① 安装本地 Skill</h3>
-            <p class="muted">内置管理员账户的 skill 令牌来自服务端环境变量 <code>ADMIN_TOKEN</code>,但目前<b>未配置</b>。请在部署环境设置 <code>ADMIN_TOKEN</code> 并重启,这里就会自动填好命令;或用占位符手动替换:</p>
-            <pre>\${esc(skillInstallCmd(skill))}</pre></div>\`;
+            <p class="muted">内置管理员账户的 skill 令牌来自服务端环境变量 <code>ADMIN_TOKEN</code>,但目前<b>未配置</b>。请在部署环境设置 <code>ADMIN_TOKEN</code> 并重启,这里就会自动填好命令;或用占位符手动替换。按你使用的 Agent 选一条:</p>
+            \${blocks}</div>\`;
         }
         const who = skill.kind === "admin"
           ? "已为你填入服务端配置的 <code>ADMIN_TOKEN</code>。"
           : "已内置你的专属 skill 访问令牌(随账户存在、<b>不可删除</b>)。";
         return \`<div class="card"><h3>① 安装本地 Skill(命令已内置 token)</h3>
-          <p class="muted">\${who}复制下面这条直接在终端运行即可,装好即用、无需再配置 token。</p>
-          <pre>\${esc(skillInstallCmd(skill))}</pre>
-          <p class="muted">然后在任意项目里说「评审一下我的改动」,或 <code>/reviewpilot-review</code>。</p></div>\`;
+          <p class="muted">\${who}<b>按你使用的 Agent 选一条</b>复制到终端运行即可,装好即用、无需再配置 token。三条装的是<b>同一套评审内核</b>,只是安装目录与 MCP 注册方式随宿主不同;同时用多个 Agent 就都装一遍。</p>
+          \${blocks}
+          <p class="muted">然后在任意项目里说「评审一下我的改动」;Claude Code 也可用 <code>/reviewpilot-review</code>,Codex 可用 <code>$reviewpilot-review</code>。</p></div>\`;
       }
 
       async function renderTokens() {
@@ -899,11 +933,10 @@ const html = `<!doctype html>
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: f.name.value }),
           });
-          const installCmd = 'curl -fsSL -H "Authorization: Bearer ' + r.token + '" ' + location.origin + '/skill/install.sh | sh';
           out.innerHTML =
             "✓ 令牌仅显示这一次,立即复制:<br/><code>" + esc(r.token) + "</code>"
-            + "<br/><br/><b>一键安装已配置好的本地 Skill</b>(已内置此 token,装好即用、无需再配置):"
-            + "<pre>" + esc(installCmd) + "</pre>";
+            + "<br/><br/><b>一键安装已配置好的本地 Skill</b>(已内置此 token,装好即用、无需再配置)—— 按你使用的 Agent 选一条:"
+            + installBlocks((h) => skillInstallCmd({ token: r.token }, h));
           addCopyButtons(out);
           f.reset();
           renderTokens();
@@ -1075,13 +1108,17 @@ const html = `<!doctype html>
 
       async function renderRulesets() {
         const o = location.origin;
-        const installCmd = skillInstallCmd(await getSkillToken()); // token baked in
+        const skill = await getSkillToken(); // token baked into the install commands
         const mine = await load("/api/rulesets", []);
         const pub = await load("/api/rulesets?scope=public", []);
         const myHandle = (me && me.handle) || "";
-        const cmd = (r) => r.visibility === "public"
-          ? \`curl -fsSL \${o}/skill/ruleset/\${r.id}/install.sh | sh\`
-          : \`curl -fsSL -H "Authorization: Bearer rpat_…" \${o}/skill/ruleset/\${r.id}/install.sh | sh\`;
+        // A single ruleset installs as its own skill — same per-host routes.
+        const cmd = (r, host) => {
+          const url = \`\${o}/skill/ruleset/\${r.id}/\${host}/install.sh\`;
+          return r.visibility === "public"
+            ? \`curl -fsSL \${url} | sh\`
+            : \`curl -fsSL -H "Authorization: Bearer rpat_…" \${url} | sh\`;
+        };
         const ruleCount = (r) => (r.rules ? r.rules.length : 0);
         const offCount = (r) => (r.rules ? r.rules.filter((x) => x.pending || x.disabled).length : 0);
 
@@ -1093,7 +1130,7 @@ const html = `<!doctype html>
           <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
           <td class="muted">\${ruleCount(r)} 条规则\${offTag}</td>
-          <td><code>\${esc(cmd(r))}</code></td>
+          <td>\${installCopyButtons((h) => cmd(r, h))}</td>
           <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
         </tr>\`;
         }).join("");
@@ -1130,9 +1167,9 @@ const html = `<!doctype html>
         const orchestrator =
           \`<div class="card">
              <h3>① 安装编排型 skill(只需一次,命令已内置你的 token)</h3>
-             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。下面这条已内置你的 token,复制即用、装好即可自动沉淀规则:</p>
-             <pre><code>\${esc(installCmd)}</code></pre>
-             <h3>② 在 Claude Code 里直接说</h3>
+             <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。<b>按你使用的 Agent 选一条</b>,已内置你的 token,复制即用、装好即可自动沉淀规则:</p>
+             \${installBlocks((h) => skillInstallCmd(skill, h))}
+             <h3>② 在 Claude Code / Codex / Cursor 里直接说</h3>
              <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
              <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
              <h3>③ 自动沉淀规则</h3>
@@ -1144,7 +1181,7 @@ const html = `<!doctype html>
           + \`<p class="muted">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。skill 自动沉淀的规则<strong>默认采纳生效</strong>,可在「编辑」里随时<strong>停用</strong>某条(停用的既不应用、也不对外公开)。</p>
              <h3>我的规则集</h3>\`
           + (mine.length
-              ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
+              ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令(点按钮复制)</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
               : \`<p class="muted">还没有规则集,点上方「+ 新建规则集」创建。</p>\`)
           + \`<h3>社区规则集</h3>\`
           + (pub.length
@@ -1228,7 +1265,7 @@ const html = `<!doctype html>
       // --- Integrations: API & MCP docs ---
       async function renderIntegrations() {
         const o = esc(location.origin);
-        const installCmd = skillInstallCmd(await getSkillToken()); // token baked in
+        const skill = await getSkillToken(); // token baked into the install commands
         document.querySelector("#integrations").innerHTML = \`
           <p class="muted">用上方创建的个人访问令牌(<code>rpat_…</code>)调用 REST API 或接入 MCP。令牌继承你的角色:viewer 只读,写操作(新建任务、触发扫描)需 member+(由管理员升级)。令牌只在创建时显示一次。</p>
 
@@ -1254,10 +1291,10 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
 }</pre>
           <p class="muted">可用工具(按你的角色过滤):<code>whoami</code>、<code>list_schedules</code>、<code>list_jobs</code>、<code>get_job</code>(只读);<code>create_review_task</code>、<code>run_schedule</code>(member+)。</p>
 
-          <h3>本地评审 Skill(Claude Code)</h3>
-          <p class="muted">在你本机的 Claude Code 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本地的 Claude Code 执行,代码不出本机)。下面这条<strong>已内置你的 token</strong>,复制运行即可、无需再配置:</p>
-          <pre>\${esc(installCmd)}</pre>
-          <p class="muted">安装后在 Claude Code 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看 <code>\${o}/skill/reviewpilot-review/SKILL.md</code>。</p>
+          <h3>本地评审 Skill(Claude Code / Codex / Cursor)</h3>
+          <p class="muted">在你本机的 Agent 里装一个本地评审 skill —— 与本服务<b>同一评审内核</b>,但完全在本地运行(由你本机的 Agent 执行,代码不出本机)。三条命令装的是同一套内核,只是安装目录与 MCP 注册方式随宿主不同,<b>按你使用的 Agent 选一条</b>;都<strong>已内置你的 token</strong>,复制运行即可、无需再配置:</p>
+          \${installBlocks((h) => skillInstallCmd(skill, h))}
+          <p class="muted">安装后在 Agent 里说「评审一下我的改动」即可:自动按工作区改动 / 分支差异 / 全项目评审;若本机装了 code-review-graph,会带上风险排序与测试缺口。也可直接查看各平台版本的原文:<code>\${o}/skill/claude/SKILL.md</code>、<code>\${o}/skill/codex/SKILL.md</code>、<code>\${o}/skill/cursor/SKILL.md</code>。</p>
           <p class="muted">这是<b>编排型</b> skill:还可以说「让 &lt;用户名&gt; 帮我 review 我的改动」—— 它会拉取该用户的公开规则集,并按改动文件<b>本地按需</b>加载相关规则(代码不出本机)。规则集的创建与发现见左侧「评审规则集」。</p>
         \`;
         addCopyButtons(document.querySelector("#integrations"));
