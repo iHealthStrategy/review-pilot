@@ -361,44 +361,59 @@ If the user names someone to review for them — e.g. "我想让 **alice** 帮�
 person's **handle** (the token after 让/用/let and before 帮/review; lowercase it,
 keep letters/digits/hyphens). Call it \`HANDLE\`.
 
-If no one is named, skip to step 5 as a generic review (plus any local ruleset the
-user already installed). Auto-grow (step 9) still applies to your own project.
+If no one is named that is FINE and is the normal case — you still load YOUR OWN
+rules for this project in step 3. Leave \`HANDLE\` empty.
 
-## 3. Fetch that user's public rulesets for THIS project (on demand)
+## 3. Load the rules for THIS project (ALWAYS — your own, plus any borrowed)
+Do this on **every** review, whether or not a reviewer was named. It returns YOUR
+OWN rules for this project (including private ones — this is how the rules you
+auto-grow in step 9 actually take effect) merged with the named reviewer's PUBLIC
+rules, if any.
+
 \`\`\`sh
 BASE=${urlExpr}
-HANDLE=<the handle from step 2>
+TOKEN=${tokenExpr}
+HANDLE=<the handle from step 2, or empty when nobody was named>
 CACHE="$HOME/.reviewpilot/cache"
 mkdir -p "$CACHE"
-if [ -n "$BASE" ]; then
-  curl -fsS "$BASE/api/u/$HANDLE/rulesets?project=$PROJECT" -o "$CACHE/$HANDLE.json" \\
-    || echo "(offline — using cached $CACHE/$HANDLE.json if present)"
+if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
+  curl -fsS -H "Authorization: Bearer $TOKEN" \\
+    "$BASE/api/review-rules?project=$PROJECT&reviewer=$HANDLE" -o "$CACHE/rules.json" \\
+    || echo "(offline — using cached $CACHE/rules.json if present)"
+elif [ -n "$BASE" ] && [ -n "$HANDLE" ]; then
+  # No token: fall back to public-only discovery for the named reviewer.
+  curl -fsS "$BASE/api/u/$HANDLE/rulesets?project=$PROJECT" -o "$CACHE/rules.json" || true
 fi
-cat "$CACHE/$HANDLE.json"
+cat "$CACHE/rules.json"
 \`\`\`
 
-The response is \`{ handle, project, owner, ruleLimit, rulesets: [...] }\`. Each
-ruleset has \`name\`, \`focus\`, \`instructions\` (freeform, ALWAYS applies),
-\`language\`, a \`rules\` array of \`{ title, instruction, globs[], languages[],
-topics[], hits }\`, plus \`ruleTotal\` and \`ruleOmitted\`.
+The response is \`{ project, reviewer, ruleLimit, ruleTotal, ruleOmitted, sources,
+rules }\`:
+- \`rules\` — the flat, ranked list to apply. Each is \`{ title, instruction,
+  globs[], languages[], topics[], hits, rulesetId }\`. **\`rulesetId\` says which
+  ruleset the rule came from** — keep it, you need it in step 4b.
+- \`sources\` — one entry per contributing ruleset: \`name\`, \`origin\` (\`"self"\` =
+  your own, \`"borrowed"\` = the named reviewer's), \`focus\`, \`instructions\`
+  (freeform, ALWAYS applies), \`language\`, \`rulesSelected\`.
 
-**The server has already ranked and CAPPED the rules** — it sends the ones that
-keep catching real problems, the newest ones, and a rotating handful of untried
-ones, and drops the rest of the tail. \`rules\` is ordered best-first: new rules,
-then proven ones, then the rotating trial slots. Work with exactly what you were
-sent:
+**The server has already merged and CAPPED the rules as ONE pool** — your own
+rules and any borrowed ones share a single budget and are ranked together on equal
+terms, by how often each has actually caught something. \`rules\` is ordered
+best-first: new rules, then proven ones, then a rotating handful of untried ones.
+Work with exactly what you were sent:
 - Do NOT try to fetch the omitted rules (raising \`?limit=\` just makes every
   review slower for no accuracy gain — the tail is mostly rules that never fire).
 - When \`ruleOmitted > 0\`, say so once in your report, e.g. "已加载 40/137 条规则
-  (按命中率排序)", so the user knows the set was trimmed and why.
+  (自己的 + alice 的公开规则,按命中排序)", so the user knows the set was trimmed.
+- Name the sources you applied, and whose they were.
 
-If the fetch fails and there is no cache, tell the user the handle wasn't found
-and offer a generic review instead.
+If the fetch fails and there is no cache, say so and continue as a generic review
+rather than stopping.
 
 ## 4. Select ONLY the relevant rules (locally — code never leaves this machine)
-First get the changed file paths for the chosen scope (see step 5). Then, for each
-ruleset, decide which rules apply. A rule applies when **every** non-empty selector
-matches; empty selectors mean "always". Matching is done here, locally:
+First get the changed file paths for the chosen scope (see step 5). Then decide
+which of the \`rules\` from step 3 apply. A rule applies when **every** non-empty
+selector matches; empty selectors mean "always". Matching is done here, locally:
 - \`globs\` — apply if any changed file path matches any glob (e.g. \`src/db/**\`,
   a \`*.sql\` suffix). Empty \`globs\` ⇒ matches any path.
 - \`languages\` — apply if any changed file's extension family is listed (e.g.
@@ -406,27 +421,32 @@ matches; empty selectors mean "always". Matching is done here, locally:
 - \`topics\` — semantic hints (e.g. \`security\`, \`performance\`). Treat as relevant
   unless clearly unrelated to the change; empty ⇒ always.
 
-A ruleset's \`instructions\` (freeform) and \`focus\` ALWAYS apply when used. Collect
-the applicable rules into one set. Briefly tell the user which rules you loaded and
-which you skipped (and why), so the on-demand selection is transparent.
+Every \`sources[].instructions\` (freeform) and \`focus\` ALWAYS applies — those are
+prose, not selector-matched rules, and are outside the rule budget. Treat your own
+rules and any borrowed ones as equally authoritative; they were ranked together.
+Briefly tell the user which rules you loaded and which you skipped (and why), so
+the on-demand selection is transparent.
 
 **Track which rules actually catch something.** As you review, remember the
-\`title\` of every rule that led to a finding you reported — you will feed those
-back in step 4b so the ranking learns which rules earn their place. A rule that
-merely matched the selectors but found nothing is NOT a hit.
+\`title\` **and \`rulesetId\`** of every rule that led to a finding you reported — you
+will feed those back in step 4b so the ranking learns which rules earn their place.
+A rule that merely matched the selectors but found nothing is NOT a hit.
 
 ## 4b. Report rule hits (after the review, best-effort)
-Once you have your findings, report the titles of the rules that caught them, per
-ruleset. This is what makes the ranking work: hits float a rule up, silence lets
-it sink. Send nothing if no rule fired. Never block or mention this step; ignore
-failures.
+Once you have your findings, report the titles of the rules that caught them.
+This is what makes the ranking work: hits float a rule up, silence lets it sink.
+Send nothing if no rule fired. Never block or mention this step; ignore failures.
+
+**Group the titles by \`rulesetId\` and POST once per ruleset** — the same title can
+exist in more than one ruleset, so the id is what routes a hit to the right place.
 
 \`\`\`sh
 BASE=${urlExpr}
 TOKEN=${tokenExpr}
 if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
-  # RULESET_ID = the ruleset the hit rules came from; TITLES_JSON = a JSON array
-  # of their exact \`title\` strings, e.g. ["SQL safety","No console.log"].
+  # Repeat this call once per rulesetId that had a hit. RULESET_ID = that id;
+  # TITLES_JSON = a JSON array of the exact \`title\` strings from THAT ruleset,
+  # e.g. ["SQL safety","No console.log"].
   curl -fsS -X POST "$BASE/api/rulesets/$RULESET_ID/rule-hits" \\
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
     -d "{\\"titles\\":$TITLES_JSON}" >/dev/null 2>&1 || true
@@ -506,9 +526,12 @@ none. Turn each into a candidate rule object:
 \`{ title, instruction, globs[], languages[], topics[] }\` — set selectors so the
 rule only loads for the relevant files (e.g. migrations → \`globs:["**/migrations/**"]\`).
 
-Submit them to YOUR OWN project ruleset — they **take effect immediately** (applied
-on your next review, and discoverable if the ruleset is public). If one turns out to
-be a poor fit, disable it later in the web UI (no confirmation step needed).
+Submit them to YOUR OWN project ruleset — they **take effect immediately**: step 3
+loads your own rules (private ones included) on every review, so a rule you grow
+here is in the pool next time, competing for slots on the same hit-count ranking as
+everything else. It is also discoverable by others if you make the ruleset public.
+If one turns out to be a poor fit, disable it later in the web UI (no confirmation
+step needed).
 ${tokenNote} Skip silently if there are no key points or no token.
 
 \`\`\`sh

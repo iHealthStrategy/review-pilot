@@ -33,7 +33,7 @@ import type { Severity } from "../domain/entities.js";
 import { handleFromEmail } from "../auth/provision.js";
 import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
-import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
+import type { ReviewRule, ReviewRuleset, RulesetVisibility } from "../domain/entities.js";
 import { RULE_LOAD_POLICY } from "../domain/entities.js";
 import { applyRuleHits, rankRules } from "../review/rule-ranking.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
@@ -782,6 +782,85 @@ const ROUTES: Route[] = [
       const p = requirePrincipal(principal);
       await repo.deleteRuleset(params.id!, p.userId);
       return ok({ ok: true });
+    },
+  },
+  {
+    // The rules a review should actually apply, merged and ranked as ONE pool.
+    //
+    // The skill used to have only the unauthenticated public-discovery endpoint,
+    // so a user's OWN auto-grown rules — created private by default — were never
+    // loaded at all, and only applied if they manually published the ruleset and
+    // named themselves as the reviewer. This endpoint authenticates, so it can
+    // include them, and merges them with a named reviewer's PUBLIC rules into a
+    // single ranked selection sharing one budget: own rules and borrowed rules
+    // compete on equal terms, by the same hit-count ranking.
+    //
+    // Each returned rule carries `rulesetId` so hits can be reported back to the
+    // ruleset that owns it (rules from different rulesets can share a title).
+    method: "GET",
+    pattern: /^\/api\/review-rules$/,
+    handler: async ({ principal, query }, repo) => {
+      const p = requirePrincipal(principal);
+      const project = normalizeProjectKey(query.get("project") ?? "");
+      // A ruleset governs this review when it targets this project, or targets
+      // "any project" ("").
+      const governs = (r: ReviewRuleset): boolean =>
+        !project || r.project === "" || r.project === project;
+
+      // Own rulesets — including PRIVATE ones, which is the whole point.
+      const own = (await repo.listRulesetsByOwner(p.userId)).filter(governs);
+      // A named reviewer contributes only their PUBLIC rulesets, never private.
+      // Only slugify a NON-EMPTY value: slugify("") returns "ruleset", so an
+      // absent reviewer would otherwise borrow from whoever holds that handle.
+      const rawReviewer = (query.get("reviewer") ?? "").trim();
+      const reviewer = rawReviewer ? slugify(rawReviewer) : "";
+      const borrowed = reviewer
+        ? (await repo.listPublicRulesets()).filter(
+            (r) => r.ownerHandle === reviewer && r.ownerId !== p.userId && governs(r),
+          )
+        : [];
+
+      const rawLimit = query.get("limit");
+      const parsedLimit = rawLimit === null || rawLimit === "" ? NaN : Number(rawLimit);
+      const limit = Number.isFinite(parsedLimit) && parsedLimit >= 0
+        ? Math.min(Math.floor(parsedLimit), RULE_LOAD_POLICY.maxLimit)
+        : RULE_LOAD_POLICY.defaultLimit;
+
+      // One pool, one budget: merge every contributing ruleset's rules, tag each
+      // with its origin, then rank the lot together.
+      const pool = [...own, ...borrowed].flatMap((rs) =>
+        rs.rules.map((rule) => ({ ...rule, rulesetId: rs.id })),
+      );
+      const ranked = rankRules(pool, { limit });
+
+      // Freeform focus/instructions always apply and are NOT part of the rule
+      // budget — they are per-ruleset prose, not selector-matched rules. Only
+      // describe sources that actually contributed a selected rule, plus any
+      // whose prose applies, so the skill isn't told about irrelevant rulesets.
+      const contributing = new Set(ranked.rules.map((r) => r.rulesetId));
+      const sources = [...own, ...borrowed]
+        .filter((rs) => contributing.has(rs.id) || rs.focus.trim() || rs.instructions.trim())
+        .map((rs) => ({
+          rulesetId: rs.id,
+          name: rs.name,
+          origin: rs.ownerId === p.userId ? ("self" as const) : ("borrowed" as const),
+          ownerHandle: rs.ownerHandle,
+          project: rs.project,
+          focus: rs.focus,
+          instructions: rs.instructions,
+          language: rs.language,
+          rulesSelected: ranked.rules.filter((r) => r.rulesetId === rs.id).length,
+        }));
+
+      return ok({
+        ...(project ? { project } : {}),
+        ...(reviewer ? { reviewer } : {}),
+        ruleLimit: limit,
+        ruleTotal: ranked.total,
+        ruleOmitted: ranked.omitted,
+        sources,
+        rules: ranked.rules,
+      });
     },
   },
   {

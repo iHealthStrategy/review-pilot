@@ -497,3 +497,206 @@ test("auto-grown candidates are stamped so the ranking can give them a trial slo
     assert.ok(Number.isFinite(Date.parse(rule.createdAt)));
     assert.equal(rule.hits, undefined, "a brand-new rule has no hits yet");
   }));
+
+// --- GET /api/review-rules: own + borrowed, merged into ONE ranked pool -------
+// The skill used to load only the unauthenticated public-discovery endpoint, so a
+// user's own auto-grown rules (private by default) never actually applied. This
+// endpoint authenticates so it can include them, and merges them with a named
+// reviewer's public rules under a single shared budget.
+
+const mkSet = async (
+  base: string, token: string,
+  opts: { name: string; visibility: string; project?: string; rules: unknown[]; focus?: string; instructions?: string },
+) =>
+  (await (await fetch(`${base}/api/rulesets`, {
+    method: "POST", headers: auth(token),
+    body: JSON.stringify({
+      name: opts.name, visibility: opts.visibility,
+      // The server derives the normalized key from `project`; `projectLabel` is
+      // only the display string (this mirrors what the web form posts).
+      project: opts.project ?? "", projectLabel: opts.project ?? "",
+      rules: opts.rules,
+      focus: opts.focus ?? "", instructions: opts.instructions ?? "",
+    }),
+  })).json()) as any;
+
+const reviewRules = async (base: string, token: string, qs = "") =>
+  (await (await fetch(`${base}/api/review-rules${qs}`, { headers: auth(token) })).json()) as any;
+
+test("review-rules: loads the caller's OWN private rules (what auto-grow depends on)", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    const mine = await mkSet(base, me, {
+      name: "mine", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("my own rule")],
+    });
+    const got = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.deepEqual(got.rules.map((r: any) => r.title), ["my own rule"]);
+    // rulesetId routes a later hit report back to the right ruleset.
+    assert.equal(got.rules[0].rulesetId, mine.id);
+    assert.equal(got.sources.length, 1);
+    assert.equal(got.sources[0].origin, "self");
+  }));
+
+test("review-rules: no reviewer named still loads your own rules", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    await mkSet(base, me, {
+      name: "mine", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("mine only")],
+    });
+    // This is the common phrasing ("评审一下我的改动") — no handle at all.
+    const got = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.equal(got.rules.length, 1);
+    assert.equal(got.reviewer, undefined);
+    // An empty reviewer param behaves the same way.
+    const blank = await reviewRules(base, me, "?project=github.com/acme/app&reviewer=");
+    assert.equal(blank.rules.length, 1);
+    assert.equal(blank.reviewer, undefined);
+  }));
+
+test("review-rules: an absent reviewer must not borrow from the handle 'ruleset'", () =>
+  withApi(async (base, repo) => {
+    // slugify("") returns "ruleset", so an unguarded slugify would silently
+    // borrow the public rules of whoever happens to hold that handle.
+    const me = await register(repo, "me@x.com");
+    const trap = await register(repo, "ruleset@x.com");
+    await mkSet(base, trap, {
+      name: "trap", visibility: "public", project: "github.com/acme/app",
+      rules: [mkRule("should not leak in")],
+    });
+    const trapUser = (await repo.listUsers()).find((u) => u.email === "ruleset@x.com")!;
+    assert.equal(trapUser.handle, "ruleset", "precondition: the trap handle really is 'ruleset'");
+
+    for (const qs of ["?project=github.com/acme/app", "?project=github.com/acme/app&reviewer="]) {
+      const got = await reviewRules(base, me, qs);
+      assert.deepEqual(got.rules, [], `no reviewer named → nothing borrowed (${qs})`);
+    }
+    // Naming it explicitly still works — the guard is about the ABSENT case.
+    const named = await reviewRules(base, me, "?project=github.com/acme/app&reviewer=ruleset");
+    assert.deepEqual(named.rules.map((r: any) => r.title), ["should not leak in"]);
+  }));
+
+test("review-rules: merges own + a named reviewer's PUBLIC rules, never their private", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    const alice = await register(repo, "alice@x.com");
+    await mkSet(base, me, {
+      name: "mine", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("mine")],
+    });
+    await mkSet(base, alice, {
+      name: "alice public", visibility: "public", project: "github.com/acme/app",
+      rules: [mkRule("alice public rule")],
+    });
+    await mkSet(base, alice, {
+      name: "alice secret", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("alice private rule")],
+    });
+
+    const got = await reviewRules(base, me, "?project=github.com/acme/app&reviewer=alice");
+    const loaded = got.rules.map((r: any) => r.title).sort();
+    assert.deepEqual(loaded, ["alice public rule", "mine"]);
+    assert.ok(!loaded.includes("alice private rule"), "another user's private rules stay private");
+    const origins = Object.fromEntries(got.sources.map((s: any) => [s.name, s.origin]));
+    assert.deepEqual(origins, { mine: "self", "alice public": "borrowed" });
+  }));
+
+test("review-rules: own and borrowed rules SHARE one budget and rank on equal terms", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    const alice = await register(repo, "alice@x.com");
+    // 30 of mine and 30 of alice's. A per-ruleset cap would return 60; one shared
+    // budget returns 40, picked by hits regardless of who owns the rule.
+    await mkSet(base, me, {
+      name: "mine", visibility: "private", project: "github.com/acme/app",
+      rules: Array.from({ length: 30 }, (_, i) => mkRule(`mine-${i}`, { hits: i })),
+    });
+    await mkSet(base, alice, {
+      name: "alice", visibility: "public", project: "github.com/acme/app",
+      rules: Array.from({ length: 30 }, (_, i) => mkRule(`alice-${i}`, { hits: i })),
+    });
+
+    const got = await reviewRules(base, me, "?project=github.com/acme/app&reviewer=alice");
+    assert.equal(got.ruleLimit, 40);
+    assert.equal(got.ruleTotal, 60, "one pool of 60");
+    assert.equal(got.rules.length, 40, "ONE shared budget, not 40 per ruleset");
+    assert.equal(got.ruleOmitted, 20);
+    // Equal priority: the two owners' highest-hit rules interleave at the top
+    // rather than one owner's block preceding the other's.
+    const top = got.rules.slice(0, 4).map((r: any) => r.title);
+    assert.ok(top.some((t: string) => t.startsWith("mine-")), `own rules in the lead: ${top}`);
+    assert.ok(top.some((t: string) => t.startsWith("alice-")), `borrowed rules in the lead: ${top}`);
+    // Both owners contribute roughly evenly, since their hit profiles match.
+    const counts = got.rules.reduce((a: any, r: any) => {
+      const k = r.title.split("-")[0];
+      a[k] = (a[k] || 0) + 1;
+      return a;
+    }, {});
+    assert.ok(Math.abs(counts.mine - counts.alice) <= 4, `balanced, got ${JSON.stringify(counts)}`);
+  }));
+
+test("review-rules: an 'any project' ruleset applies alongside project-scoped ones", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    await mkSet(base, me, { name: "global", visibility: "private", rules: [mkRule("everywhere")] });
+    await mkSet(base, me, {
+      name: "scoped", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("here only")],
+    });
+    await mkSet(base, me, {
+      name: "elsewhere", visibility: "private", project: "github.com/acme/other",
+      rules: [mkRule("other project")],
+    });
+    const got = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.deepEqual(got.rules.map((r: any) => r.title).sort(), ["everywhere", "here only"]);
+  }));
+
+test("review-rules: freeform focus/instructions ride along outside the rule budget", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    await mkSet(base, me, {
+      name: "prose", visibility: "private", project: "github.com/acme/app",
+      rules: [], focus: "并发安全", instructions: "- 禁止 console.log",
+    });
+    const got = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.equal(got.rules.length, 0);
+    // Prose still reaches the skill even with no selector-matched rules.
+    assert.equal(got.sources.length, 1);
+    assert.equal(got.sources[0].focus, "并发安全");
+    assert.equal(got.sources[0].instructions, "- 禁止 console.log");
+    assert.equal(got.ruleTotal, 0, "prose is not counted against the rule budget");
+  }));
+
+test("review-rules: disabled rules are excluded, and requires authentication", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    await mkSet(base, me, {
+      name: "mixed", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("live"), mkRule("off", { disabled: true }), mkRule("legacy", { pending: true })],
+    });
+    const got = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.deepEqual(got.rules.map((r: any) => r.title), ["live"]);
+    // Private rules are involved, so anonymous access must be refused.
+    assert.equal((await fetch(`${base}/api/review-rules?project=github.com/acme/app`)).status, 401);
+  }));
+
+test("review-rules: hits reported via rulesetId feed straight back into the ranking", () =>
+  withApi(async (base, repo) => {
+    const me = await register(repo, "me@x.com");
+    const rs = await mkSet(base, me, {
+      name: "mine", visibility: "private", project: "github.com/acme/app",
+      rules: [mkRule("quiet"), mkRule("useful")],
+    });
+    const before = await reviewRules(base, me, "?project=github.com/acme/app");
+    const useful = before.rules.find((r: any) => r.title === "useful");
+    // Round-trip: the id handed to the skill is the id the hit endpoint accepts.
+    const hit = await fetch(`${base}/api/rulesets/${useful.rulesetId}/rule-hits`, {
+      method: "POST", headers: auth(me), body: JSON.stringify({ titles: ["useful"] }),
+    });
+    assert.equal(hit.status, 200);
+    assert.equal(useful.rulesetId, rs.id);
+    const after = await reviewRules(base, me, "?project=github.com/acme/app");
+    assert.equal(after.rules[0].title, "useful", "the rule that caught something now leads");
+    assert.equal(after.rules[0].hits, 1);
+  }));
