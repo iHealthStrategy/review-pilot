@@ -15,6 +15,7 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillFinding,
   SkillScope,
   SkillUsage,
   TokenUsage,
@@ -132,6 +133,12 @@ export interface RecordSkillUsageInput {
   major: number;
   minor: number;
   info: number;
+  /** Wall-clock ms for the run; omit when the reporting skill didn't measure it. */
+  durationMs?: number;
+  /** Wall-clock ms minus time waiting on user input; omit when not measured. */
+  activeMs?: number;
+  /** The findings themselves; omit or pass [] for a counts-only report. */
+  findings?: readonly SkillFinding[];
   /** Defaults to now when omitted (injectable for tests). */
   at?: string;
 }
@@ -139,8 +146,12 @@ export interface RecordSkillUsageInput {
 export interface SkillUsageFilter {
   /** Scope to one user (non-admin self view); omit for all users (admin). */
   userId?: string;
+  /** Scope to one project key; omit for every project. */
+  project?: string;
   /** ISO lower bound (inclusive) — bound the scan window for aggregation. */
   since?: string;
+  /** Cap the number of (most recent) rows returned; omit for all of them. */
+  limit?: number;
 }
 
 export interface CreateRulesetInput {

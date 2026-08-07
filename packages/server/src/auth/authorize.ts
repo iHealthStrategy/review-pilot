@@ -48,6 +48,13 @@ export function requiredRole(method: string, pathname: string): UserRole | "publ
   if (pathname === "/api/users" || pathname.startsWith("/api/users/")) return "admin";
   // Self-service (own identity, own tokens, own rulesets) needs only auth.
   // Ownership is enforced per-handler; viewers may manage their own content.
+  // Review-efficiency stats: the cross-project rollup and the raw per-run
+  // detail (which carries the findings themselves) are an admin overview, so
+  // they are gated here as well as re-checked in the handler. Must precede the
+  // `/api/usage/` catch-all below, which only requires an authenticated user.
+  if (pathname === "/api/usage/skill/projects" || pathname === "/api/usage/skill/runs") {
+    return "admin";
+  }
   if (
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||

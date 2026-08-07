@@ -13,6 +13,7 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillFinding,
   SkillScope,
   SkillUsage,
   TokenUsage,
@@ -204,6 +205,10 @@ function toSkillUsage(d: MongoDoc): SkillUsage {
     major: (d.major as number) ?? 0,
     minor: (d.minor as number) ?? 0,
     info: (d.info as number) ?? 0,
+    // Absent on docs written before review-efficiency stats existed.
+    ...(typeof d.durationMs === "number" ? { durationMs: d.durationMs } : {}),
+    ...(typeof d.activeMs === "number" ? { activeMs: d.activeMs } : {}),
+    findings: Array.isArray(d.findings) ? (d.findings as SkillFinding[]) : [],
     at: d.at as string,
   };
 }
@@ -282,6 +287,7 @@ export class MongoRepository implements Repository {
     await this.col(COLLECTIONS.tokenUsage).createIndex({ source: 1, sourceId: 1 });
     await this.col(COLLECTIONS.skillUsage).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.skillUsage).createIndex({ userId: 1, at: 1 });
+    await this.col(COLLECTIONS.skillUsage).createIndex({ project: 1, at: 1 });
     await this.col(COLLECTIONS.skillUsage).createIndex({ at: 1 });
     await this.col(COLLECTIONS.rulesets).createIndex({ id: 1 }, { unique: true });
     await this.col(COLLECTIONS.rulesets).createIndex({ ownerId: 1 });
@@ -718,6 +724,9 @@ export class MongoRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
+      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };
     await this.col(COLLECTIONS.skillUsage).insertOne({ ...usage });
@@ -727,12 +736,14 @@ export class MongoRepository implements Repository {
   async listSkillUsage(filter: SkillUsageFilter = {}): Promise<SkillUsage[]> {
     const q: Record<string, string> = {};
     if (filter.userId) q.userId = filter.userId;
+    if (filter.project) q.project = filter.project;
     const docs = await this.col(COLLECTIONS.skillUsage).find(q, {
       sort: { field: "at", dir: -1 },
     });
     // `since` is a range filter (not in the equality-only MongoFilter); apply it here.
     const since = filter.since;
-    return docs.map(toSkillUsage).filter((u) => !since || u.at >= since);
+    const rows = docs.map(toSkillUsage).filter((u) => !since || u.at >= since);
+    return filter.limit === undefined ? rows : rows.slice(0, Math.max(0, filter.limit));
   }
 
   async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {

@@ -31,7 +31,15 @@ import {
 import type { AttestPolicyStore } from "../attest/policy-store.js";
 import type { Severity } from "../domain/entities.js";
 import { handleFromEmail } from "../auth/provision.js";
-import { type Bucket, aggregateSkillByUser, aggregateUsage, defaultSince } from "../usage/aggregate.js";
+import {
+  type Bucket,
+  aggregateSkillByProject,
+  aggregateSkillByUser,
+  aggregateUsage,
+  defaultSince,
+} from "../usage/aggregate.js";
+import { SKILL_FINDING_LIMITS } from "../domain/entities.js";
+import type { SkillFinding } from "../domain/entities.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, RulesetVisibility } from "../domain/entities.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
@@ -136,6 +144,57 @@ function asEnum<T extends string>(v: unknown, allowed: readonly T[], field: stri
   return v as T;
 }
 
+/**
+ * A non-negative millisecond duration, or undefined when absent/unusable.
+ * Reported by a client we don't control, so anything non-finite or negative is
+ * dropped rather than stored as a bogus stat.
+ */
+function optionalMs(v: unknown): number | undefined {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.round(n);
+}
+
+/**
+ * Coerce a reported findings array into stored {@link SkillFinding}s, applying
+ * {@link SKILL_FINDING_LIMITS}. Findings come from a local skill run, so the
+ * server bounds both the array and each string: an unbounded payload would
+ * otherwise land straight in the database. Entries without a usable severity
+ * and title are dropped, and we truncate rather than reject so one malformed
+ * finding never loses the whole run's stats.
+ */
+function sanitizeFindings(v: unknown): SkillFinding[] {
+  if (!Array.isArray(v)) return [];
+  const L = SKILL_FINDING_LIMITS;
+  const clip = (s: unknown, max: number): string =>
+    typeof s === "string" ? s.trim().slice(0, max) : "";
+  const out: SkillFinding[] = [];
+  for (const raw of v.slice(0, L.maxFindings)) {
+    if (!raw || typeof raw !== "object") continue;
+    const f = raw as Record<string, unknown>;
+    const severity = SEVERITIES.find((s) => s === f.severity);
+    const title = clip(f.title, L.maxTitle);
+    if (!severity || !title) continue;
+    const line = typeof f.line === "number" && Number.isFinite(f.line) && f.line > 0
+      ? Math.floor(f.line)
+      : undefined;
+    const detail = clip(f.detail, L.maxDetail);
+    const suggestion = clip(f.suggestion, L.maxSuggestion);
+    const category = clip(f.category, L.maxCategory);
+    out.push({
+      severity,
+      filePath: clip(f.filePath, L.maxPath),
+      title,
+      ...(line === undefined ? {} : { line }),
+      ...(detail ? { detail } : {}),
+      ...(suggestion ? { suggestion } : {}),
+      ...(category ? { category } : {}),
+    });
+  }
+  return out;
+}
+
 /** Validate a callback spec: { url, headers? }. */
 function parseCallback(v: unknown): { url: string; headers?: Record<string, string> } {
   const c = (v ?? {}) as Record<string, unknown>;
@@ -150,6 +209,7 @@ function parseCallback(v: unknown): { url: string; headers?: Record<string, stri
 }
 
 const ROLES: readonly UserRole[] = ["viewer", "member", "admin"];
+const SEVERITIES: readonly Severity[] = ["critical", "major", "minor", "info"];
 const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /** API-safe user view. */
@@ -178,6 +238,22 @@ function publicToken(t: ApiToken) {
 function requirePrincipal(principal: Principal | null): Principal {
   if (!principal) throw new HttpError(401, "unauthorized");
   return principal;
+}
+
+/**
+ * Admin-only guard for handlers whose response spans other users' data. The
+ * route table in {@link requiredRole} already gates these paths; this is the
+ * second lock, so a future routing change can't silently open one up.
+ */
+function requireAdmin(principal: Principal | null): Principal {
+  const p = requirePrincipal(principal);
+  if (!roleAtLeast(p.role, "admin")) throw new HttpError(403, "admin only");
+  return p;
+}
+
+/** `?bucket=` with a safe default, shared by the usage endpoints. */
+function asBucket(raw: string | null): Bucket {
+  return raw === "week" || raw === "month" ? raw : "day";
 }
 
 /** Resolve a principal's email for display/ownership (env admin or DB user). */
@@ -535,6 +611,13 @@ const ROUTES: Route[] = [
         return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
       };
       const handle = await principalHandle(p, repo, auth);
+      // Timings and findings are OPTIONAL: skills installed before review-stats
+      // existed report counts only, and must keep working unchanged.
+      const durationMs = optionalMs(b.durationMs);
+      // Active time is meaningless without a total to subtract waits from, and
+      // no view reads it alone — so the pair is all-or-nothing, matching what
+      // the skill is told to send.
+      const activeMs = durationMs === undefined ? undefined : optionalMs(b.activeMs);
       const usage = await repo.recordSkillUsage({
         userId: p.userId,
         userLabel: handle ? `@${handle}` : await principalEmail(p, repo, auth),
@@ -544,6 +627,13 @@ const ROUTES: Route[] = [
         major: count("major"),
         minor: count("minor"),
         info: count("info"),
+        ...(durationMs === undefined ? {} : { durationMs }),
+        // Active time can never exceed wall clock; clamp rather than reject so a
+        // sloppy client still yields usable stats.
+        ...(activeMs === undefined || durationMs === undefined
+          ? {}
+          : { activeMs: Math.min(activeMs, durationMs) }),
+        findings: sanitizeFindings(b.findings),
       });
       return ok({ id: usage.id }, 201);
     },
@@ -563,6 +653,40 @@ const ROUTES: Route[] = [
         ...(admin ? {} : { userId: p.userId }),
       });
       return ok({ bucket, scope: admin ? "all" : "self", rows: aggregateSkillByUser(events) });
+    },
+  },
+  // Per-project problem summary — what a project's reviews keep turning up.
+  // ADMIN ONLY (also gated in requiredRole): it spans every user's reviews.
+  {
+    method: "GET",
+    pattern: /^\/api\/usage\/skill\/projects$/,
+    handler: async ({ principal, query }, repo) => {
+      requireAdmin(principal);
+      const bucket: Bucket = asBucket(query.get("bucket"));
+      const events = await repo.listSkillUsage({
+        since: defaultSince(bucket),
+        ...(query.get("project") ? { project: query.get("project")! } : {}),
+      });
+      return ok({ bucket, rows: aggregateSkillByProject(events) });
+    },
+  },
+  // Raw per-run detail, newest first, including each run's findings. ADMIN ONLY
+  // (also gated in requiredRole) — this is the least-aggregated view there is.
+  {
+    method: "GET",
+    pattern: /^\/api\/usage\/skill\/runs$/,
+    handler: async ({ principal, query }, repo) => {
+      requireAdmin(principal);
+      const bucket: Bucket = asBucket(query.get("bucket"));
+      const rawLimit = Number(query.get("limit"));
+      const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : 100;
+      const runs = await repo.listSkillUsage({
+        since: defaultSince(bucket),
+        limit,
+        ...(query.get("project") ? { project: query.get("project")! } : {}),
+        ...(query.get("userId") ? { userId: query.get("userId")! } : {}),
+      });
+      return ok({ bucket, limit, runs });
     },
   },
   // --- Community review rulesets (self-service; ownership enforced per-handler) ---

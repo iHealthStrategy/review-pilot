@@ -175,11 +175,52 @@ export interface TokenUsage {
 export type SkillScope = "working" | "branch" | "whole";
 
 /**
+ * One finding as reported by a local skill run, for the per-project problem
+ * summary. This is metadata ABOUT a problem — severity, where it was, what it
+ * was — and deliberately never the surrounding source: no diff hunks, no code
+ * snippets. `detail`/`suggestion` are prose the skill wrote, and the server
+ * caps their length on ingest (see SKILL_FINDING_LIMITS).
+ */
+export interface SkillFinding {
+  readonly severity: Severity;
+  /** Repo-relative path the finding sits in ("" when it is repo-wide). */
+  readonly filePath: string;
+  readonly line?: number;
+  readonly title: string;
+  readonly detail?: string;
+  readonly suggestion?: string;
+  /** Free-form bucket the skill assigned (e.g. "security", "correctness"). */
+  readonly category?: string;
+}
+
+/**
+ * Ingest caps for a reported run. Findings arrive from a client we do not
+ * control, so the server truncates rather than trusting the payload: an
+ * unbounded array or a megabyte-long detail would otherwise land in the DB.
+ */
+export const SKILL_FINDING_LIMITS = {
+  maxFindings: 200,
+  maxTitle: 300,
+  maxDetail: 2000,
+  maxSuggestion: 2000,
+  maxPath: 400,
+  maxCategory: 60,
+} as const;
+
+/**
  * One run of the local review skill (the orchestrator running in a user's own
- * Claude Code), reported back to the platform per review. Deliberately carries
- * NO token counts — the local session can't measure them; it records the run,
- * its scope, and the findings it reported by severity, attributed to the user.
- * Admins aggregate these per user; a user sees only their own.
+ * agent), reported back to the platform per review. Carries NO token counts —
+ * the local session can't measure them — but does record how long the review
+ * took, and what it found, attributed to the user.
+ *
+ * Two durations, because wall-clock alone is misleading for an interactive
+ * review: `durationMs` is end-minus-start, while `activeMs` excludes the
+ * stretches spent waiting on the user to answer a prompt. `activeMs` is the
+ * one to use for efficiency comparisons; both are optional because skills
+ * installed before this feature report neither.
+ *
+ * Admins aggregate these per user (efficiency) and per project (problem
+ * summary); a non-admin user only ever sees their own runs.
  */
 export interface SkillUsage {
   readonly id: string;
@@ -195,6 +236,15 @@ export interface SkillUsage {
   readonly major: number;
   readonly minor: number;
   readonly info: number;
+  /** Wall-clock duration of the run: end minus start. Absent = not reported. */
+  readonly durationMs?: number;
+  /** Duration minus time spent waiting on user input. Absent = not reported. */
+  readonly activeMs?: number;
+  /**
+   * The findings themselves, for the per-project problem summary. Empty when
+   * the run found nothing, or when an older skill reported counts only.
+   */
+  readonly findings: readonly SkillFinding[];
   readonly at: string;
 }
 

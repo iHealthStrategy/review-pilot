@@ -137,6 +137,35 @@ test("skills: one-shot fix is aggregate → confirm once → batch-apply (no com
   }
 });
 
+test("buildOrchestratorSkill: reports findings + both timings, and stamps the clock", () => {
+  const md = buildOrchestratorSkill("https://x.example.com", "rpat_t");
+  // Step 0 starts the clock and step 10 reports it.
+  assert.match(md, /## 0\. Start the clock/);
+  assert.match(md, /date \+%s/);
+  assert.match(md, /T_START/);
+  assert.match(md, /T_WAIT/);
+  // Shell state does not survive between commands, so the skill must be told
+  // to hold the stamps in its own reasoning rather than in a shell variable.
+  assert.match(md, /fresh shell|in your own reasoning/i);
+  // Rather than a guessed duration, report none.
+  assert.match(md, /report no timing at all/i);
+  // The upload carries findings and both durations.
+  assert.match(md, /\\"durationMs\\":\$DURATION_MS/);
+  assert.match(md, /\\"activeMs\\":\$ACTIVE_MS/);
+  assert.match(md, /\\"findings\\":\$FINDINGS_JSON/);
+  // `date` must be pre-authorized or every stamp prompts on Claude Code.
+  assert.match(md.slice(0, md.indexOf("\n# ")), /Bash\(date \*\)/);
+});
+
+test("buildOrchestratorSkill: is explicit that findings — but never code — are uploaded", () => {
+  const md = buildOrchestratorSkill("https://x.example.com", "rpat_t");
+  assert.match(md, /What leaves the machine/);
+  // The promise that remains: metadata about problems, never the source.
+  assert.match(md, /does \*\*NOT\*\* upload source code/);
+  assert.match(md, /no diff hunks, no code snippets/);
+  assert.match(md, /paraphrase it/i); // don't smuggle code in via `detail`
+});
+
 test("normalizeProjectKey: stable cross-form key", () => {
   assert.equal(normalizeProjectKey("git@github.com:acme/App.git"), "github.com/acme/app");
   assert.equal(normalizeProjectKey("https://github.com/acme/app"), "github.com/acme/app");

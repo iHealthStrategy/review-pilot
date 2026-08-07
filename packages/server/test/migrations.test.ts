@@ -52,10 +52,12 @@ test("migrations: runner applies all then is idempotent", async () => {
     "0008_skill_usage",
     "0009_user_external_id",
     "0010_user_name",
+    "0011_skill_usage_findings",
   ]);
   // _migrations ledger + each migration body were exec'd.
   assert.ok(client.execs.some((s) => /_migrations/.test(s)));
   assert.ok(client.execs.some((s) => /CREATE TABLE IF NOT EXISTS projects/.test(s)));
+  assert.ok(client.execs.some((s) => /skill_usage ADD COLUMN findings/.test(s)));
 
   // Second run: ledger reports them already applied → nothing runs.
   client.queueAll([
@@ -69,6 +71,7 @@ test("migrations: runner applies all then is idempotent", async () => {
     { id: "0008_skill_usage" },
     { id: "0009_user_external_id" },
     { id: "0010_user_name" },
+    { id: "0011_skill_usage_findings" },
   ]);
   const ran2 = await runMigrations(client);
   assert.deepEqual(ran2, []);

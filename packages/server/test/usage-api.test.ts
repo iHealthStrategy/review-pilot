@@ -147,3 +147,163 @@ test("GET /api/usage/skill: admin sees all users, others see only themselves", (
     assert.equal(asDev.rows.length, 1, "non-admin sees only their own");
     assert.equal(asDev.rows[0].userId, dev.user.id);
   }));
+
+// --- Review stats: findings + timings upload, and the admin-only views ---
+
+test("POST /api/usage/skill stores findings and both timings", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "viewer");
+    const res = await postSkill(base, u.token, {
+      project: "https://github.com/Acme/App.git", // normalized server-side
+      scope: "branch",
+      critical: 0,
+      major: 1,
+      minor: 0,
+      info: 1,
+      durationMs: 300_000,
+      activeMs: 120_000,
+      findings: [
+        {
+          severity: "major",
+          filePath: "src/db.ts",
+          line: 42,
+          title: "Unbounded query",
+          detail: "Reads the whole table.",
+          suggestion: "Paginate.",
+          category: "performance",
+        },
+        { severity: "info", filePath: "", title: "No changelog entry" },
+      ],
+    });
+    assert.equal(res.status, 201);
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.project, "github.com/acme/app", "project key normalized");
+    assert.equal(run!.durationMs, 300_000);
+    assert.equal(run!.activeMs, 120_000);
+    assert.equal(run!.findings.length, 2);
+    assert.equal(run!.findings[0]!.line, 42);
+    assert.equal(run!.findings[0]!.category, "performance");
+    assert.equal(run!.findings[1]!.filePath, "", "repo-wide finding keeps an empty path");
+  }));
+
+test("POST /api/usage/skill stays backward compatible with counts-only reports", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "viewer");
+    // Exactly what a skill installed before this feature sends.
+    const res = await postSkill(base, u.token, {
+      project: "p", scope: "working", critical: 0, major: 1, minor: 0, info: 0,
+    });
+    assert.equal(res.status, 201);
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.durationMs, undefined, "absent, not zero");
+    assert.equal(run!.activeMs, undefined);
+    assert.deepEqual(run!.findings, []);
+  }));
+
+test("POST /api/usage/skill sanitizes a hostile payload instead of trusting it", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "viewer");
+    const res = await postSkill(base, u.token, {
+      project: "p",
+      scope: "working",
+      critical: 0, major: 0, minor: 0, info: 0,
+      durationMs: -5, // negative → dropped
+      activeMs: 999_999, // dropped too: the timing pair is all-or-nothing
+      findings: [
+        ...Array.from({ length: 250 }, () => ({ severity: "minor", filePath: "a.ts", title: "x" })),
+        { severity: "bogus", filePath: "a.ts", title: "bad severity" }, // dropped
+        { severity: "minor", filePath: "a.ts" }, // no title → dropped
+        { severity: "minor", filePath: "a.ts", title: "y".repeat(500) }, // truncated
+        "not an object",
+      ],
+    });
+    assert.equal(res.status, 201);
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.durationMs, undefined, "negative duration dropped");
+    assert.equal(run!.activeMs, undefined, "no duration → no active time either");
+    assert.equal(run!.findings.length, 200, "array capped at SKILL_FINDING_LIMITS.maxFindings");
+    assert.ok(run!.findings.every((f) => f.severity === "minor"));
+    assert.ok(run!.findings.every((f) => f.title.length <= 300));
+  }));
+
+test("POST /api/usage/skill clamps activeMs to the reported duration", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "viewer");
+    await postSkill(base, u.token, {
+      project: "p", scope: "working", critical: 0, major: 0, minor: 0, info: 0,
+      durationMs: 1000, activeMs: 9999,
+    });
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.activeMs, 1000, "active time can never exceed wall clock");
+  }));
+
+test("GET /api/usage/skill/projects and /runs are admin-only", () =>
+  withApi(async (base, repo) => {
+    const dev = await makeSession(repo, SECRET, "member");
+    for (const path of ["/api/usage/skill/projects", "/api/usage/skill/runs"]) {
+      assert.equal((await fetch(`${base}${path}`)).status, 401, `${path} anonymous`);
+      assert.equal(
+        (await fetch(`${base}${path}`, { headers: { authorization: `Bearer ${dev.token}` } })).status,
+        403,
+        `${path} non-admin`,
+      );
+    }
+  }));
+
+test("GET /api/usage/skill/projects rolls findings up per project", () =>
+  withApi(async (base, repo) => {
+    const admin = await makeSession(repo, SECRET, "admin");
+    const dev = await makeSession(repo, SECRET, "viewer");
+    const finding = { severity: "major", filePath: "src/db.ts", title: "Unbounded query" };
+    await postSkill(base, dev.token, {
+      project: "github.com/acme/app", scope: "branch",
+      critical: 0, major: 1, minor: 0, info: 0, findings: [finding],
+    });
+    await postSkill(base, admin.token, {
+      project: "github.com/acme/app", scope: "branch",
+      critical: 0, major: 1, minor: 0, info: 0,
+      findings: [{ ...finding, filePath: "src/other.ts" }],
+    });
+    const body = (await (
+      await fetch(`${base}/api/usage/skill/projects?bucket=month`, {
+        headers: { authorization: `Bearer ${admin.token}` },
+      })
+    ).json()) as { rows: any[] };
+    const app = body.rows.find((r) => r.project === "github.com/acme/app");
+    assert.equal(app.runs, 2);
+    assert.equal(app.reviewers, 2);
+    assert.equal(app.problems.length, 1, "same problem across two runs collapses");
+    assert.equal(app.problems[0].count, 2);
+    assert.deepEqual(app.problems[0].files.sort(), ["src/db.ts", "src/other.ts"]);
+
+    // ?project= narrows to one project.
+    const one = (await (
+      await fetch(`${base}/api/usage/skill/projects?bucket=month&project=github.com/nope/x`, {
+        headers: { authorization: `Bearer ${admin.token}` },
+      })
+    ).json()) as { rows: any[] };
+    assert.equal(one.rows.length, 0);
+  }));
+
+test("GET /api/usage/skill/runs returns raw runs with findings, newest first, capped", () =>
+  withApi(async (base, repo) => {
+    const admin = await makeSession(repo, SECRET, "admin");
+    for (const scope of ["working", "branch", "whole"]) {
+      await postSkill(base, admin.token, {
+        project: "github.com/acme/app", scope,
+        critical: 0, major: 1, minor: 0, info: 0,
+        durationMs: 60_000, activeMs: 30_000,
+        findings: [{ severity: "major", filePath: `src/${scope}.ts`, title: "Issue" }],
+      });
+    }
+    const body = (await (
+      await fetch(`${base}/api/usage/skill/runs?bucket=month&limit=2`, {
+        headers: { authorization: `Bearer ${admin.token}` },
+      })
+    ).json()) as { limit: number; runs: any[] };
+    assert.equal(body.limit, 2);
+    assert.equal(body.runs.length, 2, "limit respected");
+    assert.ok(body.runs[0].at >= body.runs[1].at, "newest first");
+    assert.equal(body.runs[0].findings.length, 1);
+    assert.equal(body.runs[0].activeMs, 30_000);
+  }));

@@ -14,6 +14,7 @@ import type {
   ReviewRuleset,
   RulesetVisibility,
   Severity,
+  SkillFinding,
   SkillScope,
   SkillUsage,
   TokenUsage,
@@ -272,6 +273,9 @@ interface SkillUsageRow {
   major: number;
   minor: number;
   info: number;
+  duration_ms: number | null;
+  active_ms: number | null;
+  findings: string | null;
   at: string;
 }
 function toSkillUsage(r: SkillUsageRow): SkillUsage {
@@ -285,8 +289,25 @@ function toSkillUsage(r: SkillUsageRow): SkillUsage {
     major: r.major,
     minor: r.minor,
     info: r.info,
+    // Nullable: rows written before 0011 (or by a counts-only skill) have none.
+    ...(r.duration_ms === null || r.duration_ms === undefined ? {} : { durationMs: r.duration_ms }),
+    ...(r.active_ms === null || r.active_ms === undefined ? {} : { activeMs: r.active_ms }),
+    findings: parseFindings(r.findings),
     at: r.at,
   };
+}
+/**
+ * Decode the findings JSON column. A malformed value must not take down the
+ * whole stats page, so we degrade to "no findings" rather than throwing.
+ */
+function parseFindings(raw: string | null | undefined): SkillFinding[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SkillFinding[]) : [];
+  } catch {
+    return [];
+  }
 }
 interface RulesetRow {
   id: string;
@@ -978,12 +999,16 @@ export class SqlRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
+      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };
     await this.client.run(
       `INSERT INTO skill_usage
-         (id, user_id, user_label, project, scope, critical, major, minor, info, at)
-       VALUES (${placeholderList(this.client.dialect, 10)})`,
+         (id, user_id, user_label, project, scope, critical, major, minor, info,
+          duration_ms, active_ms, findings, at)
+       VALUES (${placeholderList(this.client.dialect, 13)})`,
       [
         usage.id,
         usage.userId,
@@ -994,6 +1019,10 @@ export class SqlRepository implements Repository {
         usage.major,
         usage.minor,
         usage.info,
+        usage.durationMs ?? null,
+        usage.activeMs ?? null,
+        // Store [] as NULL so "no findings" and "counts-only" read back alike.
+        usage.findings.length ? JSON.stringify(usage.findings) : null,
         usage.at,
       ],
     );
@@ -1007,6 +1036,10 @@ export class SqlRepository implements Repository {
       params.push(filter.userId);
       clauses.push(`user_id = ${this.ph(params.length)}`);
     }
+    if (filter.project) {
+      params.push(filter.project);
+      clauses.push(`project = ${this.ph(params.length)}`);
+    }
     if (filter.since) {
       params.push(filter.since);
       clauses.push(`at >= ${this.ph(params.length)}`);
@@ -1016,7 +1049,8 @@ export class SqlRepository implements Repository {
       `SELECT * FROM skill_usage${where} ORDER BY at DESC`,
       params,
     );
-    return rows.map(toSkillUsage);
+    const mapped = rows.map(toSkillUsage);
+    return filter.limit === undefined ? mapped : mapped.slice(0, Math.max(0, filter.limit));
   }
 
   async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {
