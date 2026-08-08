@@ -220,6 +220,21 @@ export const MIGRATIONS: readonly Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_skill_usage_project_at ON skill_usage(project, at);
     `,
   },
+  {
+    // Review-metric inputs: the size of the change under review (without which
+    // finding counts and durations are not comparable), the one-shot fix pass's
+    // proposed/applied counts, and a key grouping repeated reviews of the same
+    // change so "first-pass rate" can mean the first review of a change.
+    // All nullable — runs from earlier skills simply report none.
+    id: "0012_skill_usage_metrics",
+    up: () => `
+      ALTER TABLE skill_usage ADD COLUMN files_changed INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN lines_changed INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN fixes_proposed INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN fixes_applied INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN change_key TEXT;
+    `,
+  },
 ];
 
 /**

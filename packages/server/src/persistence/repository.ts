@@ -137,10 +137,42 @@ export interface RecordSkillUsageInput {
   durationMs?: number;
   /** Wall-clock ms minus time waiting on user input; omit when not measured. */
   activeMs?: number;
+  /** Size of the reviewed change, so counts and durations become comparable. */
+  filesChanged?: number;
+  linesChanged?: number;
+  /** One-shot fix pass: fixes offered, and fixes the user accepted. */
+  fixesProposed?: number;
+  fixesApplied?: number;
+  /** Groups repeated reviews of the SAME change (see SkillUsage.changeKey). */
+  changeKey?: string;
   /** The findings themselves; omit or pass [] for a counts-only report. */
   findings?: readonly SkillFinding[];
   /** Defaults to now when omitted (injectable for tests). */
   at?: string;
+}
+
+/**
+ * The optional measurement fields of a skill run, normalized into the shape a
+ * `SkillUsage` stores. Shared by every backend so a new optional field is added
+ * in one place instead of four, and so "not reported" stays `undefined` rather
+ * than silently becoming 0 — the aggregations rely on that distinction.
+ */
+export function skillUsageMetrics(input: RecordSkillUsageInput): Partial<SkillUsage> {
+  const num = (v: number | undefined) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of [
+    ["durationMs", num(input.durationMs)],
+    ["activeMs", num(input.activeMs)],
+    ["filesChanged", num(input.filesChanged)],
+    ["linesChanged", num(input.linesChanged)],
+    ["fixesProposed", num(input.fixesProposed)],
+    ["fixesApplied", num(input.fixesApplied)],
+    ["changeKey", input.changeKey || undefined],
+  ] as const) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out as Partial<SkillUsage>;
 }
 
 export interface SkillUsageFilter {

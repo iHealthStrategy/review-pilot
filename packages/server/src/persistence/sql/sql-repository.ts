@@ -40,6 +40,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type SkillUsageFilter,
+  skillUsageMetrics,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -275,6 +276,11 @@ interface SkillUsageRow {
   info: number;
   duration_ms: number | null;
   active_ms: number | null;
+  files_changed: number | null;
+  lines_changed: number | null;
+  fixes_proposed: number | null;
+  fixes_applied: number | null;
+  change_key: string | null;
   findings: string | null;
   at: string;
 }
@@ -290,11 +296,20 @@ function toSkillUsage(r: SkillUsageRow): SkillUsage {
     minor: r.minor,
     info: r.info,
     // Nullable: rows written before 0011 (or by a counts-only skill) have none.
-    ...(r.duration_ms === null || r.duration_ms === undefined ? {} : { durationMs: r.duration_ms }),
-    ...(r.active_ms === null || r.active_ms === undefined ? {} : { activeMs: r.active_ms }),
+    ...numCol("durationMs", r.duration_ms),
+    ...numCol("activeMs", r.active_ms),
+    ...numCol("filesChanged", r.files_changed),
+    ...numCol("linesChanged", r.lines_changed),
+    ...numCol("fixesProposed", r.fixes_proposed),
+    ...numCol("fixesApplied", r.fixes_applied),
+    ...(r.change_key ? { changeKey: r.change_key } : {}),
     findings: parseFindings(r.findings),
     at: r.at,
   };
+}
+/** A nullable numeric column as an optional field: NULL means "not reported". */
+function numCol(key: string, v: number | null | undefined): Record<string, number> {
+  return v === null || v === undefined ? {} : { [key]: v };
 }
 /**
  * Decode the findings JSON column. A malformed value must not take down the
@@ -999,16 +1014,16 @@ export class SqlRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
-      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
-      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      ...skillUsageMetrics(input),
       findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };
     await this.client.run(
       `INSERT INTO skill_usage
          (id, user_id, user_label, project, scope, critical, major, minor, info,
-          duration_ms, active_ms, findings, at)
-       VALUES (${placeholderList(this.client.dialect, 13)})`,
+          duration_ms, active_ms, files_changed, lines_changed, fixes_proposed,
+          fixes_applied, change_key, findings, at)
+       VALUES (${placeholderList(this.client.dialect, 18)})`,
       [
         usage.id,
         usage.userId,
@@ -1021,6 +1036,11 @@ export class SqlRepository implements Repository {
         usage.info,
         usage.durationMs ?? null,
         usage.activeMs ?? null,
+        usage.filesChanged ?? null,
+        usage.linesChanged ?? null,
+        usage.fixesProposed ?? null,
+        usage.fixesApplied ?? null,
+        usage.changeKey ?? null,
         // Store [] as NULL so "no findings" and "counts-only" read back alike.
         usage.findings.length ? JSON.stringify(usage.findings) : null,
         usage.at,

@@ -493,6 +493,21 @@ Default to **working** unless the user says otherwise:
 Collect the changed files and their patches. Open and read surrounding code in the
 repo as needed for context.
 
+**Also record how big the change is** — step 10 reports it, and without it a
+finding count or a duration cannot be compared between one review and the next:
+
+\`\`\`sh
+git diff --shortstat HEAD
+git rev-parse HEAD
+\`\`\`
+Keep \`FILES_CHANGED\` and \`LINES_CHANGED\` (insertions + deletions) from the first
+command; for a \`branch\` scope run \`git diff --shortstat <base-sha>..HEAD\`
+instead. Add any untracked files you reviewed to the file count. If you cannot
+determine them, omit both rather than guessing.
+
+Keep the second output as \`HEAD_SHA\` — step 10 uses it to build the key that
+groups repeated reviews of the same change.
+
 ## 6. Structural context (optional — only if available)
 If \`code-review-graph\` is installed (check \`code-review-graph --version\`, or use
 its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
@@ -540,6 +555,12 @@ After presenting, offer a single auto-fix pass:
    user inspect \`git diff\` and run the tests/build. Do NOT commit or push —
    leave the working tree for the user to review.
 If the user declines, leave everything unchanged.
+
+**Remember two numbers for step 10**: \`FIXES_PROPOSED\` = how many fixes you put
+in the plan, and \`FIXES_APPLIED\` = how many you actually applied (0 if the user
+declined, or if you never got to offer). Adoption is the clearest signal of
+whether a review was worth running — findings nobody acts on are noise. Omit
+both if you did not run this step at all.
 
 ## 9. Auto-grow this project's rules (key points → candidate rules)
 From THIS review, extract 0–3 **key points** worth enforcing on future changes in
@@ -601,6 +622,16 @@ strings and caps the array at 200 findings.
 - \`activeMs\` — \`durationMs - T_WAIT * 1000\`, i.e. elapsed time minus the
   stretches spent waiting on the user. With no waits, it equals \`durationMs\`.
   **Omit both** timing fields if you did not reliably track \`T_START\`.
+- \`filesChanged\` / \`linesChanged\` — the change size from step 5. Omit both if
+  you could not determine them; a wrong size skews every derived metric.
+- \`fixesProposed\` / \`fixesApplied\` — from the one-shot fix pass (step 8). Omit
+  both if you never ran it.
+- \`changeKey\` — \`"<HEAD_SHA>:<SCOPE>"\`, which groups the review → fix →
+  re-review cycle over one change so the platform can measure how often a change
+  passes on its FIRST review. Keep it stable across those re-reviews: for
+  \`working\` scope \`HEAD_SHA\` does not move while you fix the working tree, which
+  is exactly what makes the grouping work. Omit it if you have no \`HEAD_SHA\`
+  (the run then counts as its own change, never as a repeat).
 
 \`\`\`sh
 BASE=${urlExpr}
@@ -609,10 +640,13 @@ if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
   # Substitute this run's real values. SCOPE = working|branch|whole;
   # CRIT/MAJ/MIN/INFO = counts at each severity (0 if none);
   # FINDINGS_JSON = the JSON array of finding objects (use [] when none);
-  # DURATION_MS / ACTIVE_MS = the two timings (drop both keys if untracked).
+  # DURATION_MS / ACTIVE_MS = the two timings (drop both keys if untracked);
+  # FILES_CHANGED / LINES_CHANGED = change size (drop both if unknown);
+  # FIXES_PROPOSED / FIXES_APPLIED = the fix pass (drop both if it never ran);
+  # CHANGE_KEY = "<HEAD_SHA>:<SCOPE>" (drop the key if there is no HEAD_SHA).
   curl -fsS -X POST "$BASE/api/usage/skill" \\
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
-    -d "{\\"project\\":\\"$PROJECT\\",\\"scope\\":\\"$SCOPE\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO,\\"durationMs\\":$DURATION_MS,\\"activeMs\\":$ACTIVE_MS,\\"findings\\":$FINDINGS_JSON}" \\
+    -d "{\\"project\\":\\"$PROJECT\\",\\"scope\\":\\"$SCOPE\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO,\\"durationMs\\":$DURATION_MS,\\"activeMs\\":$ACTIVE_MS,\\"filesChanged\\":$FILES_CHANGED,\\"linesChanged\\":$LINES_CHANGED,\\"fixesProposed\\":$FIXES_PROPOSED,\\"fixesApplied\\":$FIXES_APPLIED,\\"changeKey\\":\\"$CHANGE_KEY\\",\\"findings\\":$FINDINGS_JSON}" \\
     >/dev/null 2>&1 || true
 fi
 \`\`\`
