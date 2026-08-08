@@ -402,6 +402,73 @@ export function runRepositoryContract(
     await repo.close();
   });
 
+  test(`${name}: skill usage — findings + timings round-trip; project/limit filters`, async () => {
+    const repo = await makeRepo();
+    const findings = [
+      {
+        severity: "major" as const,
+        filePath: "src/db.ts",
+        line: 42,
+        title: "Unbounded query",
+        detail: "Reads the whole table into memory.",
+        suggestion: "Paginate it.",
+        category: "performance",
+      },
+      // Minimal shape: no line/detail/suggestion/category, repo-wide path.
+      { severity: "info" as const, filePath: "", title: "No changelog entry" },
+    ];
+    await repo.recordSkillUsage({
+      userId: "usr_a",
+      userLabel: "@alice",
+      project: "github.com/acme/app",
+      scope: "branch",
+      critical: 0,
+      major: 1,
+      minor: 0,
+      info: 1,
+      durationMs: 300_000,
+      activeMs: 120_000,
+      findings,
+      at: "2026-06-20T10:00:00.000Z",
+    });
+    // A counts-only run (what a pre-feature skill reports): no timings, no findings.
+    await repo.recordSkillUsage({
+      userId: "usr_b",
+      userLabel: "@bob",
+      project: "github.com/acme/other",
+      scope: "working",
+      critical: 0,
+      major: 0,
+      minor: 2,
+      info: 0,
+      at: "2026-06-21T10:00:00.000Z",
+    });
+
+    const [newer, older] = await repo.listSkillUsage();
+    // Counts-only run must read back as "not reported", not as zero.
+    assert.equal(newer!.userLabel, "@bob");
+    assert.equal(newer!.durationMs, undefined);
+    assert.equal(newer!.activeMs, undefined);
+    assert.deepEqual(newer!.findings, []);
+    // The full run must round-trip every field, including the optional ones.
+    assert.equal(older!.durationMs, 300_000);
+    assert.equal(older!.activeMs, 120_000);
+    assert.equal(older!.findings.length, 2);
+    assert.deepEqual(older!.findings[0], findings[0]);
+    assert.deepEqual(older!.findings[1], findings[1]);
+
+    // project filter
+    const app = await repo.listSkillUsage({ project: "github.com/acme/app" });
+    assert.equal(app.length, 1);
+    assert.equal(app[0]!.userLabel, "@alice");
+    assert.equal((await repo.listSkillUsage({ project: "github.com/nope/x" })).length, 0);
+    // limit keeps the newest rows
+    const capped = await repo.listSkillUsage({ limit: 1 });
+    assert.equal(capped.length, 1);
+    assert.equal(capped[0]!.userLabel, "@bob");
+    await repo.close();
+  });
+
   test(`${name}: rulesets — owner-scoped CRUD + public listing`, async () => {
     const repo = await makeRepo();
     const mk = (ownerId: string, name2: string, visibility: "private" | "public") =>

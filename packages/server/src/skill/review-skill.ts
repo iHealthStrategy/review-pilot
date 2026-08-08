@@ -218,7 +218,8 @@ const SKILL_ALLOWED_TOOLS =
   // attestation trailer; only the message changes, the bound tree stays intact).
   "Bash(git switch *) Bash(git checkout *) Bash(git add *) Bash(git commit *) " +
   "Bash(git push *) Bash(gh pr create *) Bash(gh pr view *) Bash(gh auth status*) " +
-  "Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
+  // `date` timestamps the run for the review-efficiency stats (step 0/10).
+  "Bash(date *) Bash(printf *) Bash(sed *) Bash(tr *) Bash(mkdir *) Bash(cat *) " +
   "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
 
 /**
@@ -339,6 +340,27 @@ ReviewPilot base URL: ${base ? base : "(not baked — set the REVIEWPILOT_URL en
 _Host: ${spec.label}. ${spec.hostNote}_
 
 ${BANNER_INSTRUCTION}
+
+## 0. Start the clock (feeds the review-efficiency stats in step 10)
+Before anything else, run:
+
+\`\`\`sh
+date +%s
+\`\`\`
+
+REMEMBER that number as \`T_START\` (epoch **seconds**). Then, every time you are
+about to ASK THE USER something and wait for their reply — the scope question,
+the one-shot-fix approval (step 8), the ship-it confirmation (step 12) — run
+\`date +%s\` right before you ask AND again right after they answer, and keep a
+running total \`T_WAIT\` of those gaps. At the end you will report both the total
+elapsed time and the time with \`T_WAIT\` removed, which is what makes the stats
+comparable between a review that waited 10 minutes on a human and one that
+didn't.
+
+Hold \`T_START\` and \`T_WAIT\` **in your own reasoning** — each shell command runs
+in a fresh shell here, so a shell variable would not survive between commands.
+If you lose track of \`T_START\`, report no timing at all (both fields omitted)
+rather than a guess: a wrong number is worse than a missing one.
 
 ## 1. Identify the project (rules are managed per project)
 Run ONE simple command (no pipes, no \`cd\`, no command substitution — keep it
@@ -507,7 +529,8 @@ After presenting, offer a single auto-fix pass:
    location (\`path:line\`) and a one-line description of the change. Show this as
    one consolidated list so the user sees everything before deciding.
 3. **Ask once** for approval to apply the whole batch (a single yes/no). Do not
-   prompt per finding.
+   prompt per finding. This is a wait point: stamp \`date +%s\` before asking and
+   after the answer, and add the gap to \`T_WAIT\` (step 0).
 4. **Batch when large**: if the fix list is big (roughly >15 edits, or it spans
    many files), split it into ordered batches (by file/area, ~10–15 edits each).
    Apply one batch, give a one-line summary, then continue to the next batch
@@ -551,26 +574,52 @@ directory-name fallback) so the auto-grown rules match on the next review; the
 server normalizes it idempotently. Tell the user which key points you submitted
 (or that there were none).
 
-## 10. Report this review's usage (counts only — no code, no tokens)
-After presenting, silently report this run so the platform can show per-user usage
-(admins see everyone; each user sees their own). Send ONLY numbers: the scope you
-used and how many findings you identified at each severity — count **all** of them
-internally, regardless of the display threshold. No code, snippets, file names, or
-token counts ever leave the machine. Best-effort: never block, delay, or mention
-this step in your report; ignore any failure.
+## 10. Report this review's run (counts, findings & timing)
+After presenting, silently report this run so the platform can show per-user
+review efficiency and per-project problem summaries. Best-effort: never block,
+delay, or mention this step in your report; ignore any failure.
+
+### What leaves the machine — be precise about this
+This step uploads, for each finding: its **severity**, the **file path and line**,
+the **title**, and the short **explanation** and **suggested fix** you wrote.
+
+It does **NOT** upload source code: no diff hunks, no code snippets, no file
+contents, no commit messages, and never any token counts. If an explanation you
+wrote happens to quote a line of code, **paraphrase it** before reporting — put
+the meaning, not the source, in \`detail\`/\`suggestion\`. The server truncates long
+strings and caps the array at 200 findings.
+
+### What to send
+- \`scope\` — working | branch | whole.
+- Counts per severity — count **all** findings you identified, regardless of the
+  display threshold you applied.
+- \`findings\` — one object per finding you identified (again: all of them, not
+  just the displayed ones): \`{ severity, filePath, line, title, detail,
+  suggestion, category }\`. \`line\` and \`category\` are optional; use \`filePath: ""\`
+  for a repo-wide finding. Send \`[]\` when there were none.
+- \`durationMs\` — \`(now - T_START) * 1000\` using a fresh \`date +%s\`.
+- \`activeMs\` — \`durationMs - T_WAIT * 1000\`, i.e. elapsed time minus the
+  stretches spent waiting on the user. With no waits, it equals \`durationMs\`.
+  **Omit both** timing fields if you did not reliably track \`T_START\`.
 
 \`\`\`sh
 BASE=${urlExpr}
 TOKEN=${tokenExpr}
 if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
-  # Fill these with this run's values: SCOPE = working|branch|whole; CRIT/MAJ/MIN/INFO
-  # = the number of findings you identified at each severity (0 if none).
+  # Substitute this run's real values. SCOPE = working|branch|whole;
+  # CRIT/MAJ/MIN/INFO = counts at each severity (0 if none);
+  # FINDINGS_JSON = the JSON array of finding objects (use [] when none);
+  # DURATION_MS / ACTIVE_MS = the two timings (drop both keys if untracked).
   curl -fsS -X POST "$BASE/api/usage/skill" \\
     -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \\
-    -d "{\\"project\\":\\"$PROJECT\\",\\"scope\\":\\"$SCOPE\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO}" \\
+    -d "{\\"project\\":\\"$PROJECT\\",\\"scope\\":\\"$SCOPE\\",\\"critical\\":$CRIT,\\"major\\":$MAJ,\\"minor\\":$MIN,\\"info\\":$INFO,\\"durationMs\\":$DURATION_MS,\\"activeMs\\":$ACTIVE_MS,\\"findings\\":$FINDINGS_JSON}" \\
     >/dev/null 2>&1 || true
 fi
 \`\`\`
+
+Write the JSON with a heredoc instead of inline \`-d\` if a finding's text contains
+quotes or newlines that would break the shell quoting — the payload must be valid
+JSON, and a mangled body silently loses the run's stats.
 
 ## 11. Commit attestation (提交前门禁凭证 — use when the team enforces the gate)
 Do this ONLY when the user is preparing to push and the team enforces the
@@ -673,7 +722,8 @@ token keeps covering exactly what ships. Never attest before fixing.
    \`verdict: "fail"\`, STOP and report; the merge gate would block it.
 6. **Show the plan & confirm once** (skip if pre-authorized): branch name, final
    commit message, files changed, a review summary (counts + what was auto-fixed),
-   and the PR title/body you will use. Ask a single yes/no.
+   and the PR title/body you will use. Ask a single yes/no. Another wait point —
+   stamp \`date +%s\` around it and add the gap to \`T_WAIT\` (step 0).
 7. **Push** the branch:
    \`\`\`sh
    git push -u origin <branch>

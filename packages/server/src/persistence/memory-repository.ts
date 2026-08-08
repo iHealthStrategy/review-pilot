@@ -507,6 +507,9 @@ export class MemoryRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
+      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };
     this.data.skillUsage[usage.id] = usage;
@@ -515,13 +518,16 @@ export class MemoryRepository implements Repository {
   }
 
   async listSkillUsage(filter: SkillUsageFilter = {}): Promise<SkillUsage[]> {
-    return Object.values(this.data.skillUsage)
+    const rows = Object.values(this.data.skillUsage)
+      .map((u) => ({ ...u, findings: u.findings ?? [] })) // pre-feature rows have none
       .filter((u) => {
         if (filter.userId && u.userId !== filter.userId) return false;
+        if (filter.project && u.project !== filter.project) return false;
         if (filter.since && u.at < filter.since) return false;
         return true;
       })
       .sort((a, b) => (a.at < b.at ? 1 : -1));
+    return filter.limit === undefined ? rows : rows.slice(0, Math.max(0, filter.limit));
   }
 
   async createRuleset(input: CreateRulesetInput): Promise<ReviewRuleset> {

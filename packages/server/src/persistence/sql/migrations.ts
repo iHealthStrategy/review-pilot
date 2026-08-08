@@ -207,6 +207,19 @@ export const MIGRATIONS: readonly Migration[] = [
     id: "0010_user_name",
     up: () => `ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    // Review-efficiency stats: how long a run took (wall clock, and with
+    // user-input waits excluded) plus the findings themselves as a JSON array,
+    // for the per-project problem summary. Nullable, so rows written by
+    // pre-feature skills stay valid and read back as "not reported".
+    id: "0011_skill_usage_findings",
+    up: () => `
+      ALTER TABLE skill_usage ADD COLUMN duration_ms INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN active_ms INTEGER;
+      ALTER TABLE skill_usage ADD COLUMN findings TEXT;
+      CREATE INDEX IF NOT EXISTS idx_skill_usage_project_at ON skill_usage(project, at);
+    `,
+  },
 ];
 
 /**
