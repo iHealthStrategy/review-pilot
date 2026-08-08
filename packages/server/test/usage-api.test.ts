@@ -307,3 +307,41 @@ test("GET /api/usage/skill/runs returns raw runs with findings, newest first, ca
     assert.equal(body.runs[0].findings.length, 1);
     assert.equal(body.runs[0].activeMs, 30_000);
   }));
+
+test("GET /api/usage/skill resolves a readable display name, not the long handle", () =>
+  withApi(async (base, repo) => {
+    // An OIDC-provisioned account often has a 64-char opaque subject as its
+    // handle, which makes the stored `@handle` label unusable as a table column.
+    const long = "d".repeat(64);
+    const admin = await makeSession(repo, SECRET, "admin", { handle: long, name: "黄毅" });
+    await postSkill(base, admin.token, {
+      project: "p", scope: "working", critical: 0, major: 1, minor: 0, info: 0,
+      findings: [{ severity: "major", filePath: "a.ts", title: "x" }],
+    });
+
+    const byUser = (await (
+      await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${admin.token}` } })
+    ).json()) as { rows: any[] };
+    assert.equal(byUser.rows[0].userName, "黄毅", "IdP display name is surfaced");
+    assert.match(byUser.rows[0].userLabel, /^@d{64}$/, "the stored label is untouched");
+
+    // The raw-run view needs it too — it shows one row per review.
+    const runs = (await (
+      await fetch(`${base}/api/usage/skill/runs?bucket=month`, { headers: { authorization: `Bearer ${admin.token}` } })
+    ).json()) as { runs: any[] };
+    assert.equal(runs.runs[0].userName, "黄毅");
+    // Findings still ride along — enriching must not drop the run's payload.
+    assert.equal(runs.runs[0].findings.length, 1);
+  }));
+
+test("GET /api/usage/skill falls back when the IdP gave no name", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "admin", {
+      handle: "alice", name: "", email: "alice@x.com",
+    });
+    await postSkill(base, u.token, { project: "p", scope: "working", critical: 0, major: 0, minor: 1, info: 0 });
+    const byUser = (await (
+      await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${u.token}` } })
+    ).json()) as { rows: any[] };
+    assert.equal(byUser.rows[0].userName, "alice@x.com", "no name → real email");
+  }));

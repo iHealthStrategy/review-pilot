@@ -253,6 +253,36 @@ function requireAdmin(principal: Principal | null): Principal {
   return p;
 }
 
+/**
+ * Human display names by user id, for usage tables.
+ *
+ * Usage rows store a `userLabel` captured when the run was reported, which is
+ * `@handle` — and an OIDC-provisioned handle is often a 64-char opaque subject,
+ * unreadable in a table. The identity provider's `name` claim is what a person
+ * actually recognises, so resolve it live: it also picks up renames that the
+ * stored label predates.
+ */
+async function displayNames(repo: Repository): Promise<Map<string, string>> {
+  const names = new Map<string, string>();
+  for (const u of await repo.listUsers()) {
+    const real = u.email && !u.email.endsWith("@users.noreply.local") ? u.email : "";
+    const name = u.name || real || (u.handle ? `@${u.handle}` : "");
+    if (name) names.set(u.id, name);
+  }
+  return names;
+}
+
+/** Attach `userName` to rows that carry a `userId`, leaving them otherwise intact. */
+function withUserNames<T extends { userId: string }>(
+  rows: readonly T[],
+  names: Map<string, string>,
+): (T & { userName?: string })[] {
+  return rows.map((r) => {
+    const name = names.get(r.userId);
+    return name ? { ...r, userName: name } : { ...r };
+  });
+}
+
 /** `?bucket=` with a safe default, shared by the usage endpoints. */
 function asBucket(raw: string | null): Bucket {
   return raw === "week" || raw === "month" ? raw : "day";
@@ -681,7 +711,8 @@ const ROUTES: Route[] = [
         since: defaultSince(bucket),
         ...(admin ? {} : { userId: p.userId }),
       });
-      return ok({ bucket, scope: admin ? "all" : "self", rows: aggregateSkillByUser(events) });
+      const rows = withUserNames(aggregateSkillByUser(events), await displayNames(repo));
+      return ok({ bucket, scope: admin ? "all" : "self", rows });
     },
   },
   // Per-project problem summary — what a project's reviews keep turning up.
@@ -715,7 +746,7 @@ const ROUTES: Route[] = [
         ...(query.get("project") ? { project: query.get("project")! } : {}),
         ...(query.get("userId") ? { userId: query.get("userId")! } : {}),
       });
-      return ok({ bucket, limit, runs });
+      return ok({ bucket, limit, runs: withUserNames(runs, await displayNames(repo)) });
     },
   },
   // --- Community review rulesets (self-service; ownership enforced per-handler) ---
