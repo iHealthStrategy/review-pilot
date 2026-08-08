@@ -96,6 +96,7 @@ const html = `<!doctype html>
       nav a[data-view="rulesets"]::before { content: "📐"; }
       nav a[data-view="account"]::before { content: "🔑"; }
       nav a[data-view="usage"]::before { content: "📈"; }
+      nav a[data-view="gate"]::before { content: "🛡️"; }
       nav a[data-view="users"]::before { content: "👥"; }
       nav a:hover { background: var(--surface-2); color: var(--text); }
       nav a:active { transform: translateY(1px); }
@@ -272,8 +273,6 @@ const html = `<!doctype html>
       /* ── Review stats (admin) ──────────────────────────────────────
          Projects and runs are collapsible: the summary line carries the
          totals, the body holds the per-finding table. */
-      #stats-buckets { display: inline-flex; gap: 6px; }
-      #stats-buckets button { padding: 6px 14px; }
       .stats-proj { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); margin-bottom: 10px; box-shadow: var(--shadow); }
       .stats-proj > summary { cursor: pointer; padding: 11px 14px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-size: 13px; border-radius: var(--r); }
       .stats-proj > summary:hover { background: var(--surface-2); }
@@ -314,9 +313,8 @@ const html = `<!doctype html>
         <a href="#rulesets" data-view="rulesets">评审规则集</a>
         <div class="nav-group">账户与接入</div>
         <a href="#account" data-view="account">API Key</a>
-        <a href="#usage" data-view="usage">Token 用量</a>
+        <a href="#usage" data-view="usage">用量统计</a>
         <a href="#gate" data-view="gate" id="nav-gate" style="display:none">评审门禁</a>
-        <a href="#stats" data-view="stats" id="nav-stats" style="display:none">Review 统计</a>
         <a href="#users" data-view="users" id="nav-users" style="display:none">用户管理</a>
       </nav>
       <main>
@@ -352,7 +350,7 @@ const html = `<!doctype html>
         </div>
         <div class="view" id="view-usage">
           <div class="view-head">
-            <h2>Token 用量</h2>
+            <h2>用量统计</h2>
             <div id="usage-buckets">
               <button class="secondary" data-bucket="day">日</button>
               <button class="secondary" data-bucket="week">周</button>
@@ -364,17 +362,6 @@ const html = `<!doctype html>
         <div class="view" id="view-gate">
           <div class="view-head"><h2>评审门禁策略</h2></div>
           <section id="gate"><div data-loading>加载中…</div></section>
-        </div>
-        <div class="view" id="view-stats">
-          <div class="view-head">
-            <h2>Review 统计</h2>
-            <div id="stats-buckets">
-              <button class="secondary" data-sbucket="day">日</button>
-              <button class="secondary" data-sbucket="week">周</button>
-              <button class="secondary" data-sbucket="month">月</button>
-            </div>
-          </div>
-          <section id="stats"><div data-loading>加载中…</div></section>
         </div>
         <div class="view" id="view-users">
           <div class="view-head"><h2>用户管理</h2></div>
@@ -633,7 +620,6 @@ const html = `<!doctype html>
           rb.className = "status role-" + me.role;
           document.getElementById("nav-users").style.display = isAdmin() ? "" : "none";
           document.getElementById("nav-gate").style.display = isAdmin() ? "" : "none";
-          document.getElementById("nav-stats").style.display = isAdmin() ? "" : "none";
           document.getElementById("open-schedule-modal").style.display = canWrite() ? "" : "none";
           document.getElementById("open-task-modal").style.display = canWrite() ? "" : "none";
         } else {
@@ -671,9 +657,11 @@ const html = `<!doctype html>
         // Merged views keep old hashes working via aliases:
         //   schedules/dashboard → tasks · integrations → account
         const [rawView, sub] = String(name || "").split("/");
-        const alias = { schedules: "tasks", dashboard: "tasks", integrations: "account" };
+        // "stats" merged into "usage": the two pages showed the same per-user
+        // table, so the old hash now lands on the combined page.
+        const alias = { schedules: "tasks", dashboard: "tasks", integrations: "account", stats: "usage" };
         const mapped = alias[rawView] || rawView;
-        const valid = ["tasks", "account", "rulesets", "usage", "users", "gate", "stats"];
+        const valid = ["tasks", "account", "rulesets", "usage", "users", "gate"];
         const view = valid.includes(mapped) ? mapped : "tasks";
         localStorage.setItem("rp_view", view); // fallback for a bare URL (no hash)
         document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
@@ -685,7 +673,6 @@ const html = `<!doctype html>
         if (view === "usage") renderUsage();
         if (view === "rulesets") renderRulesets();
         if (view === "gate") renderGate();
-        if (view === "stats") renderStats();
         if (view === "tasks") {
           if (sub) showJob(sub);                       // restore the open job detail
           else { const d = document.getElementById("detail"); if (d) d.innerHTML = ""; }
@@ -1282,24 +1269,109 @@ const html = `<!doctype html>
       async function renderUsage() {
         document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) =>
           b.classList.toggle("active-bucket", b.getAttribute("data-bucket") === usageBucket));
-        const data = await load("/api/usage?bucket=" + usageBucket, { rows: [] });
-        const skill = await load("/api/usage/skill?bucket=" + usageBucket, { rows: [], scope: "self" });
+        const q = "?bucket=" + usageBucket;
+        const admin = isAdmin();
+        // Skill review stats and LLM token usage share this page: both answer
+        // "what did this cost / who is reviewing", and split across two pages
+        // they duplicated the per-user table. The project/run breakdowns stay
+        // admin-only (the server enforces it too).
+        const data = await load("/api/usage" + q, { rows: [] });
+        const skill = await load("/api/usage/skill" + q, { rows: [], scope: "self" });
+        const byProject = admin ? await load("/api/usage/skill/projects" + q, { rows: [] }) : { rows: [] };
+        const runsRes = admin ? await load("/api/usage/skill/runs" + q + "&limit=100", { runs: [] }) : { runs: [] };
         const rows = data.rows || [];
         const fmt = (n) => Number(n || 0).toLocaleString();
-        // Skill review usage — admins see every user; a normal user sees only their own.
+        const period = usageBucket === "day" ? "近 24 小时" : usageBucket === "week" ? "近 7 天" : "近 30 天";
+        // Prefer the identity provider's display name: a provisioned handle is
+        // often a 64-char opaque subject, which makes the column unreadable.
+        const who = (r) => r.userName || r.userLabel || r.userId || "—";
+
+        // 1) Per-user review effort + efficiency. Admins see everyone.
         const skillSection = () => {
           const list = skill.rows || [];
-          const title = skill.scope === "all" ? "各用户 Skill 评审用量" : "我的 Skill 评审用量";
+          const title = skill.scope === "all" ? "用户评审效率" : "我的评审用量";
           if (!list.length) {
-            return \`<h3>\${title}</h3><p class="muted">暂无 skill 评审用量。用本地评审 skill 跑一次评审后会自动上报:次数、问题明细与耗时(不含源码,也没有 token 计数)。\${isAdmin() ? '按用户效率与项目问题汇总的完整视图见左侧「Review 统计」。' : ""}</p>\`;
+            return \`<h3>\${title}</h3><p class="muted">\${period}内暂无 skill 评审记录。用本地评审 skill 跑一次评审后会自动上报:次数、问题明细与耗时(不含源码,也没有 token 计数)。</p>\`;
           }
-          const trs = list.map((r) =>
-            \`<tr><td>\${esc(r.userLabel || r.userId)}</td><td><b>\${fmt(r.runs)}</b></td><td>\${fmt(r.findings)}</td><td class="sev sev-critical">\${fmt(r.critical)}</td><td class="sev sev-major">\${fmt(r.major)}</td><td class="sev sev-minor">\${fmt(r.minor)}</td><td class="sev sev-info">\${fmt(r.info)}</td><td class="muted">\${esc(String(r.lastAt || "").slice(0, 10))}</td></tr>\`
-          ).join("");
-          const count = skill.scope === "all" ? \` <span class="muted">\${list.length} 位用户</span>\` : "";
+          const trs = list.map((r) => \`<tr>
+            <td>\${esc(who(r))}</td>
+            <td><b>\${fmt(r.runs)}</b></td>
+            <td>\${fmt(r.findings)}</td>
+            <td class="sev sev-critical">\${fmt(r.critical)}</td>
+            <td class="sev sev-major">\${fmt(r.major)}</td>
+            <td class="sev sev-minor">\${fmt(r.minor)}</td>
+            <td class="sev sev-info">\${fmt(r.info)}</td>
+            <td>\${fmtDur(r.avgActiveMs)}</td>
+            <td class="muted">\${fmtDur(r.avgDurationMs)}</td>
+            <td class="muted">\${fmt(r.timedRuns)}/\${fmt(r.runs)}</td>
+            <td class="muted">\${esc(String(r.lastAt || "").slice(0, 16).replace("T", " "))}</td>
+          </tr>\`).join("");
+          const count = skill.scope === "all" ? \` <span class="muted">\${list.length} 位用户 · \${period}</span>\` : \` <span class="muted">\${period}</span>\`;
           return \`<h3>\${title}\${count}</h3>
-            <table><thead><tr><th>用户</th><th>运行次数</th><th>问题数</th><th>致命</th><th>严重</th><th>次要</th><th>提示</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
+            <p class="muted">「净耗时」已扣除等待用户输入的时间,是跨用户比较效率时该看的那一列;「总耗时」是从开始到结束的墙钟时间。均值只统计<b>上报了计时的运行</b>(旧版 skill 不上报)。</p>
+            <table><thead><tr><th>用户</th><th>运行</th><th>问题</th><th>致命</th><th>严重</th><th>次要</th><th>提示</th><th>平均净耗时</th><th>平均总耗时</th><th>有计时</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
         };
+
+        // 2) Per-project problem summary (admin) — what a project keeps getting wrong.
+        const projectSection = () => {
+          if (!admin) return "";
+          const projects = byProject.rows || [];
+          if (!projects.length) {
+            return \`<h3>项目问题汇总</h3><p class="muted">\${period}内暂无项目数据。</p>\`;
+          }
+          const cards = projects.map((p, i) => {
+            const probs = p.problems || [];
+            const rs = probs.map((pr) => \`<tr>
+              <td>\${sevBadge(pr.severity)}</td>
+              <td>\${esc(pr.title)}</td>
+              <td><b>\${fmt(pr.count)}</b></td>
+              <td class="muted">\${(pr.files || []).map((f) => \`<code>\${esc(f)}</code>\`).join(" ") || "—"}</td>
+            </tr>\`).join("");
+            const body = probs.length
+              ? \`<table><thead><tr><th>严重度</th><th>问题</th><th>出现次数</th><th>涉及文件</th></tr></thead><tbody>\${rs}</tbody></table>\`
+              : '<p class="muted">这些运行只上报了问题数量,没有明细(旧版 skill)。</p>';
+            return \`<details class="stats-proj"\${i === 0 ? " open" : ""}>
+              <summary>
+                <span class="stats-proj-name">\${esc(p.project || "(未知项目)")}</span>
+                <span class="muted">\${fmt(p.runs)} 次评审 · \${fmt(p.reviewers)} 人 · \${fmt(p.findings)} 个问题</span>
+                <span class="stats-sevs">\${sevBadge("critical")} \${fmt(p.critical)} · \${sevBadge("major")} \${fmt(p.major)} · \${sevBadge("minor")} \${fmt(p.minor)} · \${sevBadge("info")} \${fmt(p.info)}</span>
+              </summary>
+              \${body}
+            </details>\`;
+          }).join("");
+          return \`<h3>项目问题汇总 <span class="muted">\${projects.length} 个项目 · \${period}</span></h3>
+            <p class="muted">同一「严重度 + 标题」的问题跨运行合并计数,出现次数最多的排在前面 —— 反复出现的才值得沉淀成规则。</p>\${cards}\`;
+        };
+
+        // 3) Raw runs (admin), each expandable into its findings.
+        const runsSection = () => {
+          if (!admin) return "";
+          const runs = runsRes.runs || [];
+          if (!runs.length) return \`<h3>运行明细</h3><p class="muted">\${period}内暂无运行。</p>\`;
+          const items = runs.map((r) => {
+            const fs = r.findings || [];
+            const rs = fs.map((f) => \`<tr>
+              <td>\${sevBadge(f.severity)}</td>
+              <td><code>\${esc(f.filePath || "—")}\${f.line ? ":" + esc(f.line) : ""}</code></td>
+              <td>\${esc(f.title)}\${f.detail ? \`<br/><span class="muted">\${esc(f.detail)}</span>\` : ""}\${f.suggestion ? \`<br/>💡 <span class="muted">\${esc(f.suggestion)}</span>\` : ""}</td>
+            </tr>\`).join("");
+            const body = fs.length
+              ? \`<table><thead><tr><th>严重度</th><th>位置</th><th>问题</th></tr></thead><tbody>\${rs}</tbody></table>\`
+              : '<p class="muted">该运行没有上报问题明细。</p>';
+            const total = Number(r.critical||0)+Number(r.major||0)+Number(r.minor||0)+Number(r.info||0);
+            return \`<details class="stats-proj">
+              <summary>
+                <span class="muted">\${esc(String(r.at || "").slice(0, 16).replace("T", " "))}</span>
+                <span class="stats-proj-name">\${esc(who(r))}</span>
+                <span class="muted">\${esc(r.project || "(未知项目)")} · \${esc(r.scope)} · \${total} 个问题</span>
+                <span class="muted">净 \${fmtDur(r.activeMs)} / 总 \${fmtDur(r.durationMs)}</span>
+              </summary>
+              \${body}
+            </details>\`;
+          }).join("");
+          return \`<h3>运行明细 <span class="muted">最近 \${runs.length} 次 · \${period}</span></h3>\${items}\`;
+        };
+
         const section = (title, src) => {
           const list = rows.filter((r) => r.source === src);
           const total = list.reduce((s, r) => s + (r.totalTokens || 0), 0);
@@ -1313,8 +1385,11 @@ const html = `<!doctype html>
             <table><thead><tr><th>周期</th><th>任务</th><th>输入</th><th>输出</th><th>合计</th><th>次数</th><th>类型</th></tr></thead><tbody>\${trs}</tbody></table>\`;
         };
         document.querySelector("#usage").innerHTML =
-          \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计;"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
+          \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计。上半部分是<b>本地 skill 评审</b>(次数、问题、耗时);下半部分是<b>服务端任务的 LLM token 消耗</b>,"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
           + skillSection()
+          + projectSection()
+          + runsSection()
+          + \`<h3 style="margin-top:26px">服务端任务 Token 消耗</h3>\`
           + section("定时扫描 (schedules)", "schedule")
           + section("临时任务 (tasks)", "task");
         wrapTables(document.querySelector("#usage"));
@@ -1358,18 +1433,6 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         addCopyButtons(document.querySelector("#integrations"));
       }
 
-      // --- Review stats (admin only) -------------------------------------
-      // Three angles on the same skill-run records: who reviews how fast (user
-      // efficiency), what each project keeps getting wrong (problem summary),
-      // and the raw runs with their individual findings.
-      let statsBucket = localStorage.getItem("rp_sbucket") || "week";
-      document.querySelectorAll('#stats-buckets [data-sbucket]').forEach((b) => {
-        b.onclick = () => {
-          statsBucket = b.getAttribute("data-sbucket");
-          localStorage.setItem("rp_sbucket", statsBucket); // survive refresh
-          renderStats();
-        };
-      });
       // Durations are stored in ms; show whichever unit stays readable.
       function fmtDur(ms) {
         const n = Number(ms || 0);
@@ -1383,109 +1446,6 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
       const SEV_LABEL = { critical: "致命", major: "严重", minor: "次要", info: "提示" };
       function sevBadge(sev) {
         return \`<span class="sev sev-\${esc(sev)}">\${esc(SEV_LABEL[sev] || sev)}</span>\`;
-      }
-
-      async function renderStats() {
-        document.querySelectorAll('#stats-buckets [data-sbucket]').forEach((b) =>
-          b.classList.toggle("active-bucket", b.getAttribute("data-sbucket") === statsBucket));
-        const host = document.querySelector("#stats");
-        if (!isAdmin()) {
-          host.innerHTML = '<p class="muted">Review 统计仅管理员可见。</p>';
-          return;
-        }
-        const q = "?bucket=" + statsBucket;
-        const byUser = await load("/api/usage/skill" + q, { rows: [] });
-        const byProject = await load("/api/usage/skill/projects" + q, { rows: [] });
-        const runsRes = await load("/api/usage/skill/runs" + q + "&limit=100", { runs: [] });
-        const users = byUser.rows || [];
-        const projects = byProject.rows || [];
-        const runs = runsRes.runs || [];
-        const fmt = (n) => Number(n || 0).toLocaleString();
-        const period = statsBucket === "day" ? "近 24 小时" : statsBucket === "week" ? "近 7 天" : "近 30 天";
-
-        // 1) Per-user efficiency. "有计时" makes it explicit that averages cover
-        //    only the runs that reported timing (older skills report none).
-        const userSection = () => {
-          if (!users.length) {
-            return \`<h3>用户评审效率</h3><p class="muted">\${period}内暂无 skill 评审记录。</p>\`;
-          }
-          const trs = users.map((r) => \`<tr>
-            <td>\${esc(r.userLabel || r.userId)}</td>
-            <td><b>\${fmt(r.runs)}</b></td>
-            <td>\${fmt(r.findings)}</td>
-            <td class="sev sev-critical">\${fmt(r.critical)}</td>
-            <td class="sev sev-major">\${fmt(r.major)}</td>
-            <td class="sev sev-minor">\${fmt(r.minor)}</td>
-            <td class="sev sev-info">\${fmt(r.info)}</td>
-            <td>\${fmtDur(r.avgActiveMs)}</td>
-            <td class="muted">\${fmtDur(r.avgDurationMs)}</td>
-            <td class="muted">\${fmt(r.timedRuns)}/\${fmt(r.runs)}</td>
-            <td class="muted">\${esc(String(r.lastAt || "").slice(0, 16).replace("T", " "))}</td>
-          </tr>\`).join("");
-          return \`<h3>用户评审效率 <span class="muted">\${users.length} 位用户 · \${period}</span></h3>
-            <p class="muted">「净耗时」已扣除等待用户输入的时间,是跨用户比较效率时该看的那一列;「总耗时」是从开始到结束的墙钟时间。均值只统计<b>上报了计时的运行</b>(旧版 skill 不上报)。</p>
-            <table><thead><tr><th>用户</th><th>运行</th><th>问题</th><th>致命</th><th>严重</th><th>次要</th><th>提示</th><th>平均净耗时</th><th>平均总耗时</th><th>有计时</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
-        };
-
-        // 2) Per-project problem summary, each project expandable into its
-        //    recurring problems (same severity+title collapsed across runs).
-        const projectSection = () => {
-          if (!projects.length) {
-            return \`<h3>项目问题汇总</h3><p class="muted">\${period}内暂无项目数据。</p>\`;
-          }
-          const cards = projects.map((p, i) => {
-            const probs = p.problems || [];
-            const rows = probs.map((pr) => \`<tr>
-              <td>\${sevBadge(pr.severity)}</td>
-              <td>\${esc(pr.title)}</td>
-              <td><b>\${fmt(pr.count)}</b></td>
-              <td class="muted">\${(pr.files || []).map((f) => \`<code>\${esc(f)}</code>\`).join(" ") || "—"}</td>
-            </tr>\`).join("");
-            const body = probs.length
-              ? \`<table><thead><tr><th>严重度</th><th>问题</th><th>出现次数</th><th>涉及文件</th></tr></thead><tbody>\${rows}</tbody></table>\`
-              : '<p class="muted">这些运行只上报了问题数量,没有明细(旧版 skill)。</p>';
-            return \`<details class="stats-proj"\${i === 0 ? " open" : ""}>
-              <summary>
-                <span class="stats-proj-name">\${esc(p.project || "(未知项目)")}</span>
-                <span class="muted">\${fmt(p.runs)} 次评审 · \${fmt(p.reviewers)} 人 · \${fmt(p.findings)} 个问题</span>
-                <span class="stats-sevs">\${sevBadge("critical")} \${fmt(p.critical)} · \${sevBadge("major")} \${fmt(p.major)} · \${sevBadge("minor")} \${fmt(p.minor)} · \${sevBadge("info")} \${fmt(p.info)}</span>
-              </summary>
-              \${body}
-            </details>\`;
-          }).join("");
-          return \`<h3>项目问题汇总 <span class="muted">\${projects.length} 个项目 · \${period}</span></h3>
-            <p class="muted">同一「严重度 + 标题」的问题跨运行合并计数,出现次数最多的排在前面 —— 反复出现的才值得沉淀成规则。</p>\${cards}\`;
-        };
-
-        // 3) Raw runs, newest first, each expandable into its findings.
-        const runsSection = () => {
-          if (!runs.length) return \`<h3>运行明细</h3><p class="muted">\${period}内暂无运行。</p>\`;
-          const items = runs.map((r) => {
-            const fs = r.findings || [];
-            const rows = fs.map((f) => \`<tr>
-              <td>\${sevBadge(f.severity)}</td>
-              <td><code>\${esc(f.filePath || "—")}\${f.line ? ":" + esc(f.line) : ""}</code></td>
-              <td>\${esc(f.title)}\${f.detail ? \`<br/><span class="muted">\${esc(f.detail)}</span>\` : ""}\${f.suggestion ? \`<br/>💡 <span class="muted">\${esc(f.suggestion)}</span>\` : ""}</td>
-            </tr>\`).join("");
-            const body = fs.length
-              ? \`<table><thead><tr><th>严重度</th><th>位置</th><th>问题</th></tr></thead><tbody>\${rows}</tbody></table>\`
-              : '<p class="muted">该运行没有上报问题明细。</p>';
-            const total = Number(r.critical||0)+Number(r.major||0)+Number(r.minor||0)+Number(r.info||0);
-            return \`<details class="stats-proj">
-              <summary>
-                <span class="muted">\${esc(String(r.at || "").slice(0, 16).replace("T", " "))}</span>
-                <span class="stats-proj-name">\${esc(r.userLabel || r.userId)}</span>
-                <span class="muted">\${esc(r.project || "(未知项目)")} · \${esc(r.scope)} · \${total} 个问题</span>
-                <span class="muted">净 \${fmtDur(r.activeMs)} / 总 \${fmtDur(r.durationMs)}</span>
-              </summary>
-              \${body}
-            </details>\`;
-          }).join("");
-          return \`<h3>运行明细 <span class="muted">最近 \${runs.length} 次 · \${period}</span></h3>\${items}\`;
-        };
-
-        host.innerHTML = userSection() + projectSection() + runsSection();
-        wrapTables(host);
       }
 
       // --- Users (admin only) ---
