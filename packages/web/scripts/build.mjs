@@ -434,7 +434,7 @@ const html = `<!doctype html>
           <div class="field">
             <label>按需规则(仅当改动命中选择器时加载)</label>
             <p class="muted" style="margin:.2rem 0 .4rem">选择器留空 = 始终生效。匹配在本地完成,代码不会上传。多个值用逗号分隔。</p>
-            <p class="muted" style="margin:.2rem 0 .4rem">规则多了不会拖慢评审:每次评审只加载<b>排名靠前的 40 条</b> —— <b>新规则</b>与<b>命中多的</b>(真抓到过问题)优先。命中数由评审自动累计。长期不命中的会沉底但<b>不会被删除、也不会被永久跳过</b>:每天轮换一批进入试用名额,所以每条规则都有机会重新证明自己(存量老规则同理)。</p>
+            <p class="muted" style="margin:.2rem 0 .4rem">规则多了不会拖慢评审:每次评审加载<b>排名靠前的 40 条</b>,这 40 条是<b>所有生效规则集共享</b>的总预算 —— 你自己的(含私有)和借用的他人公开规则<b>合在一个池子里同等排序</b>,不是各自 40 条。<b>新规则</b>与<b>命中多的</b>(真抓到过问题)优先,命中数由评审自动累计。长期不命中的会沉底但<b>不会被删除、也不会被永久跳过</b>:每天轮换一批进入试用名额,所以每条规则都有机会重新证明自己(存量老规则同理)。</p>
             <div id="rs-rules"></div>
             <button type="button" id="rs-add-rule" class="secondary">+ 添加规则</button>
           </div>
@@ -1152,7 +1152,7 @@ const html = `<!doctype html>
           const offTag = off ? \` <span class="badge-pending">\${off} 条已停用</span>\` : "";
           const live = liveCount(r);
           const capTag = live > RULE_LOAD_LIMIT
-            ? \` <span class="muted" title="每次评审只加载排名靠前的 \${RULE_LOAD_LIMIT} 条(命中多的和新规则优先)">· 每次加载 \${RULE_LOAD_LIMIT}/\${live}</span>\`
+            ? \` <span class="muted" title="每次评审最多加载 \${RULE_LOAD_LIMIT} 条,且这是所有生效规则集共享的总预算(命中多的和新规则优先)">· 每次最多加载 \${RULE_LOAD_LIMIT}</span>\`
             : "";
           return \`<tr\${off ? ' class="row-has-pending"' : ""}>
           <td>\${esc(r.name)}</td>

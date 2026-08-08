@@ -19,10 +19,15 @@ import { RULE_LOAD_POLICY, type ReviewRule } from "../domain/entities.js";
  * hitting again.
  */
 
-/** Result of a selection: the chosen rules plus what was left out. */
-export interface RankedRules {
+/**
+ * Result of a selection: the chosen rules plus what was left out. Generic over
+ * the rule type so callers can carry their own annotations through the ranking —
+ * a combined pool tags each rule with the ruleset it came from, and that tag has
+ * to survive so hits can be reported back to the right place.
+ */
+export interface RankedRules<T extends ReviewRule = ReviewRule> {
   /** The rules to send, already ordered "most worth reading" first. */
-  rules: ReviewRule[];
+  rules: T[];
   /** How many rules were eligible before the cap. */
   total: number;
   /** How many were dropped by the cap (`total - rules.length`). */
@@ -117,10 +122,10 @@ function byRecency(a: ReviewRule, b: ReviewRule): number {
  * `limit <= 0` selects nothing but still reports the totals, which keeps
  * "how many rules does this project have" answerable without fetching them.
  */
-export function rankRules(
-  rules: readonly ReviewRule[],
+export function rankRules<T extends ReviewRule>(
+  rules: readonly T[],
   opts: RankRulesOptions = {},
-): RankedRules {
+): RankedRules<T> {
   const now = opts.now ?? Date.now();
   const limit = Math.min(
     opts.limit ?? RULE_LOAD_POLICY.defaultLimit,
