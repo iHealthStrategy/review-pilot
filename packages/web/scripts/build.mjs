@@ -282,6 +282,12 @@ const html = `<!doctype html>
       .stats-sevs { margin-left: auto; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
       .stats-proj > table, .stats-proj > .table-wrap { border: none; border-radius: 0 0 var(--r) var(--r); box-shadow: none; }
       .stats-proj > p { margin: 0; padding: 11px 14px; }
+      /* Compact metric cells: keep combined values on one line, and tint a rate
+         so the outliers are findable without reading every number. */
+      td.nowrap, th.nowrap { white-space: nowrap; }
+      .rate-good { color: var(--green); }
+      .rate-mid { color: var(--amber); }
+      .rate-low { color: var(--red); }
 
       /* ── Auth gate ─────────────────────────────────────────────── */
       .auth-gate { position: fixed; inset: 0; background: var(--bg-grad); display: none; align-items: center; justify-content: center; z-index: 200; padding: 20px; }
@@ -1295,21 +1301,27 @@ const html = `<!doctype html>
           }
           const trs = list.map((r) => \`<tr>
             <td>\${esc(who(r))}</td>
-            <td><b>\${fmt(r.runs)}</b></td>
-            <td>\${fmt(r.findings)}</td>
-            <td class="sev sev-critical">\${fmt(r.critical)}</td>
-            <td class="sev sev-major">\${fmt(r.major)}</td>
-            <td class="sev sev-minor">\${fmt(r.minor)}</td>
-            <td class="sev sev-info">\${fmt(r.info)}</td>
-            <td>\${fmtDur(r.avgActiveMs)}</td>
-            <td class="muted">\${fmtDur(r.avgDurationMs)}</td>
-            <td class="muted">\${fmt(r.timedRuns)}/\${fmt(r.runs)}</td>
-            <td class="muted">\${esc(String(r.lastAt || "").slice(0, 16).replace("T", " "))}</td>
+            <td>\${rateCell(r.cleanFirstPass, r.changesReviewed, "改动")}</td>
+            <td><b>\${fmt(r.runs)}</b>\${r.changesReviewed && r.changesReviewed !== r.runs ? \` <span class="muted">/ \${fmt(r.changesReviewed)} 改动</span>\` : ""}</td>
+            <td>\${fmt(r.findings)} <span class="muted">/ 次 \${(Number(r.findingsPerRun) || 0).toFixed(1)}</span></td>
+            <td class="nowrap"><span class="sev sev-critical">\${fmt(r.critical)}</span> / <span class="sev sev-major">\${fmt(r.major)}</span> / <span class="sev sev-minor">\${fmt(r.minor)}</span> / <span class="sev sev-info">\${fmt(r.info)}</span></td>
+            <td>\${rateCell(r.fixesApplied, r.fixesProposed, "条")}</td>
+            <td class="nowrap">\${fmtDur(r.p50ActiveMs)} <span class="muted">/ \${fmtDur(r.p90ActiveMs)}</span></td>
+            <td class="muted">\${r.timedRuns ? Math.round(Number(r.waitRatio || 0) * 100) + "%" : "—"}</td>
+            <td class="muted nowrap">\${fmt(r.scopeWorking)} / \${fmt(r.scopeBranch)} / \${fmt(r.scopeWhole)}</td>
+            <td class="muted nowrap">\${fmt(r.projects)} 项目 · \${fmt(r.activeDays)} 天</td>
+            <td class="muted">\${r.rulesOwned ? \`\${fmt(r.rulesHit)}/\${fmt(r.rulesOwned)}\` : "—"}</td>
+            <td class="muted nowrap">\${esc(String(r.lastAt || "").slice(0, 16).replace("T", " "))}</td>
           </tr>\`).join("");
           const count = skill.scope === "all" ? \` <span class="muted">\${list.length} 位用户 · \${period}</span>\` : \` <span class="muted">\${period}</span>\`;
           return \`<h3>\${title}\${count}</h3>
-            <p class="muted">「净耗时」已扣除等待用户输入的时间,是跨用户比较效率时该看的那一列;「总耗时」是从开始到结束的墙钟时间。均值只统计<b>上报了计时的运行</b>(旧版 skill 不上报)。</p>
-            <table><thead><tr><th>用户</th><th>运行</th><th>问题</th><th>致命</th><th>严重</th><th>次要</th><th>提示</th><th>平均净耗时</th><th>平均总耗时</th><th>有计时</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
+            <p class="muted">
+              <b>一次过审</b>:该改动<b>第一次</b>评审就没有 major/critical(与门禁的拦截线一致)。按<b>改动</b>而非运行计数 —— 改完再审会产生额外运行,按运行算会把同一次失败重复计入。<br/>
+              <b>净耗时</b>已扣除等待用户输入的时间,取<b>中位数 / P90</b>而非均值(一次超长评审就能把均值带偏)。<b>等待占比</b>是等人时间占墙钟的比例。<br/>
+              <b>评审时机</b>=工作区/分支/全项目的次数:工作区占比高说明边写边审,只有分支说明等到提 PR 才审、问题发现得晚。<b>规则贡献</b>=你沉淀的规则中已命中/生效总数。<br/>
+              耗时与问题数只有结合<b>改动规模</b>才可比,均值仅统计上报了对应字段的运行(旧版 skill 不上报)。
+            </p>
+            <table><thead><tr><th>用户</th><th>一次过审</th><th>运行</th><th>问题</th><th class="nowrap">致命/严重/次要/提示</th><th>修复采纳</th><th class="nowrap">净耗时 中位/P90</th><th>等待占比</th><th class="nowrap">评审时机</th><th>覆盖</th><th>规则贡献</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
         };
 
         // 2) Per-project problem summary (admin) — what a project keeps getting wrong.
@@ -1442,6 +1454,15 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         const m = Math.floor(n / 60000);
         const s = Math.round((n % 60000) / 1000);
         return m + "m" + (s ? " " + s + "s" : "");
+      }
+      // A rate as "83% (5/6 改动)" — always show the denominator, so a 100% built
+      // on a single sample can't be mistaken for a track record.
+      function rateCell(num, den, unit) {
+        const n = Number(num) || 0, d = Number(den) || 0;
+        if (!d) return '<span class="muted">—</span>';
+        const pct = Math.round((n / d) * 100);
+        const tone = pct >= 80 ? "rate-good" : pct >= 50 ? "rate-mid" : "rate-low";
+        return \`<span class="\${tone}"><b>\${pct}%</b></span> <span class="muted">\${n}/\${d} \${unit}</span>\`;
       }
       const SEV_LABEL = { critical: "致命", major: "严重", minor: "次要", info: "提示" };
       function sevBadge(sev) {

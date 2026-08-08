@@ -39,6 +39,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type SkillUsageFilter,
+  skillUsageMetrics,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -205,9 +206,16 @@ function toSkillUsage(d: MongoDoc): SkillUsage {
     major: (d.major as number) ?? 0,
     minor: (d.minor as number) ?? 0,
     info: (d.info as number) ?? 0,
-    // Absent on docs written before review-efficiency stats existed.
+    // Absent on docs written before review-efficiency stats existed. Each is
+    // read back individually so "not reported" stays undefined rather than 0 —
+    // the aggregations distinguish the two.
     ...(typeof d.durationMs === "number" ? { durationMs: d.durationMs } : {}),
     ...(typeof d.activeMs === "number" ? { activeMs: d.activeMs } : {}),
+    ...(typeof d.filesChanged === "number" ? { filesChanged: d.filesChanged } : {}),
+    ...(typeof d.linesChanged === "number" ? { linesChanged: d.linesChanged } : {}),
+    ...(typeof d.fixesProposed === "number" ? { fixesProposed: d.fixesProposed } : {}),
+    ...(typeof d.fixesApplied === "number" ? { fixesApplied: d.fixesApplied } : {}),
+    ...(typeof d.changeKey === "string" && d.changeKey ? { changeKey: d.changeKey } : {}),
     findings: Array.isArray(d.findings) ? (d.findings as SkillFinding[]) : [],
     at: d.at as string,
   };
@@ -724,8 +732,7 @@ export class MongoRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
-      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
-      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      ...skillUsageMetrics(input),
       findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };

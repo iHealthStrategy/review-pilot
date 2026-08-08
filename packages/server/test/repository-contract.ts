@@ -428,6 +428,11 @@ export function runRepositoryContract(
       info: 1,
       durationMs: 300_000,
       activeMs: 120_000,
+      filesChanged: 3,
+      linesChanged: 128,
+      fixesProposed: 4,
+      fixesApplied: 3,
+      changeKey: "abc123:branch",
       findings,
       at: "2026-06-20T10:00:00.000Z",
     });
@@ -453,6 +458,15 @@ export function runRepositoryContract(
     // The full run must round-trip every field, including the optional ones.
     assert.equal(older!.durationMs, 300_000);
     assert.equal(older!.activeMs, 120_000);
+    // Review-metric inputs round-trip too, and stay absent (not 0) when unreported.
+    assert.equal(older!.filesChanged, 3);
+    assert.equal(older!.linesChanged, 128);
+    assert.equal(older!.fixesProposed, 4);
+    assert.equal(older!.fixesApplied, 3);
+    assert.equal(older!.changeKey, "abc123:branch");
+    assert.equal(newer!.filesChanged, undefined);
+    assert.equal(newer!.fixesProposed, undefined);
+    assert.equal(newer!.changeKey, undefined);
     assert.equal(older!.findings.length, 2);
     assert.deepEqual(older!.findings[0], findings[0]);
     assert.deepEqual(older!.findings[1], findings[1]);

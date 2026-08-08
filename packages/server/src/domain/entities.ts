@@ -241,6 +241,29 @@ export interface SkillUsage {
   /** Duration minus time spent waiting on user input. Absent = not reported. */
   readonly activeMs?: number;
   /**
+   * Size of the reviewed change. Without it, findings counts and durations are
+   * not comparable between runs or between people — reviewing a 2000-line
+   * refactor is not the same work as reviewing a typo. Absent on runs from
+   * skills that predate this.
+   */
+  readonly filesChanged?: number;
+  readonly linesChanged?: number;
+  /**
+   * The one-shot fix pass: how many fixes the review proposed and how many the
+   * user actually accepted. Adoption is the closest thing to "was this review
+   * worth running" — counting findings alone rewards volume, not usefulness.
+   */
+  readonly fixesProposed?: number;
+  readonly fixesApplied?: number;
+  /**
+   * Identifies the CHANGE under review, so repeated reviews of the same change
+   * (review → fix → re-review) can be grouped. Lets "first-pass rate" mean what
+   * it says — the first review of a change came back clean — rather than being
+   * diluted by the re-reviews a failing change necessarily produces.
+   * Absent = ungroupable; such runs count as their own change.
+   */
+  readonly changeKey?: string;
+  /**
    * The findings themselves, for the per-project problem summary. Empty when
    * the run found nothing, or when an older skill reported counts only.
    */

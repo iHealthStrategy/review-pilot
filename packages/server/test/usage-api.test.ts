@@ -345,3 +345,71 @@ test("GET /api/usage/skill falls back when the IdP gave no name", () =>
     ).json()) as { rows: any[] };
     assert.equal(byUser.rows[0].userName, "alice@x.com", "no name → real email");
   }));
+
+test("POST /api/usage/skill accepts change size, fix counts and the change key", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "member");
+    await postSkill(base, u.token, {
+      project: "p", scope: "working", critical: 0, major: 1, minor: 0, info: 0,
+      filesChanged: 3, linesChanged: 128,
+      fixesProposed: 4, fixesApplied: 3,
+      changeKey: "abc123:working",
+    });
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.filesChanged, 3);
+    assert.equal(run!.linesChanged, 128);
+    assert.equal(run!.fixesProposed, 4);
+    assert.equal(run!.fixesApplied, 3);
+    assert.equal(run!.changeKey, "abc123:working");
+  }));
+
+test("POST /api/usage/skill clamps applied fixes to proposed, drops bogus counts", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "member");
+    await postSkill(base, u.token, {
+      project: "p", scope: "working", critical: 0, major: 0, minor: 0, info: 0,
+      fixesProposed: 2, fixesApplied: 99, // an adoption rate over 100% is nonsense
+      filesChanged: -4, // negative → dropped, not stored as a bogus size
+      changeKey: "   ", // blank → no key at all, so it counts as its own change
+    });
+    const [run] = await repo.listSkillUsage();
+    assert.equal(run!.fixesApplied, 2);
+    assert.equal(run!.filesChanged, undefined);
+    assert.equal(run!.changeKey, undefined);
+  }));
+
+test("GET /api/usage/skill reports the first-pass rate and rule contribution", () =>
+  withApi(async (base, repo) => {
+    const u = await makeSession(repo, SECRET, "admin", { name: "Dev" });
+    // One change that failed then passed, one that passed immediately.
+    const post = (extra: Record<string, unknown>) =>
+      postSkill(base, u.token, { project: "p", scope: "working", critical: 0, major: 0, minor: 0, info: 0, ...extra });
+    await post({ changeKey: "c1", major: 2 });
+    await post({ changeKey: "c1" });
+    await post({ changeKey: "c2" });
+    // A ruleset the user owns: one rule has earned a hit, one hasn't, one is off.
+    await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${u.token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "mine", visibility: "private",
+        rules: [
+          { title: "hit", instruction: "x", globs: [], languages: [], topics: [], hits: 3 },
+          { title: "cold", instruction: "x", globs: [], languages: [], topics: [] },
+          { title: "off", instruction: "x", globs: [], languages: [], topics: [], disabled: true },
+        ],
+      }),
+    });
+
+    const body = (await (
+      await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${u.token}` } })
+    ).json()) as { rows: any[] };
+    const r = body.rows[0];
+    assert.equal(r.runs, 3);
+    assert.equal(r.changesReviewed, 2, "three runs, two changes");
+    assert.equal(r.cleanFirstPass, 1);
+    assert.equal(r.firstPassRate, 0.5);
+    assert.equal(r.rulesOwned, 2, "disabled rules are not a contribution");
+    assert.equal(r.rulesHit, 1);
+    assert.equal(r.userName, "Dev");
+  }));

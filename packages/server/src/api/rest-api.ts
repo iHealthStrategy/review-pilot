@@ -158,6 +158,24 @@ function optionalMs(v: unknown): number | undefined {
   return Math.round(n);
 }
 
+/** `{ [key]: n }` for a usable non-negative count, or `{}` when absent/bogus. */
+function optionalCount(v: unknown, key: string): Record<string, number> {
+  const n = optionalMs(v); // same coercion: finite, non-negative, integral
+  return n === undefined ? {} : { [key]: n };
+}
+
+/**
+ * Applied fixes, never exceeding the proposed count. Reported by a client we do
+ * not control, and an adoption rate above 100% would be nonsense in every view
+ * that reads it.
+ */
+function clampedApplied(proposed: unknown, applied: unknown): Record<string, number> {
+  const a = optionalMs(applied);
+  if (a === undefined) return {};
+  const p = optionalMs(proposed);
+  return { fixesApplied: p === undefined ? a : Math.min(a, p) };
+}
+
 /**
  * Coerce a reported findings array into stored {@link SkillFinding}s, applying
  * {@link SKILL_FINDING_LIMITS}. Findings come from a local skill run, so the
@@ -270,6 +288,36 @@ async function displayNames(repo: Repository): Promise<Map<string, string>> {
     if (name) names.set(u.id, name);
   }
   return names;
+}
+
+/**
+ * Per-user rule contribution: how many rules a person has grown that are in
+ * effect, and how many of those have actually caught something.
+ *
+ * This is the "did you turn a one-off finding into durable team knowledge"
+ * signal — closer to real value than a findings count, which only rewards
+ * volume. Derived from ruleset ownership, so it needs no extra storage.
+ */
+async function ruleContribution(
+  repo: Repository,
+  userIds: readonly string[],
+): Promise<Map<string, { rulesOwned: number; rulesHit: number }>> {
+  const byOwner = new Map<string, { rulesOwned: number; rulesHit: number }>();
+  // One lookup per user rather than a new "list every ruleset" repository
+  // method: the contract stays strictly owner-scoped, and this runs over the
+  // handful of users that appear in a usage window, not the whole table.
+  for (const userId of userIds) {
+    const acc = { rulesOwned: 0, rulesHit: 0 };
+    for (const rs of await repo.listRulesetsByOwner(userId)) {
+      for (const rule of rs.rules) {
+        if (rule.pending || rule.disabled) continue; // not in effect → not a contribution
+        acc.rulesOwned += 1;
+        if (typeof rule.hits === "number" && rule.hits > 0) acc.rulesHit += 1;
+      }
+    }
+    byOwner.set(userId, acc);
+  }
+  return byOwner;
 }
 
 /** Attach `userName` to rows that carry a `userId`, leaving them otherwise intact. */
@@ -692,6 +740,17 @@ const ROUTES: Route[] = [
         ...(activeMs === undefined || durationMs === undefined
           ? {}
           : { activeMs: Math.min(activeMs, durationMs) }),
+        // Change size, fix-pass outcome and the change grouping key — all
+        // optional, so skills predating them keep reporting successfully.
+        ...optionalCount(b.filesChanged, "filesChanged"),
+        ...optionalCount(b.linesChanged, "linesChanged"),
+        ...optionalCount(b.fixesProposed, "fixesProposed"),
+        // Applied can never exceed proposed; clamp rather than reject so one
+        // sloppy client cannot produce an adoption rate above 100%.
+        ...clampedApplied(b.fixesProposed, b.fixesApplied),
+        ...(typeof b.changeKey === "string" && b.changeKey.trim()
+          ? { changeKey: b.changeKey.trim().slice(0, 200) }
+          : {}),
         findings: sanitizeFindings(b.findings),
       });
       return ok({ id: usage.id }, 201);
@@ -711,7 +770,12 @@ const ROUTES: Route[] = [
         since: defaultSince(bucket),
         ...(admin ? {} : { userId: p.userId }),
       });
-      const rows = withUserNames(aggregateSkillByUser(events), await displayNames(repo));
+      const aggregated = aggregateSkillByUser(events);
+      const contribution = await ruleContribution(repo, aggregated.map((r) => r.userId));
+      const rows = withUserNames(aggregated, await displayNames(repo)).map((r) => ({
+        ...r,
+        ...(contribution.get(r.userId) ?? { rulesOwned: 0, rulesHit: 0 }),
+      }));
       return ok({ bucket, scope: admin ? "all" : "self", rows });
     },
   },

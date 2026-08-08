@@ -32,6 +32,7 @@ import {
   type ReviewJobFilter,
   type ReviewJobPatch,
   type SkillUsageFilter,
+  skillUsageMetrics,
   type TokenUsageFilter,
   type UpdateRulesetPatch,
   type UpsertPullRequestInput,
@@ -507,8 +508,7 @@ export class MemoryRepository implements Repository {
       major: input.major,
       minor: input.minor,
       info: input.info,
-      ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
-      ...(input.activeMs === undefined ? {} : { activeMs: input.activeMs }),
+      ...skillUsageMetrics(input),
       findings: [...(input.findings ?? [])],
       at: input.at ?? this.clock(),
     };
