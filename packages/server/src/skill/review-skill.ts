@@ -379,9 +379,13 @@ If there is no remote, use the repo directory name. Keep \`PROJECT\` for steps 3
 
 ## 2. Detect whether a reviewer was named
 If the user names someone to review for them — e.g. "我想让 **alice** 帮我 review 我的改动",
-"用 **bob** 的规则 review", "let **alice** review my changes" — extract that
-person's **handle** (the token after 让/用/let and before 帮/review; lowercase it,
-keep letters/digits/hyphens). Call it \`HANDLE\`.
+"用 **bob** 的规则 review", "let **alice** review my changes" — extract exactly the
+name they typed (the token after 让/用/let and before 帮/review). Call it \`HANDLE\`.
+
+Pass it through **as typed** — do NOT lowercase, slugify or otherwise normalise
+it. The server resolves it against the identity provider's display name, the
+handle, and the email local part, so people can be named the way colleagues
+actually know them rather than by an opaque id.
 
 If no one is named that is FINE and is the normal case — you still load YOUR OWN
 rules for this project in step 3. Leave \`HANDLE\` empty.
@@ -395,7 +399,7 @@ rules, if any.
 \`\`\`sh
 BASE=${urlExpr}
 TOKEN=${tokenExpr}
-HANDLE=<the handle from step 2, or empty when nobody was named>
+HANDLE=<the name from step 2, or empty when nobody was named; write a space as %20>
 CACHE="$HOME/.reviewpilot/cache"
 mkdir -p "$CACHE"
 if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
@@ -417,6 +421,12 @@ rules }\`:
 - \`sources\` — one entry per contributing ruleset: \`name\`, \`origin\` (\`"self"\` =
   your own, \`"borrowed"\` = the named reviewer's), \`focus\`, \`instructions\`
   (freeform, ALWAYS applies), \`language\`, \`rulesSelected\`.
+- \`reviewerName\` — who the server resolved the name to. Use THIS when you say
+  whose rules you applied, not the raw handle.
+- \`reviewerUnknown: true\` — nobody matched what the user typed. **Say so
+  explicitly** ("没找到 X 这个用户,已只用你自己的项目规则评审") rather than
+  silently reviewing without them; if \`reviewerAmbiguous\` is also true, more
+  than one person matched, so ask which one they meant.
 
 **The server has already merged and CAPPED the rules as ONE pool** — your own
 rules and any borrowed ones share a single budget and are ranked together on equal

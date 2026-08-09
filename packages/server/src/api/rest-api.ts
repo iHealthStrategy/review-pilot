@@ -36,7 +36,11 @@ import {
   aggregateSkillByProject,
   aggregateSkillByUser,
   aggregateUsage,
+  bucketForRange,
   defaultSince,
+  isRange,
+  sinceForRange,
+  type Range,
 } from "../usage/aggregate.js";
 import { SKILL_FINDING_LIMITS } from "../domain/entities.js";
 import type { SkillFinding } from "../domain/entities.js";
@@ -291,6 +295,55 @@ async function displayNames(repo: Repository): Promise<Map<string, string>> {
 }
 
 /**
+ * Resolve however a person referred to a reviewer into that reviewer's canonical
+ * handle.
+ *
+ * A handle is generated from `preferred_username || email || sub`, so an IdP
+ * account with neither ends up with its 64-char subject as a handle — unusable
+ * in "让 X 帮我 review". People know each other by the display name the identity
+ * provider shows, so accept that too: handle, display name, email local part,
+ * or a slugified display name, matched case-insensitively.
+ *
+ * Returns "" when nothing matches, and also when a display name is AMBIGUOUS —
+ * silently picking one of two people called the same thing would apply the
+ * wrong person's rules, which is worse than saying "I couldn't find them".
+ *
+ * `eligible` narrows the candidate set; the unauthenticated route passes the
+ * owners of public rulesets so name lookup can't be used to enumerate users.
+ */
+async function resolveReviewerHandle(
+  repo: Repository,
+  typed: string,
+  eligible?: ReadonlySet<string>,
+): Promise<{ handle: string; name: string; ambiguous: boolean }> {
+  const want = typed.trim().toLowerCase();
+  const miss = { handle: "", name: "", ambiguous: false };
+  if (!want) return miss;
+  const all = await repo.listUsers();
+  const users = eligible ? all.filter((u) => eligible.has(u.handle)) : all;
+  const found = (u: User) => ({ handle: u.handle, name: u.name || "", ambiguous: false });
+
+  // A handle is unique, so an exact hit always wins — including for someone who
+  // deliberately typed the opaque id.
+  const byHandle = users.find((u) => u.handle.toLowerCase() === want);
+  if (byHandle) return found(byHandle);
+
+  const localPart = (email: string) =>
+    email && !email.endsWith("@users.noreply.local") ? (email.split("@")[0] ?? "").toLowerCase() : "";
+  for (const match of [
+    (u: User) => (u.name || "").trim().toLowerCase() === want,
+    (u: User) => localPart(u.email) === want,
+    // "Zhang Wei" typed as "zhang-wei", and vice versa.
+    (u: User) => !!u.name && slugify(u.name) === slugify(typed),
+  ]) {
+    const hits = users.filter(match);
+    if (hits.length === 1) return found(hits[0]!);
+    if (hits.length > 1) return { handle: "", name: "", ambiguous: true };
+  }
+  return miss;
+}
+
+/**
  * Per-user rule contribution: how many rules a person has grown that are in
  * effect, and how many of those have actually caught something.
  *
@@ -334,6 +387,22 @@ function withUserNames<T extends { userId: string }>(
 /** `?bucket=` with a safe default, shared by the usage endpoints. */
 function asBucket(raw: string | null): Bucket {
   return raw === "week" || raw === "month" ? raw : "day";
+}
+
+/**
+ * The time window a usage query covers, from `?range=` (7d/30d/90d/365d).
+ *
+ * Falls back to the legacy `?bucket=` window so an older client keeps working;
+ * `bucket` is also returned so the token view still knows what granularity to
+ * group by, derived from the range rather than chosen separately.
+ */
+function resolveWindow(query: URLSearchParams): { range: Range | null; bucket: Bucket; since: string } {
+  const raw = query.get("range");
+  if (isRange(raw)) {
+    return { range: raw, bucket: bucketForRange(raw), since: sinceForRange(raw) };
+  }
+  const bucket = asBucket(query.get("bucket"));
+  return { range: null, bucket, since: defaultSince(bucket) };
 }
 
 /** Resolve a principal's email for display/ownership (env admin or DB user). */
@@ -693,14 +762,13 @@ const ROUTES: Route[] = [
     method: "GET",
     pattern: /^\/api\/usage$/,
     handler: async ({ query }, repo) => {
-      const raw = query.get("bucket");
-      const bucket: Bucket = raw === "week" || raw === "month" ? raw : "day";
+      const { range, bucket, since } = resolveWindow(query);
       const source = query.get("source");
       const events = await repo.listTokenUsage({
-        since: defaultSince(bucket),
+        since,
         ...(source === "schedule" || source === "task" ? { source } : {}),
       });
-      return ok({ bucket, rows: aggregateUsage(events, bucket) });
+      return ok({ bucket, range, rows: aggregateUsage(events, bucket) });
     },
   },
   // --- Skill usage: the local review skill reports each run (no token data).
@@ -763,11 +831,10 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/usage\/skill$/,
     handler: async ({ principal, query }, repo) => {
       const p = requirePrincipal(principal);
-      const raw = query.get("bucket");
-      const bucket: Bucket = raw === "week" || raw === "month" ? raw : "day";
+      const { range, bucket, since } = resolveWindow(query);
       const admin = p.role === "admin";
       const events = await repo.listSkillUsage({
-        since: defaultSince(bucket),
+        since,
         ...(admin ? {} : { userId: p.userId }),
       });
       const aggregated = aggregateSkillByUser(events);
@@ -776,7 +843,7 @@ const ROUTES: Route[] = [
         ...r,
         ...(contribution.get(r.userId) ?? { rulesOwned: 0, rulesHit: 0 }),
       }));
-      return ok({ bucket, scope: admin ? "all" : "self", rows });
+      return ok({ bucket, range, scope: admin ? "all" : "self", rows });
     },
   },
   // Per-project problem summary — what a project's reviews keep turning up.
@@ -786,12 +853,12 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/usage\/skill\/projects$/,
     handler: async ({ principal, query }, repo) => {
       requireAdmin(principal);
-      const bucket: Bucket = asBucket(query.get("bucket"));
+      const { range, bucket, since } = resolveWindow(query);
       const events = await repo.listSkillUsage({
-        since: defaultSince(bucket),
+        since,
         ...(query.get("project") ? { project: query.get("project")! } : {}),
       });
-      return ok({ bucket, rows: aggregateSkillByProject(events) });
+      return ok({ bucket, range, rows: aggregateSkillByProject(events) });
     },
   },
   // Raw per-run detail, newest first, including each run's findings. ADMIN ONLY
@@ -801,16 +868,16 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/usage\/skill\/runs$/,
     handler: async ({ principal, query }, repo) => {
       requireAdmin(principal);
-      const bucket: Bucket = asBucket(query.get("bucket"));
+      const { range, bucket, since } = resolveWindow(query);
       const rawLimit = Number(query.get("limit"));
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : 100;
       const runs = await repo.listSkillUsage({
-        since: defaultSince(bucket),
+        since,
         limit,
         ...(query.get("project") ? { project: query.get("project")! } : {}),
         ...(query.get("userId") ? { userId: query.get("userId")! } : {}),
       });
-      return ok({ bucket, limit, runs: withUserNames(runs, await displayNames(repo)) });
+      return ok({ bucket, range, limit, runs: withUserNames(runs, await displayNames(repo)) });
     },
   },
   // --- Community review rulesets (self-service; ownership enforced per-handler) ---
@@ -819,7 +886,20 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/rulesets$/,
     handler: async ({ principal, query }, repo) => {
       const p = requirePrincipal(principal);
-      if (query.get("scope") === "public") return ok(await repo.listPublicRulesets());
+      if (query.get("scope") === "public") {
+        // Carry the owner's display name so the UI can show "让 <名字> 帮我
+        // review" — the handle may be an opaque 64-char subject nobody can type.
+        const names = await displayNames(repo);
+        const byHandle = new Map(
+          (await repo.listUsers()).map((u) => [u.handle, names.get(u.id) ?? ""]),
+        );
+        return ok(
+          (await repo.listPublicRulesets()).map((r) => ({
+            ...r,
+            ownerName: byHandle.get(r.ownerHandle) || r.ownerHandle,
+          })),
+        );
+      }
       return ok(await repo.listRulesetsByOwner(p.userId));
     },
   },
@@ -1029,10 +1109,14 @@ const ROUTES: Route[] = [
       // Own rulesets — including PRIVATE ones, which is the whole point.
       const own = (await repo.listRulesetsByOwner(p.userId)).filter(governs);
       // A named reviewer contributes only their PUBLIC rulesets, never private.
-      // Only slugify a NON-EMPTY value: slugify("") returns "ruleset", so an
-      // absent reviewer would otherwise borrow from whoever holds that handle.
+      // The caller may name them however they know them — display name, handle,
+      // or email local part — so resolve to the canonical handle here rather
+      // than making people memorise an opaque id.
       const rawReviewer = (query.get("reviewer") ?? "").trim();
-      const reviewer = rawReviewer ? slugify(rawReviewer) : "";
+      const resolved = rawReviewer
+        ? await resolveReviewerHandle(repo, rawReviewer)
+        : { handle: "", name: "", ambiguous: false };
+      const reviewer = resolved.handle;
       const borrowed = reviewer
         ? (await repo.listPublicRulesets()).filter(
             (r) => r.ownerHandle === reviewer && r.ownerId !== p.userId && governs(r),
@@ -1073,7 +1157,12 @@ const ROUTES: Route[] = [
 
       return ok({
         ...(project ? { project } : {}),
-        ...(reviewer ? { reviewer } : {}),
+        ...(reviewer ? { reviewer, reviewerName: resolved.name || reviewer } : {}),
+        // Tell the skill when a name went nowhere, so it can say so instead of
+        // silently reviewing with nobody's rules.
+        ...(rawReviewer && !reviewer
+          ? { reviewerInput: rawReviewer, reviewerUnknown: true, reviewerAmbiguous: resolved.ambiguous }
+          : {}),
         ruleLimit: limit,
         ruleTotal: ranked.total,
         ruleOmitted: ranked.omitted,
@@ -1088,8 +1177,15 @@ const ROUTES: Route[] = [
     method: "GET",
     pattern: /^\/api\/u\/(?<handle>[^/]+)\/rulesets$/,
     handler: async ({ params, query }, repo) => {
-      const handle = slugify(params.handle!);
       const all = await repo.listPublicRulesets();
+      // Accept a display name here too, but only resolve against people who
+      // already own a public ruleset: this route is unauthenticated, and
+      // matching against every user would turn it into a name-probing oracle.
+      const typed = params.handle!;
+      const owners = new Set(all.map((r) => r.ownerHandle));
+      const handle = owners.has(slugify(typed))
+        ? slugify(typed)
+        : (await resolveReviewerHandle(repo, typed, owners)).handle || slugify(typed);
       // Optional project filter: a project-scoped ruleset matches its own key;
       // an "any project" ruleset (project === "") always matches.
       const projectFilter = normalizeProjectKey(query.get("project") ?? "");

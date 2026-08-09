@@ -8,6 +8,10 @@ import {
   bucketKey,
   defaultSince,
   percentile,
+  bucketForRange,
+  isRange,
+  sinceForRange,
+  type Range,
 } from "../src/usage/aggregate.js";
 
 function ev(p: Partial<TokenUsage> = {}): TokenUsage {
@@ -287,4 +291,27 @@ test("aggregateSkillByUser: rates are 0 when nothing was measured, never NaN", (
   assert.equal(r.fixAdoptionRate, 0);
   assert.equal(r.waitRatio, 0);
   assert.equal(r.p50ActiveMs, 0);
+});
+
+// --- Time range: the label and the window must agree ------------------------
+
+test("sinceForRange: the window matches what the label promises", () => {
+  const now = Date.parse("2026-08-09T00:00:00.000Z");
+  const days = (r: Range) => Math.round((now - Date.parse(sinceForRange(r, now))) / 86_400_000);
+  assert.equal(days("7d"), 7);
+  assert.equal(days("30d"), 30);
+  assert.equal(days("90d"), 90);
+  assert.equal(days("365d"), 365);
+});
+
+test("bucketForRange: granularity follows the range, so the table stays readable", () => {
+  assert.equal(bucketForRange("7d"), "day");
+  assert.equal(bucketForRange("30d"), "week");
+  assert.equal(bucketForRange("90d"), "week");
+  assert.equal(bucketForRange("365d"), "month");
+});
+
+test("isRange: only the four offered ranges are accepted", () => {
+  for (const ok of ["7d", "30d", "90d", "365d"]) assert.ok(isRange(ok));
+  for (const bad of ["day", "week", "month", "1d", "", null]) assert.ok(!isRange(bad));
 });

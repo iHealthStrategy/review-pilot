@@ -408,7 +408,41 @@ export function aggregateSkillByProject(
   );
 }
 
-/** Default lower bound for a bucket, so a query scans a sensible window. */
+/**
+ * How far back a range reaches. These ARE the ranges the UI offers, so the
+ * label and the window agree: "近 7 天" scans seven days, not thirty.
+ *
+ * The old mapping (day→30d, week→84d, month→366d) treated the control as a
+ * token-aggregation *granularity* and reused it as a *window*, which meant the
+ * "日" button actually scanned a month — and every skill-usage view returned an
+ * identical result for all three settings, because the data all fell inside
+ * even the narrowest window.
+ */
+export const RANGE_DAYS = { "7d": 7, "30d": 30, "90d": 90, "365d": 365 } as const;
+export type Range = keyof typeof RANGE_DAYS;
+
+export function isRange(v: string | null): v is Range {
+  return v !== null && v in RANGE_DAYS;
+}
+
+/**
+ * Token usage is grouped into buckets for display; pick a granularity that
+ * keeps the table readable at each range instead of asking the user to choose
+ * a window and a granularity separately.
+ */
+export function bucketForRange(range: Range): Bucket {
+  return range === "7d" ? "day" : range === "365d" ? "month" : "week";
+}
+
+/** Lower bound for a range. */
+export function sinceForRange(range: Range, now: number = Date.now()): string {
+  return new Date(now - RANGE_DAYS[range] * 24 * 60 * 60 * 1000).toISOString();
+}
+
+/**
+ * Legacy lower bound for a bucket. Kept so an older client still gets a sane
+ * window from `?bucket=`; new callers should send `?range=`.
+ */
 export function defaultSince(bucket: Bucket, now: number = Date.now()): string {
   const days = bucket === "month" ? 366 : bucket === "week" ? 84 : 30;
   return new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
