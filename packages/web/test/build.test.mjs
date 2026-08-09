@@ -40,10 +40,17 @@ test("web build emits a static index.html artifact", async () => {
   assert.match(html, /\/api\/jobs/);
   assert.match(html, /\/api\/schedules/);
   // State survives refresh: view restored from hash (with localStorage fallback),
-  // open job detail encoded as #tasks/<id>, usage bucket persisted.
+  // open job detail encoded as #tasks/<id>, usage time range persisted.
   assert.match(html, /localStorage.getItem\("rp_view"\)/);
   assert.match(html, /location.hash = "tasks\/"/);
-  assert.match(html, /rp_bucket/);
+  assert.match(html, /rp_range/);
+  // The usage control is a time RANGE, and every label states the window it
+  // actually scans — the old day/week/month buttons scanned 30/84/366 days.
+  for (const range of ["7d", "30d", "90d", "365d"]) {
+    assert.match(html, new RegExp(`data-range="${range}"`));
+  }
+  assert.match(html, /近 7 天/);
+  assert.doesNotMatch(html, /data-bucket=/, "the granularity control is gone");
 });
 
 test("the embedded app script is syntactically valid JS", async () => {

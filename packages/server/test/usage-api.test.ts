@@ -35,18 +35,23 @@ async function viewerToken(repo: Repository): Promise<string> {
   return (await makeSession(repo, SECRET, "viewer")).token;
 }
 
+// Seed RELATIVE to now. Fixed calendar dates rot: the endpoint filters by a
+// window measured back from today, so a hard-coded 2026-06-22 passes when
+// written and then silently starts failing once the window moves past it.
+const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+
 async function seed(repo: Repository) {
   await repo.recordTokenUsage({
     source: "schedule", sourceId: "sch_1", sourceLabel: "nightly", engine: "claude-agent",
-    inputTokens: 100, outputTokens: 40, estimated: false, at: "2026-06-22T08:00:00.000Z",
+    inputTokens: 100, outputTokens: 40, estimated: false, at: hoursAgo(4),
   });
   await repo.recordTokenUsage({
     source: "schedule", sourceId: "sch_1", sourceLabel: "nightly", engine: "claude-agent",
-    inputTokens: 60, outputTokens: 20, estimated: true, at: "2026-06-22T20:00:00.000Z",
+    inputTokens: 60, outputTokens: 20, estimated: true, at: hoursAgo(2),
   });
   await repo.recordTokenUsage({
     source: "task", sourceId: "acme/app", sourceLabel: "acme/app", engine: "claude-code",
-    inputTokens: 30, outputTokens: 10, estimated: true, at: "2026-06-22T09:00:00.000Z",
+    inputTokens: 30, outputTokens: 10, estimated: true, at: hoursAgo(3),
   });
 }
 
@@ -412,4 +417,37 @@ test("GET /api/usage/skill reports the first-pass rate and rule contribution", (
     assert.equal(r.rulesOwned, 2, "disabled rules are not a contribution");
     assert.equal(r.rulesHit, 1);
     assert.equal(r.userName, "Dev");
+  }));
+
+test("GET /api/usage*: ?range= narrows every section, not just the token table", () =>
+  withApi(async (base, repo) => {
+    const admin = await makeSession(repo, SECRET, "admin");
+    const daysAgo = (d: number) => new Date(Date.now() - d * 86_400_000).toISOString();
+    // Three runs spread across the ranges the UI offers.
+    for (const [at, project] of [[daysAgo(1), "recent"], [daysAgo(45), "mid"], [daysAgo(200), "old"]] as const) {
+      await repo.recordSkillUsage({
+        userId: admin.user.id, userLabel: "@a", project, scope: "working",
+        critical: 0, major: 0, minor: 1, info: 0, at,
+      });
+    }
+    const get = async (path: string) =>
+      (await (await fetch(`${base}${path}`, { headers: { authorization: `Bearer ${admin.token}` } })).json()) as any;
+
+    // The per-user row must actually shrink as the window shrinks — the old
+    // day/week/month windows were all wider than the data, so every setting
+    // returned an identical result and the control looked broken.
+    assert.equal((await get("/api/usage/skill?range=7d")).rows[0].runs, 1);
+    assert.equal((await get("/api/usage/skill?range=90d")).rows[0].runs, 2);
+    assert.equal((await get("/api/usage/skill?range=365d")).rows[0].runs, 3);
+    // And so must the admin drill-downs.
+    assert.equal((await get("/api/usage/skill/projects?range=7d")).rows.length, 1);
+    assert.equal((await get("/api/usage/skill/projects?range=365d")).rows.length, 3);
+    assert.equal((await get("/api/usage/skill/runs?range=7d")).runs.length, 1);
+    assert.equal((await get("/api/usage/skill/runs?range=365d")).runs.length, 3);
+    // Granularity is derived, so the caller never picks a window AND a bucket.
+    assert.equal((await get("/api/usage?range=7d")).bucket, "day");
+    assert.equal((await get("/api/usage?range=365d")).bucket, "month");
+    // A legacy client sending ?bucket= still gets a sane window.
+    assert.equal((await get("/api/usage/skill?bucket=month")).range, null);
+    assert.ok((await get("/api/usage/skill?bucket=month")).rows[0].runs >= 1);
   }));

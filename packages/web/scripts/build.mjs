@@ -282,6 +282,11 @@ const html = `<!doctype html>
       .stats-sevs { margin-left: auto; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
       .stats-proj > table, .stats-proj > .table-wrap { border: none; border-radius: 0 0 var(--r) var(--r); box-shadow: none; }
       .stats-proj > p { margin: 0; padding: 11px 14px; }
+      /* A whole collapsible section, so a long drill-down can't bury what follows. */
+      .stats-group > summary { cursor: pointer; list-style-position: outside; }
+      .stats-group > summary::marker { color: var(--muted); }
+      .stats-group > summary > h3 { display: inline; }
+      .stats-group > summary:hover > h3 { color: var(--accent-2); }
       /* Compact metric cells: keep combined values on one line, and tint a rate
          so the outliers are findable without reading every number. */
       td.nowrap, th.nowrap { white-space: nowrap; }
@@ -358,9 +363,10 @@ const html = `<!doctype html>
           <div class="view-head">
             <h2>用量统计</h2>
             <div id="usage-buckets">
-              <button class="secondary" data-bucket="day">日</button>
-              <button class="secondary" data-bucket="week">周</button>
-              <button class="secondary" data-bucket="month">月</button>
+              <button class="secondary" data-range="7d">近 7 天</button>
+              <button class="secondary" data-range="30d">近 30 天</button>
+              <button class="secondary" data-range="90d">近 90 天</button>
+              <button class="secondary" data-range="365d">近一年</button>
             </div>
           </div>
           <section id="usage"><div data-loading>加载中…</div></section>
@@ -1063,7 +1069,7 @@ const html = `<!doctype html>
         const note = document.getElementById("ruleset-owner-note");
         note.hidden = !foreign;
         note.textContent = foreign
-          ? "⚠ 你正在以管理员身份修改 " + (rs.ownerHandle || rs.ownerEmail || "他人") + " 的规则集,保存后对其所有使用者立即生效。"
+          ? "⚠ 你正在以管理员身份修改 " + (rs.ownerName || rs.ownerHandle || rs.ownerEmail || "他人") + " 的规则集,保存后对其所有使用者立即生效。"
           : "";
         f.id.value = rs ? rs.id : "";
         f.project.value = rs ? (rs.project || "") : "";
@@ -1103,7 +1109,7 @@ const html = `<!doctype html>
         document.getElementById("rs-view-title").textContent = rs.name || "规则集详情";
         document.getElementById("rs-view-body").innerHTML =
           \`<div class="rs-tags">
-             \${tag("作者", rs.ownerHandle || rs.ownerEmail || "—")}
+             \${tag("作者", rs.ownerName || rs.ownerHandle || rs.ownerEmail || "—")}
              \${tag("项目", rs.projectLabel || rs.project || "所有项目")}
              \${tag("可见性", rs.visibility === "public" ? "公开" : "私有")}
              \${tag("规则数", String(rules.length))}
@@ -1154,7 +1160,11 @@ const html = `<!doctype html>
         const skill = await getSkillToken(); // token baked into the install commands
         const mine = await load("/api/rulesets", []);
         const pub = await load("/api/rulesets?scope=public", []);
+        // What to tell colleagues to type. The display name is what people know
+        // each other by; the handle is a fallback for accounts the IdP gave no
+        // name. The server resolves either, so both work.
         const myHandle = (me && me.handle) || "";
+        const myRef = (me && (me.name || me.handle)) || "";
         // A single ruleset installs as its own skill — same per-host routes.
         const cmd = (r, host) => {
           const url = \`\${o}/skill/ruleset/\${r.id}/\${host}/install.sh\`;
@@ -1189,10 +1199,13 @@ const html = `<!doctype html>
         // value in the tooltip + the copy button so the command stays usable.
         const shortId = (s) => (s.length > 18 ? s.slice(0, 10) + "…" : s);
         const pubCards = pub.map((r) => {
-          const author = r.ownerHandle || r.ownerEmail || "—";
+          // Prefer the identity provider's display name everywhere a human has
+          // to read or type it: a provisioned handle can be a 64-char subject.
+          const author = r.ownerName || r.ownerHandle || r.ownerEmail || "—";
           const project = r.projectLabel || r.project || "所有项目";
-          const call = r.ownerHandle ? \`让 \${r.ownerHandle} 帮我 review 我的改动\` : "";
-          const callShort = r.ownerHandle ? \`让 \${shortId(r.ownerHandle)} 帮我 review 我的改动\` : "";
+          const ref = r.ownerName || r.ownerHandle;
+          const call = ref ? \`让 \${ref} 帮我 review 我的改动\` : "";
+          const callShort = ref ? \`让 \${shortId(ref)} 帮我 review 我的改动\` : "";
           return \`<article class="rs-card">
           <h4 title="\${esc(r.name)}">\${esc(r.name)}</h4>
           <div class="rs-tags">
@@ -1221,8 +1234,8 @@ const html = `<!doctype html>
              <p class="muted">装一个本地 skill,之后就能让任意用户的公开规则集来 review 你的改动 —— 规则<strong>按项目</strong>管理、按改动文件<strong>本地按需</strong>加载,代码不外传。<b>按你使用的 Agent 选一条</b>,已内置你的 token,复制即用、装好即可自动沉淀规则:</p>
              \${installBlocks((h) => skillInstallCmd(skill, h))}
              <h3>② 在 Claude Code / Codex / Cursor 里直接说</h3>
-             <pre><code>让 \${esc(myHandle || "<用户名>")} 帮我 review 我的改动</code></pre>
-             <p class="muted">你的用户名(handle):<code>\${esc(myHandle || "(登录后可见)")}</code> —— 把它告诉别人,他们就能用你的公开规则集来 review。</p>
+             <pre><code>让 \${esc(myRef || "<名字>")} 帮我 review 我的改动</code></pre>
+             <p class="muted">直接用<b>认证系统里的名字</b>即可(你的是 <code>\${esc(myRef || "(登录后可见)")}</code>)—— 把它告诉别人,他们就能用你的公开规则集来 review。姓名、handle、邮箱前缀都能识别,不必去记那串 id\${myHandle && myHandle !== myRef ? \`(你的 handle 是 <code>\${esc(shortId(myHandle))}</code>,也仍然可用)\` : ""}。</p>
              <h3>③ 自动沉淀规则</h3>
              <p class="muted">用上面「已内置 token」的安装命令装好后即自动开启:每次 review 会把发现的关键点<strong>自动采纳</strong>为当前项目规则集的规则、立即生效;若某条不合适,可在下方规则集「编辑」里把它<strong>停用</strong>。</p>
            </div>\`;
@@ -1264,18 +1277,22 @@ const html = `<!doctype html>
       }
 
       // --- Token usage (per configured task; day/week/month) ---
-      let usageBucket = localStorage.getItem("rp_bucket") || "day";
-      document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) => {
+      // A time RANGE, not an aggregation granularity: the label and the window
+      // agree, and the token table picks its own grouping from the range.
+      const USAGE_RANGES = { "7d": "近 7 天", "30d": "近 30 天", "90d": "近 90 天", "365d": "近一年" };
+      let usageRange = localStorage.getItem("rp_range");
+      if (!USAGE_RANGES[usageRange]) usageRange = "30d";
+      document.querySelectorAll('#usage-buckets [data-range]').forEach((b) => {
         b.onclick = () => {
-          usageBucket = b.getAttribute("data-bucket");
-          localStorage.setItem("rp_bucket", usageBucket); // survive refresh
+          usageRange = b.getAttribute("data-range");
+          localStorage.setItem("rp_range", usageRange); // survive refresh
           renderUsage();
         };
       });
       async function renderUsage() {
-        document.querySelectorAll('#usage-buckets [data-bucket]').forEach((b) =>
-          b.classList.toggle("active-bucket", b.getAttribute("data-bucket") === usageBucket));
-        const q = "?bucket=" + usageBucket;
+        document.querySelectorAll('#usage-buckets [data-range]').forEach((b) =>
+          b.classList.toggle("active-bucket", b.getAttribute("data-range") === usageRange));
+        const q = "?range=" + usageRange;
         const admin = isAdmin();
         // Skill review stats and LLM token usage share this page: both answer
         // "what did this cost / who is reviewing", and split across two pages
@@ -1287,7 +1304,7 @@ const html = `<!doctype html>
         const runsRes = admin ? await load("/api/usage/skill/runs" + q + "&limit=100", { runs: [] }) : { runs: [] };
         const rows = data.rows || [];
         const fmt = (n) => Number(n || 0).toLocaleString();
-        const period = usageBucket === "day" ? "近 24 小时" : usageBucket === "week" ? "近 7 天" : "近 30 天";
+        const period = USAGE_RANGES[usageRange];
         // Prefer the identity provider's display name: a provisioned handle is
         // often a 64-char opaque subject, which makes the column unreadable.
         const who = (r) => r.userName || r.userLabel || r.userId || "—";
@@ -1351,8 +1368,8 @@ const html = `<!doctype html>
               \${body}
             </details>\`;
           }).join("");
-          return \`<h3>项目问题汇总 <span class="muted">\${projects.length} 个项目 · \${period}</span></h3>
-            <p class="muted">同一「严重度 + 标题」的问题跨运行合并计数,出现次数最多的排在前面 —— 反复出现的才值得沉淀成规则。</p>\${cards}\`;
+          return \`<details class="stats-group" open><summary><h3>项目问题汇总 <span class="muted">\${projects.length} 个项目 · \${period}</span></h3></summary>
+            <p class="muted">同一「严重度 + 标题」的问题跨运行合并计数,出现次数最多的排在前面 —— 反复出现的才值得沉淀成规则。</p>\${cards}</details>\`;
         };
 
         // 3) Raw runs (admin), each expandable into its findings.
@@ -1360,6 +1377,9 @@ const html = `<!doctype html>
           if (!admin) return "";
           const runs = runsRes.runs || [];
           if (!runs.length) return \`<h3>运行明细</h3><p class="muted">\${period}内暂无运行。</p>\`;
+          // Collapsed by default: this can be a hundred cards, and left expanded
+          // it buries everything below it (the token tables used to end up ~87
+          // blocks down the page).
           const items = runs.map((r) => {
             const fs = r.findings || [];
             const rs = fs.map((f) => \`<tr>
@@ -1381,7 +1401,7 @@ const html = `<!doctype html>
               \${body}
             </details>\`;
           }).join("");
-          return \`<h3>运行明细 <span class="muted">最近 \${runs.length} 次 · \${period}</span></h3>\${items}\`;
+          return \`<details class="stats-group"><summary><h3>运行明细 <span class="muted">最近 \${runs.length} 次 · \${period}</span></h3></summary>\${items}</details>\`;
         };
 
         const section = (title, src) => {
@@ -1397,13 +1417,15 @@ const html = `<!doctype html>
             <table><thead><tr><th>周期</th><th>任务</th><th>输入</th><th>输出</th><th>合计</th><th>次数</th><th>类型</th></tr></thead><tbody>\${trs}</tbody></table>\`;
         };
         document.querySelector("#usage").innerHTML =
-          \`<p class="muted">按\${usageBucket === "day" ? "日" : usageBucket === "week" ? "周" : "月"}统计。上半部分是<b>本地 skill 评审</b>(次数、问题、耗时);下半部分是<b>服务端任务的 LLM token 消耗</b>,"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
+          \`<p class="muted">统计范围:<b>\${esc(period)}</b>(所有区块都按这个范围过滤)。Token 消耗的行按日/周/月汇总,粒度随范围自动选择;"估算"为按文本长度近似(引擎未上报真实用量时)。</p>\`
+          // Order matters: the two summary tables first, then the drill-downs.
+          // Token usage sat last behind ~87 expandable cards and read as missing.
           + skillSection()
-          + projectSection()
-          + runsSection()
-          + \`<h3 style="margin-top:26px">服务端任务 Token 消耗</h3>\`
+          + \`<h3 style="margin-top:26px">服务端任务 Token 消耗 <span class="muted">\${esc(period)}</span></h3>\`
           + section("定时扫描 (schedules)", "schedule")
-          + section("临时任务 (tasks)", "task");
+          + section("临时任务 (tasks)", "task")
+          + projectSection()
+          + runsSection();
         wrapTables(document.querySelector("#usage"));
       }
 
