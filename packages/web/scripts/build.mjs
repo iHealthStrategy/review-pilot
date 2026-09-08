@@ -1155,11 +1155,82 @@ const html = `<!doctype html>
         finally { btn.disabled = false; }
       };
 
+      // --- Admin overview: which rules each person has grown ---
+      // Filled from /api/rulesets?scope=all (admin-only; PRIVATE rulesets are
+      // included, so this is the one place a non-owner reads them in bulk).
+      // Seeded by the usage table's 规则贡献 cell so that "9/27" is clickable and
+      // lands on that person's rules instead of the whole list.
+      let rulesOwnerSeed = "";
+      // Wire 查看 / 编辑 inside \`root\` to the rulesets in \`byId\`. Shared, because
+      // the admin block re-renders on every filter keystroke and must rebind.
+      function bindRulesetActions(root, byId) {
+        if (!root) return;
+        root.querySelectorAll("[data-view-rs]").forEach((b) =>
+          (b.onclick = () => openRulesetView(byId[b.getAttribute("data-view-rs")])));
+        root.querySelectorAll("[data-edit-rs]").forEach((b) =>
+          (b.onclick = () => openRulesetModal(byId[b.getAttribute("data-edit-rs")])));
+      }
+      function renderAdminRulesets(all, q, byId) {
+        const box = document.getElementById("rs-admin-list");
+        if (!box) return;
+        const live = (r) => (r.rules || []).filter((x) => !x.pending && !x.disabled);
+        // Same definition as the server's rule-contribution metric: a rule counts
+        // as hit if it EVER caught something, not once per catch.
+        const hitCount = (rules) => rules.filter((x) => Number(x.hits) > 0).length;
+        const ownerOf = (r) => r.ownerName || r.ownerHandle || r.ownerEmail || "—";
+        const needle = (q || "").trim().toLowerCase();
+        const matches = (r) =>
+          !needle ||
+          [ownerOf(r), r.name, r.projectLabel, r.project].some((v) =>
+            String(v || "").toLowerCase().includes(needle));
+        const shown = all.filter(matches);
+        if (!shown.length) {
+          box.innerHTML = \`<p class="muted">没有匹配「\${esc(q)}」的规则集。</p>\`;
+          return;
+        }
+        const groups = new Map();
+        shown.forEach((r) => {
+          const key = r.ownerId || ownerOf(r);
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(r);
+        });
+        const liveTotal = (list) => list.reduce((n, r) => n + live(r).length, 0);
+        // Most rules in effect first — that is where the team's rules come from.
+        const ordered = [...groups.values()].sort((a, b) => liveTotal(b) - liveTotal(a));
+        box.innerHTML = ordered.map((list) => {
+          const rules = list.flatMap(live);
+          const rows = list.map((r) => {
+            const off = (r.rules || []).length - live(r).length;
+            return \`<tr>
+              <td>\${esc(r.name)}</td>
+              <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
+              <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
+              <td class="muted nowrap">生效 \${live(r).length} · 命中 \${hitCount(live(r))}\${off ? \` · <span class="badge-pending">\${off} 条已停用</span>\` : ""}</td>
+              <td class="muted nowrap">\${esc(String(r.updatedAt || "").slice(0, 16).replace("T", " "))}</td>
+              <td class="nowrap"><button class="secondary" data-view-rs="\${esc(r.id)}">查看规则</button> <button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button></td>
+            </tr>\`;
+          }).join("");
+          // Expanded while filtering (or when one person is all there is), so a
+          // jump from the usage table lands straight on their rules.
+          const open = needle || ordered.length === 1 ? " open" : "";
+          return \`<details class="stats-proj"\${open}>
+            <summary><span class="stats-proj-name">\${esc(ownerOf(list[0]))}</span>
+              <span class="muted">\${list.length} 个规则集 · 生效 \${rules.length} 条 · 已命中 \${hitCount(rules)} 条</span></summary>
+            <table><thead><tr><th>规则集</th><th>项目</th><th>可见性</th><th>规则</th><th>最近更新</th><th></th></tr></thead><tbody>\${rows}</tbody></table>
+          </details>\`;
+        }).join("");
+        bindRulesetActions(box, byId);
+        wrapTables(box);
+      }
+
       async function renderRulesets() {
         const o = location.origin;
         const skill = await getSkillToken(); // token baked into the install commands
         const mine = await load("/api/rulesets", []);
         const pub = await load("/api/rulesets?scope=public", []);
+        // Everyone's rulesets, private included — admin-only on the server (403
+        // otherwise), so only ask when the caller actually is one.
+        const all = isAdmin() ? await load("/api/rulesets?scope=all", []) : [];
         // What to tell colleagues to type. The display name is what people know
         // each other by; the handle is a fallback for accounts the IdP gave no
         // name. The server resolves either, so both work.
@@ -1250,16 +1321,23 @@ const html = `<!doctype html>
           + \`<h3>社区规则集</h3>\`
           + (pub.length
               ? \`<div class="rs-grid">\${pubCards}</div>\`
-              : \`<p class="muted">社区暂无公开规则集。</p>\`);
+              : \`<p class="muted">社区暂无公开规则集。</p>\`)
+          // Admins get the full picture: every person's rulesets, private ones
+          // included. The community grid above only ever shows public ones, so
+          // without this a private ruleset — which auto-grow creates by default —
+          // was invisible to anyone but its owner.
+          + (isAdmin()
+              ? \`<h3 style="margin-top:26px">全部用户规则集 <span class="muted">仅管理员 · \${all.length} 个规则集</span></h3>
+                 <p class="muted">每个人名下的规则集(含<b>私有</b>),按用户分组。<b>生效</b>=评审真正会加载的条数,<b>命中</b>=其中真的抓到过问题的条数(与「用量统计」里的「规则贡献」同一口径)。「查看规则」看全文;「编辑」以管理员身份修改,保存后对该规则集的所有使用者立即生效。</p>
+                 <input id="rs-admin-filter" style="max-width:320px;margin-bottom:10px" placeholder="按用户 / 规则集 / 项目筛选" />
+                 <div id="rs-admin-list"></div>\`
+              : "");
 
         // Community entries are indexed too: everyone can open their read-only
         // detail, and an admin's 编辑 button reuses the same editor.
         const byId = {};
-        [...mine, ...pub].forEach((r) => (byId[r.id] = r));
-        document.querySelectorAll('#rulesets [data-view-rs]').forEach((b) =>
-          (b.onclick = () => openRulesetView(byId[b.getAttribute("data-view-rs")])));
-        document.querySelectorAll('#rulesets [data-edit-rs]').forEach((b) =>
-          (b.onclick = () => openRulesetModal(byId[b.getAttribute("data-edit-rs")])));
+        [...mine, ...pub, ...all].forEach((r) => (byId[r.id] = r));
+        bindRulesetActions(document.querySelector("#rulesets"), byId);
         document.querySelectorAll('#rulesets [data-del-rs]').forEach((b) =>
           (b.onclick = async () => {
             if (!confirm("确定删除该规则集?")) return;
@@ -1274,6 +1352,13 @@ const html = `<!doctype html>
         wrapTables(document.querySelector("#rulesets"));
         addCopyButtons(document.querySelector("#rulesets"));
         bindCopyButtons(document.querySelector("#rulesets"));
+        if (all.length) {
+          const filter = document.getElementById("rs-admin-filter");
+          filter.value = rulesOwnerSeed; // set by a jump from the usage table
+          rulesOwnerSeed = "";
+          filter.oninput = () => renderAdminRulesets(all, filter.value, byId);
+          renderAdminRulesets(all, filter.value, byId);
+        }
       }
 
       // --- Token usage (per configured task; day/week/month) ---
@@ -1327,7 +1412,13 @@ const html = `<!doctype html>
             <td class="muted">\${r.timedRuns ? Math.round(Number(r.waitRatio || 0) * 100) + "%" : "—"}</td>
             <td class="muted nowrap">\${fmt(r.scopeWorking)} / \${fmt(r.scopeBranch)} / \${fmt(r.scopeWhole)}</td>
             <td class="muted nowrap">\${fmt(r.projects)} 项目 · \${fmt(r.activeDays)} 天</td>
-            <td class="muted">\${r.rulesOwned ? \`\${fmt(r.rulesHit)}/\${fmt(r.rulesOwned)}\` : "—"}</td>
+            <td class="muted">\${!r.rulesOwned
+              ? "—"
+              : admin
+                // Admins can go from the number to the rules behind it: the cell
+                // jumps to 规则集 filtered to this person.
+                ? \`<a href="#rulesets" data-rules-of="\${esc(who(r))}" title="查看 \${esc(who(r))} 名下的全部规则">\${fmt(r.rulesHit)}/\${fmt(r.rulesOwned)}</a>\`
+                : \`\${fmt(r.rulesHit)}/\${fmt(r.rulesOwned)}\`}</td>
             <td class="muted nowrap">\${esc(String(r.lastAt || "").slice(0, 16).replace("T", " "))}</td>
           </tr>\`).join("");
           const count = skill.scope === "all" ? \` <span class="muted">\${list.length} 位用户 · \${period}</span>\` : \` <span class="muted">\${period}</span>\`;
@@ -1335,7 +1426,7 @@ const html = `<!doctype html>
             <p class="muted">
               <b>一次过审</b>:该改动<b>第一次</b>评审就没有 major/critical(与门禁的拦截线一致)。按<b>改动</b>而非运行计数 —— 改完再审会产生额外运行,按运行算会把同一次失败重复计入。<br/>
               <b>净耗时</b>已扣除等待用户输入的时间,取<b>中位数 / P90</b>而非均值(一次超长评审就能把均值带偏)。<b>等待占比</b>是等人时间占墙钟的比例。<br/>
-              <b>评审时机</b>=工作区/分支/全项目的次数:工作区占比高说明边写边审,只有分支说明等到提 PR 才审、问题发现得晚。<b>规则贡献</b>=你沉淀的规则中已命中/生效总数。<br/>
+              <b>评审时机</b>=工作区/分支/全项目的次数:工作区占比高说明边写边审,只有分支说明等到提 PR 才审、问题发现得晚。<b>规则贡献</b>=你沉淀的规则中已命中/生效总数\${admin ? "(点数字可看该用户名下的全部规则)" : ""}。<br/>
               耗时与问题数只有结合<b>改动规模</b>才可比,均值仅统计上报了对应字段的运行(旧版 skill 不上报)。
             </p>
             <table><thead><tr><th>用户</th><th>一次过审</th><th>运行</th><th>问题</th><th class="nowrap">致命/严重/次要/提示</th><th>修复采纳</th><th class="nowrap">净耗时 中位/P90</th><th>等待占比</th><th class="nowrap">评审时机</th><th>覆盖</th><th>规则贡献</th><th>最近</th></tr></thead><tbody>\${trs}</tbody></table>\`;
@@ -1427,6 +1518,10 @@ const html = `<!doctype html>
           + projectSection()
           + runsSection();
         wrapTables(document.querySelector("#usage"));
+        // 规则贡献 → that person's rulesets. The hash change switches the view;
+        // this only leaves the name behind for renderRulesets to filter by.
+        document.querySelectorAll("#usage [data-rules-of]").forEach((a) =>
+          (a.onclick = () => { rulesOwnerSeed = a.getAttribute("data-rules-of"); }));
       }
 
       // --- Integrations: API & MCP docs ---

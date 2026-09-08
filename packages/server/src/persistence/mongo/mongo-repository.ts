@@ -806,6 +806,14 @@ export class MongoRepository implements Repository {
     return docs.map(toRuleset);
   }
 
+  async listAllRulesets(): Promise<ReviewRuleset[]> {
+    const docs = await this.col(COLLECTIONS.rulesets).find(
+      {},
+      { sort: { field: "updatedAt", dir: -1 } },
+    );
+    return docs.map(toRuleset);
+  }
+
   async updateRuleset(
     id: string,
     ownerId: string,

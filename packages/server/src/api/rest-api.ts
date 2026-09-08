@@ -886,6 +886,20 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/rulesets$/,
     handler: async ({ principal, query }, repo) => {
       const p = requirePrincipal(principal);
+      if (query.get("scope") === "all") {
+        // ADMIN overview: every person's rulesets, PRIVATE ones included, so an
+        // admin can see which rules each user has grown. Gated in the handler
+        // rather than in `requiredRole` — the path is shared with the
+        // self-service listing above, which any authenticated user may call.
+        requireAdmin(principal);
+        const names = await displayNames(repo);
+        return ok(
+          (await repo.listAllRulesets()).map((r) => ({
+            ...r,
+            ownerName: names.get(r.ownerId) || r.ownerHandle || r.ownerEmail || "",
+          })),
+        );
+      }
       if (query.get("scope") === "public") {
         // Carry the owner's display name so the UI can show "让 <名字> 帮我
         // review" — the handle may be an opaque 64-char subject nobody can type.

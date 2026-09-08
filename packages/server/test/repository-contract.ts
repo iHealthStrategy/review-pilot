@@ -510,6 +510,11 @@ export function runRepositoryContract(
 
     assert.equal((await repo.listRulesetsByOwner("u1")).length, 2);
     assert.equal((await repo.listPublicRulesets()).length, 2); // Strict + Other
+    // The admin overview spans every owner and includes private rulesets.
+    assert.deepEqual(
+      (await repo.listAllRulesets()).map((r) => r.name).sort(),
+      ["Loose", "Other", "Strict"],
+    );
     assert.equal((await repo.getRuleset(a.id))?.name, "Strict");
     assert.equal((await repo.getRuleset(a.id))?.ownerHandle, "u1");
     assert.equal((await repo.getRuleset(a.id))?.project, "github.com/u1/strict");
