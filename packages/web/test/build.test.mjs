@@ -70,6 +70,29 @@ test("web build emits a static index.html artifact", async () => {
   assert.match(html, /project-rules\/demote/);
 });
 
+test("layout: one line per cell, and nothing but a scroll container scrolls sideways", async () => {
+  const html = await readFile(resolve(root, "dist", "index.html"), "utf8");
+  // Cells never wrap; long values clip with the full text in a tooltip, and an
+  // over-wide table scrolls inside .table-wrap.
+  assert.match(html, /th, td \{ white-space: nowrap; \}/);
+  assert.match(html, /td\.clip \{[^}]*text-overflow: ellipsis/);
+  assert.match(html, /\.table-wrap > table \{ width: max-content; min-width: 100%; \}/);
+  // Action buttons: one inline-block group per cell, so the column is sized to
+  // the buttons and rows align.
+  assert.match(html, /\.btn-row \{ display: inline-block; white-space: nowrap; \}/);
+  assert.match(html, /<td class="actions"><span class="btn-row">/);
+  // min-width:0 on every flex/grid ancestor of wide content — without it the
+  // PAGE scrolls sideways instead of the container.
+  assert.match(html, /main \{[^}]*min-width: 0/);
+  assert.match(html, /\.inst-grid \{ display: grid; grid-template-columns: minmax\(0, 1fr\)/);
+  // Install commands: one line with the token abbreviated for display, while
+  // the copy button carries the real command.
+  assert.match(html, /function elideSecret/);
+  assert.match(html, /<pre data-copy="/);
+  assert.match(html, /pre\.dataset\.copy \|\| pre\.innerText/);
+  assert.match(html, /pre code \{[^}]*word-break: normal/);
+});
+
 test("the embedded app script is syntactically valid JS", async () => {
   const dist = resolve(root, "dist");
   await run(process.execPath, [resolve(root, "scripts/build.mjs")]);

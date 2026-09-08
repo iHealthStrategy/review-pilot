@@ -101,7 +101,10 @@ const html = `<!doctype html>
       nav a:hover { background: var(--surface-2); color: var(--text); }
       nav a:active { transform: translateY(1px); }
       nav a.active { color: #fff; background: linear-gradient(90deg, var(--accent-soft), rgba(76,139,245,.04)); box-shadow: inset 2px 0 0 var(--accent); }
-      main { padding: 26px 30px; flex: 1; max-width: 1160px; width: 100%; }
+      /* min-width:0 is load-bearing: a flex item defaults to min-width:auto, so a
+         table wider than the viewport would stretch <main> and scroll the whole
+         page sideways instead of scrolling inside its own .table-wrap. */
+      main { padding: 26px 30px; flex: 1; min-width: 0; max-width: 1160px; width: 100%; }
 
       /* ── Views / sections / headings ───────────────────────────── */
       .view { display: none; animation: fade .22s ease; }
@@ -117,15 +120,46 @@ const html = `<!doctype html>
 
       /* ── Tables ────────────────────────────────────────────────── */
       table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; box-shadow: var(--shadow); }
-      thead th { background: var(--surface-2); }
+      /* Header tint on the ROW, not the cell: the last column's header cell is
+         laid out narrower than the column when a row's action buttons decide the
+         width, which left a gap of untinted header beside it. A row background
+         always spans the full width. */
+      thead tr { background: var(--surface-2); }
       th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-dim); font-weight: 600; border-bottom: 1px solid var(--border); }
       td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: middle; }
       tbody tr:last-child td { border-bottom: none; }
       tbody tr { transition: background .12s; }
       tbody tr:hover { background: var(--surface-2); }
       tr.clickable { cursor: pointer; }
+      /* ONE LINE PER CELL. Wrapping turned every list into tall ragged rows and
+         split button groups across two lines. Long values are clipped with the
+         full text in a title tooltip; a table too wide for the viewport scrolls
+         inside its own .table-wrap rather than reflowing. */
+      th, td { white-space: nowrap; }
+      /* Long text (names, titles, paths): clip with an ellipsis, full value in
+         the tooltip. Needs an explicit max-width — a table cell ignores
+         text-overflow without one. */
+      td.clip { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+      td.clip > code { max-width: 100%; overflow: hidden; text-overflow: ellipsis; display: inline-block; vertical-align: bottom; }
+      /* The rare cell whose value is genuinely multi-line (a finding's detail
+         and suggestion) opts back into wrapping. */
+      td.wrap { white-space: normal; max-width: 560px; }
+      /* Action cells: the button group stays on one line, flush right, aligned
+         across rows however many buttons a row has. The buttons are wrapped in
+         one inline-block box on purpose — loose inline buttons did not
+         contribute their width to the column, so the column was sized to the
+         header text and the buttons overflowed it. */
+      td.actions, th.actions { text-align: right; }
+      td.actions { white-space: nowrap; }
+      .btn-row { display: inline-block; white-space: nowrap; }
       /* Wide tables scroll inside their own container so a narrow viewport never pushes the whole page sideways. */
       .table-wrap { overflow-x: auto; }
+      /* width:max-content, not width:100%: the global rule pins a table to its
+         container, so nowrap content had nowhere to go and OVERFLOWED its column
+         — a header cell and the buttons under it ended up 200px out of line.
+         max-content lets the table grow to fit and the wrapper scroll, while
+         min-width keeps a narrow table full-width. */
+      .table-wrap > table { width: max-content; min-width: 100%; }
 
       /* ── Badges: status / role / severity ──────────────────────── */
       .status { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; line-height: 1.4; border: 1px solid transparent; }
@@ -170,7 +204,10 @@ const html = `<!doctype html>
       .sev-minor { color: var(--yellow); } .sev-info { color: var(--text-dim); }
       pre { background: #0c1019; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px 14px; overflow: auto; font-size: 12px; line-height: 1.55; font-family: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace; }
       code { word-break: break-all; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: .92em; background: var(--surface-3); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
-      pre code { background: none; border: none; padding: 0; }
+      /* A shell command is one line. break-all (fine for inline code) turned an
+         80-char token into a six-line block; keep it on one line and let the
+         <pre> scroll. */
+      pre code { background: none; border: none; padding: 0; word-break: normal; white-space: pre; }
       #detail { margin-top: 16px; }
       .muted { color: var(--text-dim); font-size: 12.5px; }
       .token { display: flex; gap: 12px; align-items: center; }
@@ -229,7 +266,7 @@ const html = `<!doctype html>
       .rs-card button { padding: 5px 12px; font-size: 12px; }
       .rs-copy { flex: 0 0 auto; }
       .rs-copy.copied { color: var(--green); border-color: rgba(110,231,135,.4); }
-      .rs-foot { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 11px; }
+      .rs-foot { display: flex; flex-wrap: nowrap; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--border); padding-top: 11px; overflow-x: auto; }
 
       /* Editing someone else's ruleset as an admin — say so up front */
       .rs-admin-note { margin: 0 0 15px; padding: 9px 12px; border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.55; color: var(--amber); background: var(--amber-bg); border: 1px solid rgba(231,176,110,.35); }
@@ -261,13 +298,18 @@ const html = `<!doctype html>
          All three are shown at once — the command differs per host (different
          skills directory, different MCP registration), so a user should copy
          the one matching the agent they actually run. */
-      .inst-grid { display: grid; gap: 12px; margin: 8px 0 4px; }
+      /* minmax(0,1fr) + min-width:0, for the same reason <main> needs it: a grid
+         item defaults to min-width:auto, so a one-line command wider than the
+         column stretched the grid — and with it the page — instead of scrolling
+         inside its own <pre>. */
+      .inst-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin: 8px 0 4px; }
+      .inst, .inst > .codeblock, .codeblock { min-width: 0; }
       .inst > label { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
       .inst > label .inst-dir { font-weight: 400; font-size: 11px; color: var(--muted); font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
       .inst pre { margin: 0; }
       /* Compact per-host copy buttons, for table cells where a full command block
          would blow out the column width. */
-      .inst-copy { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+      .inst-copy { display: inline-flex; flex-wrap: nowrap; gap: 6px; }
       .inst-copy button { padding: 3px 10px; font-size: 11.5px; }
 
       /* ── Review stats (admin) ──────────────────────────────────────
@@ -288,6 +330,9 @@ const html = `<!doctype html>
         background: var(--surface-2); cursor: pointer; font-weight: 400; }
       .promote-row:hover { border-color: var(--border-strong); }
       .promote-row input { margin-top: 3px; width: auto; }
+      /* Rule text can be long and unbroken (a path, a URL): wrap it rather than
+         letting it stretch the dialog. */
+      .promote-row > span { min-width: 0; overflow-wrap: anywhere; }
       /* A whole collapsible section, so a long drill-down can't bury what follows. */
       .stats-group > summary { cursor: pointer; list-style-position: outside; }
       .stats-group > summary::marker { color: var(--muted); }
@@ -556,7 +601,9 @@ const html = `<!doctype html>
           const btn = document.createElement("button");
           btn.type = "button"; btn.className = "copy"; btn.textContent = "复制";
           btn.onclick = async () => {
-            const text = pre.innerText;
+            // data-copy wins: a command block displays an abbreviated token
+            // but must copy the real one.
+            const text = pre.dataset.copy || pre.innerText;
             try { await navigator.clipboard.writeText(text); }
             catch {
               const r = document.createRange(); r.selectNodeContents(pre);
@@ -723,7 +770,7 @@ const html = `<!doctype html>
         const rows = jobs.map((j) => {
           const pr = j.pullRequest || {};
           const findings = (j.findings || []).length;
-          return \`<tr class="clickable" data-job="\${esc(j.id)}"><td>#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} 个问题</td></tr>\`;
+          return \`<tr class="clickable" data-job="\${esc(j.id)}"><td class="clip" title="#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}">#\${esc(pr.number ?? "?")} \${esc(pr.title ?? "")}</td><td>\${esc(j.engine)}</td><td><span class="status \${esc(j.status)}">\${esc(j.status)}</span></td><td><div class="bar"><i style="width:\${Number(j.progress)||0}%"></i></div></td><td>\${findings} 个问题</td></tr>\`;
         }).join("");
         document.querySelector("#jobs").innerHTML =
           jobs.length
@@ -794,20 +841,20 @@ const html = `<!doctype html>
               <button class="secondary" data-toggle="\${esc(s.id)}" data-enabled="\${s.enabled}">\${s.enabled ? "停用" : "启用"}</button>
               <button class="secondary" data-del="\${esc(s.id)}">删除</button>\` : "";
           return \`<tr>
-            <td>\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(已停用)</span>'}</td>
-            <td><code>\${esc(s.repoFullName)}</code></td>
-            <td>\${esc(branches)}</td>
+            <td class="clip" title="\${esc(s.name)}">\${esc(s.name)}\${s.enabled ? "" : ' <span class="muted">(已停用)</span>'}</td>
+            <td class="clip"><code title="\${esc(s.repoFullName)}">\${esc(s.repoFullName)}</code></td>
+            <td class="clip" title="\${esc(branches)}">\${esc(branches)}</td>
             <td>\${esc(s.timeOfDay)} \${esc(s.timezone)}</td>
             <td>\${esc(s.delivery && s.delivery.type || "")}</td>
             <td class="muted">\${status}</td>
-            <td>
-              <button class="secondary" data-view-id="\${esc(s.id)}">查看</button>\${writeActions}
+            <td class="actions">
+              <span class="btn-row"><button class="secondary" data-view-id="\${esc(s.id)}">查看</button>\${writeActions}</span>
             </td>
           </tr>\`;
         }).join("");
         document.querySelector("#schedules").innerHTML =
           schedules.length
-            ? \`<table><thead><tr><th>名称</th><th>仓库</th><th>分支</th><th>时间</th><th>推送</th><th>上次结果</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+            ? \`<table><thead><tr><th>名称</th><th>仓库</th><th>分支</th><th>时间</th><th>推送</th><th>上次结果</th><th class="actions">操作</th></tr></thead><tbody>\${rows}</tbody></table>\`
             : \`<p class="muted">暂无定时扫描。\${canWrite() ? "点上方 <b>+ 新建定时扫描</b>。" : ""}至少配置一个后,每日调度才会运行。</p>\`;
         wrapTables(document.querySelector("#schedules"));
         document.querySelectorAll('#schedules [data-run]').forEach((b) => {
@@ -915,6 +962,15 @@ const html = `<!doctype html>
       ];
       // The one-line install command for one host — ALWAYS carries a token when
       // available (admin without ADMIN_TOKEN configured → an honest placeholder).
+      // An install command carries a full bearer token — 80+ characters that blow
+      // the block past the viewport and read as noise. DISPLAY it abbreviated;
+      // the copy button and the tooltip still carry the real command.
+      function elideSecret(cmd) {
+        return String(cmd).replace(
+          /Bearer (\S{28,})/g,
+          (_m, tok) => "Bearer " + tok.slice(0, 12) + "…" + tok.slice(-6),
+        );
+      }
       function skillInstallCmd(skill, host) {
         const url = location.origin + "/skill/" + (host || "claude") + "/install.sh";
         if (skill && skill.token) return 'curl -fsSL -H "Authorization: Bearer ' + skill.token + '" ' + url + ' | sh';
@@ -924,9 +980,11 @@ const html = `<!doctype html>
       // One labelled command block per host. cmdFor(hostId) builds the command,
       // so the same layout serves the orchestrator skill and a single ruleset.
       function installBlocks(cmdFor) {
-        return '<div class="inst-grid">' + SKILL_HOSTS.map((h) =>
-          \`<div class="inst"><label>\${esc(h.label)}<span class="inst-dir">\${esc(h.dir)}</span></label><pre>\${esc(cmdFor(h.id))}</pre></div>\`
-        ).join("") + "</div>";
+        return '<div class="inst-grid">' + SKILL_HOSTS.map((h) => {
+          const cmd = cmdFor(h.id);
+          // data-copy carries the REAL command; the block shows the short form.
+          return \`<div class="inst"><label>\${esc(h.label)}<span class="inst-dir">\${esc(h.dir)}</span></label><pre data-copy="\${esc(cmd)}" title="\${esc(cmd)}">\${esc(elideSecret(cmd))}</pre></div>\`;
+        }).join("") + "</div>";
       }
       // The same three commands as compact copy-only buttons (for table cells).
       function installCopyButtons(cmdFor) {
@@ -961,13 +1019,13 @@ const html = `<!doctype html>
         }
         const tokens = await load("/api/tokens", []);
         const rows = tokens.map((t) =>
-          \`<tr><td>\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "从未使用")}</td><td><button class="secondary" data-revoke="\${esc(t.id)}">吊销</button></td></tr>\`
+          \`<tr><td class="clip" title="\${esc(t.name)}">\${esc(t.name)}</td><td><code>\${esc(t.prefix)}…</code></td><td class="muted">\${esc(t.lastUsedAt || "从未使用")}</td><td class="actions"><span class="btn-row"><button class="secondary" data-revoke="\${esc(t.id)}">吊销</button></span></td></tr>\`
         ).join("");
         document.querySelector("#tokens").innerHTML =
           card
           + \`<h3>② 个人访问令牌(可选,用于 API / MCP)</h3>\`
           + (tokens.length
-              ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th></th></tr></thead><tbody>\${rows}</tbody></table>\`
+              ? \`<table><thead><tr><th>名称</th><th>前缀</th><th>上次使用</th><th class="actions">操作</th></tr></thead><tbody>\${rows}</tbody></table>\`
               : \`<p class="muted">这些是<b>可吊销</b>的额外令牌,供脚本 / CI / MCP 调用 API。skill 安装用上面那条即可,不必在此创建。</p>\`);
         document.querySelectorAll('#tokens [data-revoke]').forEach((b) => {
           b.onclick = async () => {
@@ -1232,12 +1290,12 @@ const html = `<!doctype html>
           const rows = list.map((r) => {
             const off = (r.rules || []).length - live(r).length;
             return \`<tr>
-              <td>\${esc(r.name)}</td>
-              <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
+              <td class="clip" title="\${esc(r.name)}">\${esc(r.name)}</td>
+              <td class="clip muted" title="\${esc(r.projectLabel || r.project || "所有项目")}">\${esc(r.projectLabel || r.project || "所有项目")}</td>
               <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
-              <td class="muted nowrap">生效 \${live(r).length} · 命中 \${hitCount(live(r))}\${off ? \` · <span class="badge-pending">\${off} 条已停用</span>\` : ""}</td>
-              <td class="muted nowrap">\${esc(String(r.updatedAt || "").slice(0, 16).replace("T", " "))}</td>
-              <td class="nowrap"><button class="secondary" data-view-rs="\${esc(r.id)}">查看规则</button> <button class="secondary" data-promote-rs="\${esc(r.id)}">提升规则</button> <button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button></td>
+              <td class="muted">生效 \${live(r).length} · 命中 \${hitCount(live(r))}\${off ? \` · <span class="badge-pending">\${off} 条已停用</span>\` : ""}</td>
+              <td class="muted">\${esc(String(r.updatedAt || "").slice(0, 16).replace("T", " "))}</td>
+              <td class="actions"><span class="btn-row"><button class="secondary" data-view-rs="\${esc(r.id)}">查看规则</button> <button class="secondary" data-promote-rs="\${esc(r.id)}">提升规则</button> <button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button></span></td>
             </tr>\`;
           }).join("");
           // Expanded while filtering (or when one person is all there is), so a
@@ -1246,7 +1304,7 @@ const html = `<!doctype html>
           return \`<details class="stats-proj"\${open}>
             <summary><span class="stats-proj-name">\${esc(ownerOf(list[0]))}</span>
               <span class="muted">\${list.length} 个规则集 · 生效 \${rules.length} 条 · 已命中 \${hitCount(rules)} 条</span></summary>
-            <table><thead><tr><th>规则集</th><th>项目</th><th>可见性</th><th>规则</th><th>最近更新</th><th></th></tr></thead><tbody>\${rows}</tbody></table>
+            <table><thead><tr><th>规则集</th><th>项目</th><th>可见性</th><th>规则</th><th>最近更新</th><th class="actions">操作</th></tr></thead><tbody>\${rows}</tbody></table>
           </details>\`;
         }).join("");
         bindRulesetActions(box, byId);
@@ -1277,19 +1335,19 @@ const html = `<!doctype html>
             const from = r.promotedFrom || null;
             const hits = Number(r.hits) || 0;
             return \`<tr\${off ? ' class="row-has-pending"' : ""}>
-              <td>\${off ? '<span class="badge-pending">已停用</span> ' : ""}\${esc(r.title || "Rule")}</td>
-              <td class="muted">\${esc((r.instruction || "").slice(0, 90))}\${(r.instruction || "").length > 90 ? "…" : ""}</td>
-              <td class="muted nowrap">\${from ? esc(from.ownerName || from.ownerId) : "—"}</td>
-              <td class="muted nowrap">\${hits ? "命中 " + hits : "未命中"}</td>
+              <td class="clip" title="\${esc(r.title || "Rule")}">\${off ? '<span class="badge-pending">已停用</span> ' : ""}\${esc(r.title || "Rule")}</td>
+              <td class="clip muted" title="\${esc(r.instruction || "")}">\${esc(r.instruction || "")}</td>
+              <td class="muted">\${from ? esc(from.ownerName || from.ownerId) : "—"}</td>
+              <td class="muted">\${hits ? "命中 " + hits : "未命中"}</td>
               \${isAdmin()
-                ? \`<td class="nowrap"><button class="secondary" data-demote-project="\${esc(rs.project)}" data-demote-title="\${esc(r.title || "")}">移出</button></td>\`
+                ? \`<td class="actions"><span class="btn-row"><button class="secondary" data-demote-project="\${esc(rs.project)}" data-demote-title="\${esc(r.title || "")}">移出</button></span></td>\`
                 : ""}
             </tr>\`;
           }).join("");
           return \`<details class="stats-proj" open>
             <summary><span class="stats-proj-name">\${esc(rs.projectLabel || rs.project || "所有项目")}</span>
               <span class="muted">必选 \${live.length} 条\${rules.length !== live.length ? \` · \${rules.length - live.length} 条已停用\` : ""}</span></summary>
-            <table><thead><tr><th>规则</th><th>说明</th><th>原作者</th><th>命中</th>\${isAdmin() ? "<th></th>" : ""}</tr></thead><tbody>\${rows}</tbody></table>
+            <table><thead><tr><th>规则</th><th>说明</th><th>原作者</th><th>命中</th>\${isAdmin() ? '<th class="actions">操作</th>' : ""}</tr></thead><tbody>\${rows}</tbody></table>
           </details>\`;
         }).join("");
         return intro + cards;
@@ -1376,12 +1434,12 @@ const html = `<!doctype html>
             ? \` <span class="muted" title="每次评审最多加载 \${RULE_LOAD_LIMIT} 条,且这是所有生效规则集共享的总预算(命中多的和新规则优先)">· 每次最多加载 \${RULE_LOAD_LIMIT}</span>\`
             : "";
           return \`<tr\${off ? ' class="row-has-pending"' : ""}>
-          <td>\${esc(r.name)}</td>
-          <td class="muted">\${esc(r.projectLabel || r.project || "所有项目")}</td>
+          <td class="clip" title="\${esc(r.name)}">\${esc(r.name)}</td>
+          <td class="clip muted" title="\${esc(r.projectLabel || r.project || "所有项目")}">\${esc(r.projectLabel || r.project || "所有项目")}</td>
           <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
           <td class="muted">\${ruleCount(r)} 条规则\${offTag}\${capTag}</td>
           <td>\${installCopyButtons((h) => cmd(r, h))}</td>
-          <td><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></td>
+          <td class="actions"><span class="btn-row"><button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button> <button class="secondary" data-del-rs="\${esc(r.id)}">删除</button></span></td>
         </tr>\`;
         }).join("");
         // Handles are opaque 64-char ids; shorten for display and keep the full
@@ -1409,9 +1467,9 @@ const html = `<!doctype html>
               : '<span class="muted">—</span>'}
           </div>
           <footer class="rs-foot">
-            <button class="secondary" data-view-rs="\${esc(r.id)}">查看详情</button>
+            <button class="secondary" data-view-rs="\${esc(r.id)}">详情</button>
             \${isAdmin() ? \`<button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button>\` : ""}
-            <button class="secondary" data-fork-rs="\${esc(r.id)}">Fork 到我的</button>
+            <button class="secondary" data-fork-rs="\${esc(r.id)}">Fork</button>
           </footer>
         </article>\`;
         }).join("");
@@ -1435,7 +1493,7 @@ const html = `<!doctype html>
           + \`<p class="muted" style="margin-top:26px">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。skill 自动沉淀的规则<strong>默认采纳生效</strong>,可在「编辑」里随时<strong>停用</strong>某条(停用的既不应用、也不对外公开)。</p>
              <h3>我的规则集</h3>\`
           + (mine.length
-              ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令(点按钮复制)</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
+              ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令(点按钮复制)</th><th class="actions">操作</th></tr></thead><tbody>\${mineRows}</tbody></table>\`
               : \`<p class="muted">还没有规则集,点上方「+ 新建规则集」创建。</p>\`)
           + \`<h3>社区规则集</h3>\`
           + (pub.length
@@ -1536,7 +1594,7 @@ const html = `<!doctype html>
             return \`<h3>\${title}</h3><p class="muted">\${period}内暂无 skill 评审记录。用本地评审 skill 跑一次评审后会自动上报:次数、问题明细与耗时(不含源码,也没有 token 计数)。</p>\`;
           }
           const trs = list.map((r) => \`<tr>
-            <td>\${esc(who(r))}</td>
+            <td class="clip" title="\${esc(who(r))}">\${esc(who(r))}</td>
             <td>\${rateCell(r.cleanFirstPass, r.changesReviewed, "改动")}</td>
             <td><b>\${fmt(r.runs)}</b>\${r.changesReviewed && r.changesReviewed !== r.runs ? \` <span class="muted">/ \${fmt(r.changesReviewed)} 改动</span>\` : ""}</td>
             <td>\${fmt(r.findings)} <span class="muted">/ 次 \${(Number(r.findingsPerRun) || 0).toFixed(1)}</span></td>
@@ -1577,9 +1635,9 @@ const html = `<!doctype html>
             const probs = p.problems || [];
             const rs = probs.map((pr) => \`<tr>
               <td>\${sevBadge(pr.severity)}</td>
-              <td>\${esc(pr.title)}</td>
+              <td class="clip" title="\${esc(pr.title)}">\${esc(pr.title)}</td>
               <td><b>\${fmt(pr.count)}</b></td>
-              <td class="muted">\${(pr.files || []).map((f) => \`<code>\${esc(f)}</code>\`).join(" ") || "—"}</td>
+              <td class="clip muted" title="\${esc((pr.files || []).join(" "))}">\${(pr.files || []).map((f) => \`<code>\${esc(f)}</code>\`).join(" ") || "—"}</td>
             </tr>\`).join("");
             const body = probs.length
               ? \`<table><thead><tr><th>严重度</th><th>问题</th><th>出现次数</th><th>涉及文件</th></tr></thead><tbody>\${rs}</tbody></table>\`
@@ -1609,8 +1667,8 @@ const html = `<!doctype html>
             const fs = r.findings || [];
             const rs = fs.map((f) => \`<tr>
               <td>\${sevBadge(f.severity)}</td>
-              <td><code>\${esc(f.filePath || "—")}\${f.line ? ":" + esc(f.line) : ""}</code></td>
-              <td>\${esc(f.title)}\${f.detail ? \`<br/><span class="muted">\${esc(f.detail)}</span>\` : ""}\${f.suggestion ? \`<br/>💡 <span class="muted">\${esc(f.suggestion)}</span>\` : ""}</td>
+              <td class="clip"><code title="\${esc(f.filePath || "—")}">\${esc(f.filePath || "—")}\${f.line ? ":" + esc(f.line) : ""}</code></td>
+              <td class="wrap">\${esc(f.title)}\${f.detail ? \`<br/><span class="muted">\${esc(f.detail)}</span>\` : ""}\${f.suggestion ? \`<br/>💡 <span class="muted">\${esc(f.suggestion)}</span>\` : ""}</td>
             </tr>\`).join("");
             const body = fs.length
               ? \`<table><thead><tr><th>严重度</th><th>位置</th><th>问题</th></tr></thead><tbody>\${rs}</tbody></table>\`
@@ -1737,10 +1795,10 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         const ovs = data.overrides || [];
         const ovRows = ovs.map((o) => \`
           <tr data-proj="\${esc(o.project)}">
-            <td class="muted">\${esc(o.project)}</td>
+            <td class="clip muted" title="\${esc(o.project)}">\${esc(o.project)}</td>
             <td><select data-ok="enforce">\${opt(ENF, o.enforce)}</select></td>
             <td><select data-ok="blockSeverity">\${opt(SEV, o.blockSeverity)}</select></td>
-            <td><button class="secondary" data-save-ov>保存</button> <button class="secondary" data-del-ov>删除</button></td>
+            <td class="actions"><span class="btn-row"><button class="secondary" data-save-ov>保存</button> <button class="secondary" data-del-ov>删除</button></span></td>
           </tr>\`).join("");
         host.innerHTML =
           \`<p class="muted">门禁强度<strong>按项目独立</strong>配置。<strong>全局默认</strong>适用于未单独设置的项目;<strong>项目覆盖</strong>只影响该项目。<code>enforce</code>:off/warn 不拦截,block 时在 <code>blockSeverity</code> 及以上严重度拦截合并。</p>
@@ -1754,7 +1812,7 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
            </div>
            <h3>项目覆盖</h3>
            \${ovs.length
-             ? \`<table><thead><tr><th>项目</th><th>enforce</th><th>blockSeverity</th><th></th></tr></thead><tbody>\${ovRows}</tbody></table>\`
+             ? \`<table><thead><tr><th>项目</th><th>enforce</th><th>blockSeverity</th><th class="actions">操作</th></tr></thead><tbody>\${ovRows}</tbody></table>\`
              : '<p class="muted">暂无项目覆盖 —— 所有项目都用全局默认。</p>'}
            <h3>新增项目覆盖</h3>
            <div class="rule-row">
@@ -1808,7 +1866,7 @@ curl \${o}/api/jobs      -H "Authorization: Bearer rpat_…"</pre>
         // Hide the synthetic placeholder email for accounts the IdP gave no email.
         const emailOf = (u) => (u.email && !u.email.endsWith("@users.noreply.local") ? u.email : "—");
         const rows = users.map((u) =>
-          \`<tr><td>\${esc(u.name || "—")}</td><td class="muted">\${esc(emailOf(u))}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
+          \`<tr><td class="clip" title="\${esc(u.name || "—")}">\${esc(u.name || "—")}</td><td class="clip muted" title="\${esc(emailOf(u))}">\${esc(emailOf(u))}</td>\${roleCell(u)}<td class="muted">\${esc(u.createdAt)}</td></tr>\`
         ).join("");
         const note = rolesManagedExt
           ? '<p class="muted">角色由身份提供方(authentik)按用户组统一管理,此处只读。请在 authentik 中调整用户所属的组。</p>'
