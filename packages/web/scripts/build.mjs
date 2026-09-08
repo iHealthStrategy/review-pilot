@@ -282,6 +282,12 @@ const html = `<!doctype html>
       .stats-sevs { margin-left: auto; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
       .stats-proj > table, .stats-proj > .table-wrap { border: none; border-radius: 0 0 var(--r) var(--r); box-shadow: none; }
       .stats-proj > p { margin: 0; padding: 11px 14px; }
+      /* Promote picker: a checkbox per rule, title above its instruction. */
+      .promote-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px;
+        border: 1px solid var(--border); border-radius: var(--r-sm); margin-bottom: 6px;
+        background: var(--surface-2); cursor: pointer; font-weight: 400; }
+      .promote-row:hover { border-color: var(--border-strong); }
+      .promote-row input { margin-top: 3px; width: auto; }
       /* A whole collapsible section, so a long drill-down can't bury what follows. */
       .stats-group > summary { cursor: pointer; list-style-position: outside; }
       .stats-group > summary::marker { color: var(--muted); }
@@ -460,7 +466,7 @@ const html = `<!doctype html>
           <div class="field">
             <label>按需规则(仅当改动命中选择器时加载)</label>
             <p class="muted" style="margin:.2rem 0 .4rem">选择器留空 = 始终生效。匹配在本地完成,代码不会上传。多个值用逗号分隔。</p>
-            <p class="muted" style="margin:.2rem 0 .4rem">规则多了不会拖慢评审:每次评审加载<b>排名靠前的 40 条</b>,这 40 条是<b>所有生效规则集共享</b>的总预算 —— 你自己的(含私有)和借用的他人公开规则<b>合在一个池子里同等排序</b>,不是各自 40 条。<b>新规则</b>与<b>命中多的</b>(真抓到过问题)优先,命中数由评审自动累计。长期不命中的会沉底但<b>不会被删除、也不会被永久跳过</b>:每天轮换一批进入试用名额,所以每条规则都有机会重新证明自己(存量老规则同理)。</p>
+            <p class="muted" style="margin:.2rem 0 .4rem">规则多了不会拖慢评审:每次评审加载<b>排名靠前的 40 条</b>,这是<b>三层共享</b>的总预算 —— <b>项目必选规则</b>、<b>你自己的</b>(含私有)、<b>同项目其他同事的</b>(以及你点名借用的他人公开规则)。每层各有<b>保底名额</b>(约 1/3),所以谁的规则都挤不掉另一层;层内按<b>命中数</b>排序,<b>新规则</b>与<b>命中多的</b>(真抓到过问题)优先,命中数由评审自动累计。长期不命中的会沉底但<b>不会被删除、也不会被永久跳过</b>:每天轮换一批进入试用名额,所以每条规则都有机会重新证明自己(存量老规则同理)。</p>
             <div id="rs-rules"></div>
             <button type="button" id="rs-add-rule" class="secondary">+ 添加规则</button>
           </div>
@@ -475,6 +481,27 @@ const html = `<!doctype html>
       <div class="modal" style="width:720px">
         <div class="modal-head"><h2 id="rs-view-title">规则集详情</h2><button class="close" data-close>×</button></div>
         <div id="rs-view-body"></div>
+      </div>
+    </div>
+
+    <!-- Promote personal rules into a project's mandatory ruleset (admins) -->
+    <div class="modal-overlay" id="promote-modal" data-modal>
+      <div class="modal" style="width:720px">
+        <div class="modal-head"><h2 id="promote-title">提升为项目必选规则</h2><button class="close" data-close>×</button></div>
+        <p class="muted" id="promote-note"></p>
+        <form id="promote-form">
+          <div class="field">
+            <label>目标项目</label>
+            <input name="project" placeholder="github.com/acme/app" required />
+          </div>
+          <div class="field">
+            <label>选择要提升的规则</label>
+            <p class="muted" style="margin:.2rem 0 .4rem">被提升的规则会<b>复制</b>一份进该项目的必选规则集:此后对该项目的<b>每个人</b>生效,且不再受原作者的编辑或停用影响。原作者会记录在这条规则上。已停用的规则不能提升。</p>
+            <div id="promote-rules"></div>
+          </div>
+          <button type="submit">提升所选规则</button>
+          <p class="muted result" id="promote-result"></p>
+        </form>
       </div>
     </div>
 
@@ -1099,8 +1126,9 @@ const html = `<!doctype html>
           ? rules.map((r) => {
               const off = r.pending || r.disabled;
               const hits = Number(r.hits) || 0;
+              const from = r.promotedFrom || null;
               return \`<div class="rule-view\${off ? " off" : ""}">
-                <h5>\${off ? '<span class="badge-pending">已停用</span>' : ""}\${esc(r.title || "Rule")} \${hits ? \`<span class="badge-hits">命中 \${hits}</span>\` : ""}</h5>
+                <h5>\${off ? '<span class="badge-pending">已停用</span>' : ""}\${esc(r.title || "Rule")} \${hits ? \`<span class="badge-hits">命中 \${hits}</span>\` : ""}\${from ? \` <span class="muted">原作者 \${esc(from.ownerName || from.ownerId)}</span>\` : ""}</h5>
                 <div class="rs-tags">\${selectors(r)}</div>
                 <p>\${esc(r.instruction || "")}</p>
               </div>\`;
@@ -1169,6 +1197,8 @@ const html = `<!doctype html>
           (b.onclick = () => openRulesetView(byId[b.getAttribute("data-view-rs")])));
         root.querySelectorAll("[data-edit-rs]").forEach((b) =>
           (b.onclick = () => openRulesetModal(byId[b.getAttribute("data-edit-rs")])));
+        root.querySelectorAll("[data-promote-rs]").forEach((b) =>
+          (b.onclick = () => openPromoteModal(byId[b.getAttribute("data-promote-rs")])));
       }
       function renderAdminRulesets(all, q, byId) {
         const box = document.getElementById("rs-admin-list");
@@ -1207,7 +1237,7 @@ const html = `<!doctype html>
               <td>\${r.visibility === "public" ? "公开" : "私有"}</td>
               <td class="muted nowrap">生效 \${live(r).length} · 命中 \${hitCount(live(r))}\${off ? \` · <span class="badge-pending">\${off} 条已停用</span>\` : ""}</td>
               <td class="muted nowrap">\${esc(String(r.updatedAt || "").slice(0, 16).replace("T", " "))}</td>
-              <td class="nowrap"><button class="secondary" data-view-rs="\${esc(r.id)}">查看规则</button> <button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button></td>
+              <td class="nowrap"><button class="secondary" data-view-rs="\${esc(r.id)}">查看规则</button> <button class="secondary" data-promote-rs="\${esc(r.id)}">提升规则</button> <button class="secondary" data-edit-rs="\${esc(r.id)}">编辑</button></td>
             </tr>\`;
           }).join("");
           // Expanded while filtering (or when one person is all there is), so a
@@ -1223,6 +1253,93 @@ const html = `<!doctype html>
         wrapTables(box);
       }
 
+      // --- Project-level mandatory rules ---
+      // Everyone is held to these, so everyone reads them the same way — one
+      // call, every project. Deriving the list from your own rulesets would hide
+      // them from exactly the person who has grown none yet.
+      async function loadProjectRules() {
+        return (await load("/api/project-rules", { rulesets: [] })).rulesets || [];
+      }
+      function projectRulesSection(rulesets) {
+        const intro =
+          \`<h3 style="margin-top:26px">项目必选规则 <span class="muted">\${rulesets.length} 个项目</span></h3>
+           <p class="muted">管理员从个人规则中<b>提升</b>上来的规则,对该项目的<b>每个人</b>生效 —— 不需要谁去安装或借用,评审时自动加载,并占用每次预算里约 <b>1/3</b> 的保底名额。每条规则保留<b>原作者</b>,提升后不再受原作者编辑或停用的影响。</p>\`;
+        if (!rulesets.length) {
+          return intro + \`<p class="muted">还没有项目必选规则。\${isAdmin()
+            ? "在下方「全部用户规则集」里点某个规则集的「提升规则」,把好用的个人规则变成全项目必选。"
+            : "由管理员从大家的个人规则中提升产生。"}</p>\`;
+        }
+        const cards = rulesets.map((rs) => {
+          const rules = rs.rules || [];
+          const live = rules.filter((r) => !r.pending && !r.disabled);
+          const rows = rules.map((r) => {
+            const off = r.pending || r.disabled;
+            const from = r.promotedFrom || null;
+            const hits = Number(r.hits) || 0;
+            return \`<tr\${off ? ' class="row-has-pending"' : ""}>
+              <td>\${off ? '<span class="badge-pending">已停用</span> ' : ""}\${esc(r.title || "Rule")}</td>
+              <td class="muted">\${esc((r.instruction || "").slice(0, 90))}\${(r.instruction || "").length > 90 ? "…" : ""}</td>
+              <td class="muted nowrap">\${from ? esc(from.ownerName || from.ownerId) : "—"}</td>
+              <td class="muted nowrap">\${hits ? "命中 " + hits : "未命中"}</td>
+              \${isAdmin()
+                ? \`<td class="nowrap"><button class="secondary" data-demote-project="\${esc(rs.project)}" data-demote-title="\${esc(r.title || "")}">移出</button></td>\`
+                : ""}
+            </tr>\`;
+          }).join("");
+          return \`<details class="stats-proj" open>
+            <summary><span class="stats-proj-name">\${esc(rs.projectLabel || rs.project || "所有项目")}</span>
+              <span class="muted">必选 \${live.length} 条\${rules.length !== live.length ? \` · \${rules.length - live.length} 条已停用\` : ""}</span></summary>
+            <table><thead><tr><th>规则</th><th>说明</th><th>原作者</th><th>命中</th>\${isAdmin() ? "<th></th>" : ""}</tr></thead><tbody>\${rows}</tbody></table>
+          </details>\`;
+        }).join("");
+        return intro + cards;
+      }
+      // Promote: pick which of a personal ruleset's live rules become mandatory.
+      function openPromoteModal(rs) {
+        if (!rs) return;
+        const box = document.getElementById("promote-rules");
+        const f = document.getElementById("promote-form");
+        document.getElementById("promote-result").textContent = "";
+        f.dataset.rulesetId = rs.id;
+        f.project.value = rs.project || "";
+        document.getElementById("promote-note").innerHTML =
+          \`来源规则集:<b>\${esc(rs.name)}</b> · 作者 \${esc(rs.ownerName || rs.ownerHandle || "—")}\` +
+          (rs.project ? "" : " · 该规则集适用所有项目,请填写要提升到哪个项目");
+        const live = (rs.rules || []).filter((r) => !r.pending && !r.disabled);
+        box.innerHTML = live.length
+          ? live.map((r, i) => \`<label class="promote-row">
+              <input type="checkbox" data-promote-title="\${esc(r.title || "")}"\${i === 0 ? " checked" : ""} />
+              <span><b>\${esc(r.title || "Rule")}</b>\${Number(r.hits) ? \` <span class="badge-hits">命中 \${Number(r.hits)}</span>\` : ""}
+                <br/><span class="muted">\${esc(r.instruction || "")}</span></span>
+            </label>\`).join("")
+          : '<p class="muted">该规则集没有生效中的规则可提升。</p>';
+        openModal("promote-modal");
+      }
+      document.getElementById("promote-form").onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const out = document.getElementById("promote-result");
+        const titles = [...document.querySelectorAll("#promote-rules [data-promote-title]")]
+          .filter((c) => c.checked)
+          .map((c) => c.getAttribute("data-promote-title"));
+        if (!titles.length) { out.textContent = "✗ 请至少勾选一条规则"; return; }
+        const btn = f.querySelector('button[type="submit"]');
+        btn.disabled = true; out.textContent = "";
+        try {
+          const res = await api("/api/project-rules/promote", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rulesetId: f.dataset.rulesetId, project: f.project.value, titles }),
+          });
+          closeModal("promote-modal");
+          // Say what was skipped: re-promoting an existing rule is a no-op, and
+          // silently reporting success would look like a duplicate was added.
+          if (res.skipped) alert(\`已提升 \${res.added} 条,\${res.skipped} 条已存在(未重复添加)。\`);
+          renderRulesets();
+        } catch (e) { out.textContent = "✗ " + e.message; }
+        finally { btn.disabled = false; }
+      };
+
       async function renderRulesets() {
         const o = location.origin;
         const skill = await getSkillToken(); // token baked into the install commands
@@ -1231,6 +1348,7 @@ const html = `<!doctype html>
         // Everyone's rulesets, private included — admin-only on the server (403
         // otherwise), so only ask when the caller actually is one.
         const all = isAdmin() ? await load("/api/rulesets?scope=all", []) : [];
+        const projectRulesets = await loadProjectRules();
         // What to tell colleagues to type. The display name is what people know
         // each other by; the handle is a fallback for accounts the IdP gave no
         // name. The server resolves either, so both work.
@@ -1313,7 +1431,8 @@ const html = `<!doctype html>
 
         document.querySelector("#rulesets").innerHTML =
           orchestrator
-          + \`<p class="muted">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。skill 自动沉淀的规则<strong>默认采纳生效</strong>,可在「编辑」里随时<strong>停用</strong>某条(停用的既不应用、也不对外公开)。</p>
+          + projectRulesSection(projectRulesets)
+          + \`<p class="muted" style="margin-top:26px">规则<strong>按项目</strong>独立管理。每个规则集含「通用规则(始终生效)」+「按需规则(命中改动文件的选择器时才加载)」。skill 自动沉淀的规则<strong>默认采纳生效</strong>,可在「编辑」里随时<strong>停用</strong>某条(停用的既不应用、也不对外公开)。</p>
              <h3>我的规则集</h3>\`
           + (mine.length
               ? \`<table><thead><tr><th>名称</th><th>项目</th><th>可见性</th><th>规则</th><th>单独安装命令(点按钮复制)</th><th></th></tr></thead><tbody>\${mineRows}</tbody></table>\`
@@ -1348,6 +1467,21 @@ const html = `<!doctype html>
           (b.onclick = async () => {
             try { await api("/api/rulesets/" + b.getAttribute("data-fork-rs") + "/fork", { method: "POST" }); renderRulesets(); }
             catch (e) { alert(e.message); }
+          }));
+        // Taking a rule back out is the one destructive action here, and it hits
+        // everyone on the project — so it confirms first.
+        document.querySelectorAll("#rulesets [data-demote-project]").forEach((b) =>
+          (b.onclick = async () => {
+            const title = b.getAttribute("data-demote-title");
+            if (!confirm(\`把「\${title}」移出该项目的必选规则?此后该项目的评审不再强制加载它。\`)) return;
+            try {
+              await api("/api/project-rules/demote", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ project: b.getAttribute("data-demote-project"), titles: [title] }),
+              });
+              renderRulesets();
+            } catch (e) { alert(e.message); }
           }));
         wrapTables(document.querySelector("#rulesets"));
         addCopyButtons(document.querySelector("#rulesets"));

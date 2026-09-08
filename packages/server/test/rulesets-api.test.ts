@@ -535,7 +535,7 @@ test("auto-grown candidates are stamped so the ranking can give them a trial slo
     assert.equal(rule.hits, undefined, "a brand-new rule has no hits yet");
   }));
 
-// --- GET /api/review-rules: own + borrowed, merged into ONE ranked pool -------
+// --- GET /api/review-rules: project + own + others, one LAYERED budget --------
 // The skill used to load only the unauthenticated public-discovery endpoint, so a
 // user's own auto-grown rules (private by default) never actually applied. This
 // endpoint authenticates so it can include them, and merges them with a named
@@ -598,8 +598,12 @@ test("review-rules: an absent reviewer must not borrow from the handle 'ruleset'
     // borrow the public rules of whoever happens to hold that handle.
     const me = await register(repo, "me@x.com");
     const trap = await register(repo, "ruleset@x.com");
+    // An "any project" ruleset: teammates' rules now join the pool by matching
+    // the project key, so a project-scoped trap would legitimately arrive that
+    // way and stop testing the name guard. This one can ONLY be borrowed by
+    // being named — which is exactly the path the guard protects.
     await mkSet(base, trap, {
-      name: "trap", visibility: "public", project: "github.com/acme/app",
+      name: "trap", visibility: "public",
       rules: [mkRule("should not leak in")],
     });
     const trapUser = (await repo.listUsers()).find((u) => u.email === "ruleset@x.com")!;
@@ -626,8 +630,12 @@ test("review-rules: merges own + a named reviewer's PUBLIC rules, never their pr
       name: "alice public", visibility: "public", project: "github.com/acme/app",
       rules: [mkRule("alice public rule")],
     });
+    // Naming a reviewer borrows their PUBLIC rules only. Her same-project
+    // private rules are pooled regardless (that is the teammate layer, covered
+    // separately), so the guard is tested with an "any project" private set —
+    // one that can only arrive through the borrow path.
     await mkSet(base, alice, {
-      name: "alice secret", visibility: "private", project: "github.com/acme/app",
+      name: "alice secret", visibility: "private",
       rules: [mkRule("alice private rule")],
     });
 
@@ -636,15 +644,18 @@ test("review-rules: merges own + a named reviewer's PUBLIC rules, never their pr
     assert.deepEqual(loaded, ["alice public rule", "mine"]);
     assert.ok(!loaded.includes("alice private rule"), "another user's private rules stay private");
     const origins = Object.fromEntries(got.sources.map((s: any) => [s.name, s.origin]));
-    assert.deepEqual(origins, { mine: "self", "alice public": "borrowed" });
+    // "others" covers both a named reviewer's rules and a teammate's on this
+    // project — they share one layer and one floor of the budget.
+    assert.deepEqual(origins, { mine: "self", "alice public": "others" });
   }));
 
-test("review-rules: own and borrowed rules SHARE one budget and rank on equal terms", () =>
+test("review-rules: own and other people's rules SHARE one budget, each with a floor", () =>
   withApi(async (base, repo) => {
     const me = await register(repo, "me@x.com");
     const alice = await register(repo, "alice@x.com");
-    // 30 of mine and 30 of alice's. A per-ruleset cap would return 60; one shared
-    // budget returns 40, picked by hits regardless of who owns the rule.
+    // 30 of mine and 30 of alice's. A per-ruleset cap would return 60; one
+    // shared budget returns 40 — but split by LAYER, not ranked flat: hers are
+    // well-hit too, and a flat ranking would let either side take the lot.
     await mkSet(base, me, {
       name: "mine", visibility: "private", project: "github.com/acme/app",
       rules: Array.from({ length: 30 }, (_, i) => mkRule(`mine-${i}`, { hits: i })),
@@ -659,18 +670,173 @@ test("review-rules: own and borrowed rules SHARE one budget and rank on equal te
     assert.equal(got.ruleTotal, 60, "one pool of 60");
     assert.equal(got.rules.length, 40, "ONE shared budget, not 40 per ruleset");
     assert.equal(got.ruleOmitted, 20);
-    // Equal priority: the two owners' highest-hit rules interleave at the top
-    // rather than one owner's block preceding the other's.
-    const top = got.rules.slice(0, 4).map((r: any) => r.title);
-    assert.ok(top.some((t: string) => t.startsWith("mine-")), `own rules in the lead: ${top}`);
-    assert.ok(top.some((t: string) => t.startsWith("alice-")), `borrowed rules in the lead: ${top}`);
-    // Both owners contribute roughly evenly, since their hit profiles match.
     const counts = got.rules.reduce((a: any, r: any) => {
-      const k = r.title.split("-")[0];
-      a[k] = (a[k] || 0) + 1;
+      a[r.layer] = (a[r.layer] || 0) + 1;
       return a;
     }, {});
-    assert.ok(Math.abs(counts.mine - counts.alice) <= 4, `balanced, got ${JSON.stringify(counts)}`);
+    // Neither layer can be squeezed out: each holds at least its floor of the
+    // budget (1/3 of 40 = 13), and the remainder goes to the caller's own.
+    assert.ok(counts.own >= 13, `own floor honoured, got ${JSON.stringify(counts)}`);
+    assert.ok(counts.others >= 13, `others floor honoured, got ${JSON.stringify(counts)}`);
+    assert.equal(counts.own + counts.others, 40);
+    // Inside a layer, hits still decide: the best-hit rule of each leads it.
+    assert.equal(got.rules[0].title, "mine-29");
+    assert.equal(got.rules.find((r: any) => r.layer === "others").title, "alice-29");
+  }));
+
+const P = "github.com/acme/app";
+const promote = (base: string, token: string, body: Record<string, unknown>) =>
+  fetch(`${base}/api/project-rules/promote`, {
+    method: "POST", headers: auth(token), body: JSON.stringify(body),
+  });
+const projectRules = async (base: string, token: string, qs = "") =>
+  (await (await fetch(`${base}/api/project-rules${qs}`, { headers: auth(token) })).json()) as any;
+
+test("review-rules: picks up a TEAMMATE's PRIVATE rules for the same project", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    // Alice's rules for this project are PRIVATE — what auto-grow creates, and
+    // previously visible to nobody but her.
+    await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P, rules: [mkRule("alice rule")],
+    });
+    // …while her rules for ANOTHER project must not leak in.
+    await mkSet(base, alice, {
+      name: "alice elsewhere", visibility: "private", project: "github.com/acme/other",
+      rules: [mkRule("other project rule")],
+    });
+    await mkSet(base, bob, {
+      name: "bob on app", visibility: "private", project: P, rules: [mkRule("bob rule")],
+    });
+
+    const got = await reviewRules(base, bob, `?project=${P}`);
+    const layerOf = (t: string) => got.rules.find((r: any) => r.title === t)?.layer;
+    assert.equal(layerOf("bob rule"), "own");
+    assert.equal(layerOf("alice rule"), "others", "a teammate's rules join the pool");
+    assert.equal(layerOf("other project rule"), undefined, "another project stays out");
+    // Named, so the review can say whose rules it applied.
+    const hers = got.sources.find((s: any) => s.name === "alice on app");
+    assert.equal(hers.origin, "others");
+    assert.equal(hers.ownerName, "alice@x.com");
+    assert.equal(hers.mandatory, false);
+  }));
+
+test("review-rules: with no project named, other people's rules stay out", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P, rules: [mkRule("alice rule")],
+    });
+    // No ?project= means the caller could not say what they are reviewing;
+    // pooling every ruleset on the server would be the wrong answer.
+    assert.deepEqual((await reviewRules(base, bob)).rules, []);
+  }));
+
+test("project-rules: an admin promotes a personal rule into the project's mandatory set", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    const root = await register(repo, "root@x.com", "admin");
+    const src = await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P,
+      rules: [mkRule("no raw SQL", { hits: 7 }), mkRule("off", { disabled: true })],
+    });
+
+    // A member cannot promote — this decides what EVERYONE is held to.
+    assert.equal((await promote(base, bob, { rulesetId: src.id, titles: ["no raw SQL"] })).status, 403);
+    // Nor can a disabled rule be promoted: the project would come to depend on
+    // a rule that nobody is actually running.
+    assert.equal((await promote(base, root, { rulesetId: src.id, titles: ["off"] })).status, 400);
+
+    const res = await promote(base, root, { rulesetId: src.id, titles: ["no raw SQL"] });
+    assert.equal(res.status, 201);
+    const { ruleset, added } = (await res.json()) as any;
+    assert.equal(added, 1);
+    assert.equal(ruleset.kind, "project");
+    assert.equal(ruleset.project, P);
+    assert.equal(ruleset.visibility, "private", "not a community ruleset to install or fork");
+    const copy = ruleset.rules[0];
+    assert.equal(copy.title, "no raw SQL");
+    // Credit stays with the person who grew it…
+    assert.equal(copy.promotedFrom.ownerId, src.ownerId);
+    assert.equal(copy.promotedFrom.ownerName, "alice@x.com");
+    assert.equal(copy.promotedFrom.rulesetId, src.id);
+    // …but the copy earns its own ranking: it is new to everyone else.
+    assert.equal(copy.hits, undefined);
+    assert.ok(copy.createdAt);
+
+    // Promoting it again is a no-op, not a duplicate in every review.
+    const again = (await (await promote(base, root, { rulesetId: src.id, titles: ["no raw SQL"] })).json()) as any;
+    assert.deepEqual([again.added, again.skipped], [0, 1]);
+
+    // Bob is held to it without opting in, and it is flagged as mandatory.
+    const got = await reviewRules(base, bob, `?project=${P}`);
+    assert.equal(got.rules.find((r: any) => r.title === "no raw SQL").layer, "project");
+    const source = got.sources.find((s: any) => s.rulesetId === ruleset.id);
+    assert.equal(source.origin, "project");
+    assert.equal(source.mandatory, true);
+
+    // It is managed under /api/project-rules, so it must not appear in the
+    // promoting admin's own list — where it would come with a 删除 button.
+    assert.deepEqual(
+      (await (await fetch(`${base}/api/rulesets`, { headers: auth(root) })).json()) as any[],
+      [],
+    );
+  }));
+
+test("project-rules: anyone may read them; only an admin may demote", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const viewer = await register(repo, "bob@x.com", "viewer");
+    const root = await register(repo, "root@x.com", "admin");
+    const src = await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P, rules: [mkRule("no raw SQL")],
+    });
+    await promote(base, root, { rulesetId: src.id, titles: ["no raw SQL"] });
+
+    // A viewer is held to these rules, so a viewer may read them — including the
+    // unscoped listing, which is how someone who has grown no rules of their own
+    // still gets to see what the project requires.
+    assert.equal((await projectRules(base, viewer, `?project=${P}`)).ruleset.rules[0].title, "no raw SQL");
+    assert.equal((await projectRules(base, viewer)).rulesets.length, 1);
+    assert.equal((await projectRules(base, root)).rulesets.length, 1);
+    // Still authenticated-only: these are internal rules, not public artifacts.
+    assert.equal((await fetch(`${base}/api/project-rules`)).status, 401);
+
+    const demote = (token: string, titles: string[]) =>
+      fetch(`${base}/api/project-rules/demote`, {
+        method: "POST", headers: auth(token), body: JSON.stringify({ project: P, titles }),
+      });
+    assert.equal((await demote(viewer, ["no raw SQL"])).status, 403);
+    const out = (await (await demote(root, ["NO RAW sql"])).json()) as any;
+    assert.equal(out.removed, 1, "titles match case-insensitively");
+    assert.deepEqual(out.ruleset.rules, []);
+  }));
+
+test("project-rules: auto-grown candidates never land in the mandatory ruleset", () =>
+  withApi(async (base, repo) => {
+    const root = await register(repo, "root@x.com", "admin");
+    const src = await mkSet(base, root, {
+      name: "root on app", visibility: "private", project: P, rules: [mkRule("seed")],
+    });
+    const { ruleset: mandatory } = (await (await promote(base, root, {
+      rulesetId: src.id, titles: ["seed"],
+    })).json()) as any;
+
+    // The promoting admin now owns TWO rulesets on this project key, so the
+    // auto-grow upsert has to pick the personal one — otherwise a review would
+    // quietly append candidates to what the whole project is held to.
+    const grown = (await (await fetch(`${base}/api/rulesets/candidates`, {
+      method: "POST", headers: auth(root),
+      body: JSON.stringify({ project: P, projectLabel: "acme/app", rules: [mkRule("grown")] }),
+    })).json()) as any;
+    assert.equal(grown.ruleset.id, src.id, "candidates go to the personal ruleset");
+    assert.equal(grown.ruleset.kind, "personal");
+    const after = await projectRules(base, root, `?project=${P}`);
+    assert.equal(after.ruleset.id, mandatory.id);
+    assert.deepEqual(after.ruleset.rules.map((r: any) => r.title), ["seed"]);
   }));
 
 test("review-rules: an 'any project' ruleset applies alongside project-scoped ones", () =>

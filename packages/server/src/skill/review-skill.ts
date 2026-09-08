@@ -390,7 +390,7 @@ actually know them rather than by an opaque id.
 If no one is named that is FINE and is the normal case — you still load YOUR OWN
 rules for this project in step 3. Leave \`HANDLE\` empty.
 
-## 3. Load the rules for THIS project (ALWAYS — your own, plus any borrowed)
+## 3. Load the rules for THIS project (ALWAYS — the project's, yours, your team's)
 Do this on **every** review, whether or not a reviewer was named. It returns YOUR
 OWN rules for this project (including private ones — this is how the rules you
 auto-grow in step 9 actually take effect) merged with the named reviewer's PUBLIC
@@ -416,11 +416,16 @@ cat "$CACHE/rules.json"
 The response is \`{ project, reviewer, ruleLimit, ruleTotal, ruleOmitted, sources,
 rules }\`:
 - \`rules\` — the flat, ranked list to apply. Each is \`{ title, instruction,
-  globs[], languages[], topics[], hits, rulesetId }\`. **\`rulesetId\` says which
-  ruleset the rule came from** — keep it, you need it in step 4b.
-- \`sources\` — one entry per contributing ruleset: \`name\`, \`origin\` (\`"self"\` =
-  your own, \`"borrowed"\` = the named reviewer's), \`focus\`, \`instructions\`
-  (freeform, ALWAYS applies), \`language\`, \`rulesSelected\`.
+  globs[], languages[], topics[], hits, rulesetId, layer }\`. **\`rulesetId\` says
+  which ruleset the rule came from** — keep it, you need it in step 4b.
+  \`layer\` is \`"project"\` (the project REQUIRES this rule of everyone),
+  \`"own"\` (your own rules) or \`"others"\` (a teammate's rules for this same
+  project, or a named reviewer's).
+- \`sources\` — one entry per contributing ruleset: \`name\`, \`origin\`
+  (\`"project"\` / \`"self"\` / \`"others"\`), \`mandatory\` (true for the
+  project-level ruleset), \`ownerName\` (whose rules these are — empty for the
+  project ruleset), \`focus\`, \`instructions\` (freeform, ALWAYS applies),
+  \`language\`, \`rulesSelected\`.
 - \`reviewerName\` — who the server resolved the name to. Use THIS when you say
   whose rules you applied, not the raw handle.
 - \`reviewerUnknown: true\` — nobody matched what the user typed. **Say so
@@ -428,16 +433,24 @@ rules }\`:
   silently reviewing without them; if \`reviewerAmbiguous\` is also true, more
   than one person matched, so ask which one they meant.
 
-**The server has already merged and CAPPED the rules as ONE pool** — your own
-rules and any borrowed ones share a single budget and are ranked together on equal
-terms, by how often each has actually caught something. \`rules\` is ordered
-best-first: new rules, then proven ones, then a rotating handful of untried ones.
-Work with exactly what you were sent:
+**The server has already merged, LAYERED and CAPPED the rules** — one budget
+shared by three layers, each with a floor so no layer can crowd out another:
+project-level rules the project imposes on everyone, your own rules, and your
+teammates' rules for this same project. Within a layer, rules are ranked by how
+often each has actually caught something. \`rules\` arrives ordered
+project → own → others, and inside each layer: new rules, then proven ones, then
+a rotating handful of untried ones. Work with exactly what you were sent:
+- **\`layer: "project"\` rules are NOT optional.** Apply every one whose
+  selectors match the changed files — the project requires them, and skipping one
+  because it looks unimportant is not yours to decide. The only reason to leave
+  one out is that its selectors do not match (see step 4).
 - Do NOT try to fetch the omitted rules (raising \`?limit=\` just makes every
   review slower for no accuracy gain — the tail is mostly rules that never fire).
 - When \`ruleOmitted > 0\`, say so once in your report, e.g. "已加载 40/137 条规则
-  (自己的 + alice 的公开规则,按命中排序)", so the user knows the set was trimmed.
-- Name the sources you applied, and whose they were.
+  (项目必选 13 + 自己的 14 + 同事的 13,按命中排序)", so the user knows the set
+  was trimmed.
+- Name the sources you applied, and whose they were — including that some were
+  the project's mandatory rules, and which teammate the rest came from.
 
 If the fetch fails and there is no cache, say so and continue as a generic review
 rather than stopping.
@@ -454,10 +467,13 @@ selector matches; empty selectors mean "always". Matching is done here, locally:
   unless clearly unrelated to the change; empty ⇒ always.
 
 Every \`sources[].instructions\` (freeform) and \`focus\` ALWAYS applies — those are
-prose, not selector-matched rules, and are outside the rule budget. Treat your own
-rules and any borrowed ones as equally authoritative; they were ranked together.
+prose, not selector-matched rules, and are outside the rule budget. Your own rules
+and a teammate's carry equal weight — they were ranked against each other — while
+\`layer: "project"\` rules outrank both: they are the project's requirement, so a
+matching one is applied even if you would not have prioritised it yourself.
 Briefly tell the user which rules you loaded and which you skipped (and why), so
-the on-demand selection is transparent.
+the on-demand selection is transparent — and say plainly when a skipped rule was
+a project-level one whose selectors did not match.
 
 **Track which rules actually catch something.** As you review, remember the
 \`title\` **and \`rulesetId\`** of every rule that led to a finding you reported — you

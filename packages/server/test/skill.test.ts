@@ -182,6 +182,7 @@ test("buildReviewSkill: structured rules become conditional rule lines with sele
     ownerHandle: "alice",
     project: "github.com/alice/backend",
     projectLabel: "alice/backend",
+    kind: "personal",
     name: "Backend",
     slug: "backend",
     description: "",

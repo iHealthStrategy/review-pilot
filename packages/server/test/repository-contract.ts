@@ -515,6 +515,8 @@ export function runRepositoryContract(
       (await repo.listAllRulesets()).map((r) => r.name).sort(),
       ["Loose", "Other", "Strict"],
     );
+    // Rulesets are `personal` unless a caller asks for the project kind.
+    assert.equal((await repo.getRuleset(a.id))?.kind, "personal");
     assert.equal((await repo.getRuleset(a.id))?.name, "Strict");
     assert.equal((await repo.getRuleset(a.id))?.ownerHandle, "u1");
     assert.equal((await repo.getRuleset(a.id))?.project, "github.com/u1/strict");
@@ -524,6 +526,53 @@ export function runRepositoryContract(
 
     // Per-project lookup (the auto-grow upsert key) is owner-scoped.
     assert.equal((await repo.findRulesetByOwnerAndProject("u1", "github.com/u1/strict"))?.id, a.id);
+    // A project's rules span every owner — how a review picks up a teammate's.
+    assert.deepEqual(
+      (await repo.listRulesetsForProject("github.com/u1/strict")).map((r) => r.name),
+      ["Strict"],
+    );
+    assert.deepEqual(await repo.listRulesetsForProject("github.com/nobody/x"), []);
+
+    // The project-level (mandatory) ruleset: one per project key, found by kind.
+    assert.equal(await repo.findProjectRuleset("github.com/u1/strict"), null);
+    const mandatory = await repo.createRuleset({
+      ownerId: "admin1",
+      ownerEmail: "admin1@x.com",
+      ownerHandle: "admin1",
+      project: "github.com/u1/strict",
+      projectLabel: "u1/strict",
+      name: "Project rules",
+      slug: "project-rules",
+      description: "",
+      visibility: "private",
+      kind: "project",
+      language: "",
+      focus: "",
+      instructions: "",
+      rules: [
+        {
+          title: "No secrets",
+          instruction: "never commit credentials",
+          globs: [],
+          languages: [],
+          topics: [],
+          promotedFrom: { ownerId: "u1", rulesetId: a.id, title: "SQL", at: "2026-01-01T00:00:00.000Z" },
+        },
+      ],
+    });
+    assert.equal(mandatory.kind, "project");
+    assert.equal((await repo.findProjectRuleset("github.com/u1/strict"))?.id, mandatory.id);
+    // Promotion provenance survives the round trip through every backend.
+    assert.equal(
+      (await repo.findProjectRuleset("github.com/u1/strict"))?.rules[0]?.promotedFrom?.ownerId,
+      "u1",
+    );
+    // The auto-grow upsert key must never resolve to it, or an admin's
+    // candidates would land in what the whole project is held to.
+    assert.equal(
+      (await repo.findRulesetByOwnerAndProject("admin1", "github.com/u1/strict")),
+      null,
+    );
     assert.equal(await repo.findRulesetByOwnerAndProject("u2", "github.com/u1/strict"), null);
     assert.equal(await repo.findRulesetByOwnerAndProject("u1", "github.com/u1/missing"), null);
 

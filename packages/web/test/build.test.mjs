@@ -58,6 +58,16 @@ test("web build emits a static index.html artifact", async () => {
   assert.match(html, /id="rs-admin-filter"/);
   assert.match(html, /id="rs-admin-list"/);
   assert.match(html, /data-rules-of=/);
+  // Project-level mandatory rules: a section everyone can read, plus the admin
+  // promote/demote flow that fills it.
+  assert.match(html, /\/api\/project-rules/);
+  assert.match(html, /项目必选规则/);
+  assert.match(html, /id="promote-modal"/);
+  assert.match(html, /id="promote-form"/);
+  assert.match(html, /data-promote-rs=/);
+  assert.match(html, /data-demote-project=/);
+  assert.match(html, /project-rules\/promote/);
+  assert.match(html, /project-rules\/demote/);
 });
 
 test("the embedded app script is syntactically valid JS", async () => {

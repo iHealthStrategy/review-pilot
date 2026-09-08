@@ -203,6 +203,98 @@ export function rankRules<T extends ReviewRule>(
 }
 
 /**
+ * Which pool a rule reached the review from. The layers do NOT compete freely:
+ * each has a floor, because "ranked purely by hits" answers the wrong question
+ * when the pool spans several people.
+ */
+export type RuleLayer = "project" | "own" | "others";
+
+/** Order the layers are emitted (and given leftover budget) in: most binding first. */
+const LAYERS: readonly RuleLayer[] = ["project", "own", "others"];
+
+/**
+ * Select rules from a pool that spans several people and the project's own
+ * mandatory ruleset.
+ *
+ * Each layer gets a floor of the budget, then whatever a short layer cannot use
+ * is handed to the others (project → own → others). Within a layer the ordinary
+ * {@link rankRules} ranking applies, so hits still decide WHICH of a layer's
+ * rules are worth loading — the layers only decide HOW MANY each may send.
+ *
+ * Emitted project-first, so the rules the project requires are read before the
+ * ones a person or a teammate merely found useful.
+ */
+export function rankLayered<T extends ReviewRule & { layer: RuleLayer }>(
+  rules: readonly T[],
+  opts: RankRulesOptions = {},
+): RankedRules<T> {
+  const now = opts.now ?? Date.now();
+  const limit = Math.min(
+    opts.limit ?? RULE_LOAD_POLICY.defaultLimit,
+    RULE_LOAD_POLICY.maxLimit,
+  );
+  const eligible = rules.filter(isRuleInEffect);
+  const total = eligible.length;
+  if (limit <= 0) return { rules: [], total, omitted: total };
+
+  const pools = new Map<RuleLayer, T[]>(LAYERS.map((l) => [l, []]));
+  for (const rule of eligible) pools.get(rule.layer)?.push(rule);
+  const sizeOf = (l: RuleLayer) => (pools.get(l) ?? []).length;
+
+  // `others` gets what the two floors leave, so a layer's share is a share of
+  // the budget and not "everything nobody else claimed" — without this the
+  // leftover pass below would hand the whole remainder to `project`.
+  const share: Record<RuleLayer, number> = {
+    project: RULE_LOAD_POLICY.projectRuleShare,
+    own: RULE_LOAD_POLICY.ownRuleShare,
+    others: Math.max(
+      0,
+      1 - RULE_LOAD_POLICY.projectRuleShare - RULE_LOAD_POLICY.ownRuleShare,
+    ),
+  };
+  const quota = new Map<RuleLayer, number>(LAYERS.map((l) => [l, 0]));
+  const grant = (l: RuleLayer, n: number) => quota.set(l, (quota.get(l) ?? 0) + n);
+  let left = limit;
+  // One slot each first: on a budget so small that every share floors to zero,
+  // "each layer has a floor" has to still mean something — a review must carry
+  // at least one project rule AND one of your own, not three project rules.
+  for (const l of LAYERS) {
+    if (left <= 0) break;
+    if (sizeOf(l) > 0) {
+      grant(l, 1);
+      left -= 1;
+    }
+  }
+  // Then up to each layer's share of the budget.
+  for (const l of LAYERS) {
+    if (left <= 0) break;
+    const target = Math.min(sizeOf(l), Math.floor(limit * share[l]));
+    const grow = Math.min(left, Math.max(0, target - (quota.get(l) ?? 0)));
+    if (grow > 0) {
+      grant(l, grow);
+      left -= grow;
+    }
+  }
+  // Whatever a short layer could not use goes to the others, most binding first.
+  for (const l of LAYERS) {
+    if (left <= 0) break;
+    const grow = Math.min(left, sizeOf(l) - (quota.get(l) ?? 0));
+    if (grow > 0) {
+      grant(l, grow);
+      left -= grow;
+    }
+  }
+
+  const selected: T[] = [];
+  for (const l of LAYERS) {
+    const n = quota.get(l) ?? 0;
+    if (n <= 0) continue;
+    selected.push(...rankRules(pools.get(l) ?? [], { limit: n, now }).rules);
+  }
+  return { rules: selected, total, omitted: total - selected.length };
+}
+
+/**
  * Apply a review's hit report to a rule list: bump `hits` and stamp
  * `lastHitAt` for every rule whose title was reported.
  *

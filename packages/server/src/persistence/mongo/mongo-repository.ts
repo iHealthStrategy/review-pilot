@@ -11,6 +11,7 @@ import type {
   ReviewEngineKind,
   ReviewJob,
   ReviewRuleset,
+  RulesetKind,
   RulesetVisibility,
   Severity,
   SkillFinding,
@@ -232,6 +233,8 @@ function toRuleset(d: MongoDoc): ReviewRuleset {
     slug: d.slug as string,
     description: d.description as string,
     visibility: d.visibility as RulesetVisibility,
+    // Documents predating the project-level kind read back as personal.
+    kind: (d.kind as RulesetKind) || "personal",
     language: d.language as string,
     focus: d.focus as string,
     instructions: d.instructions as string,
@@ -766,6 +769,7 @@ export class MongoRepository implements Repository {
       slug: input.slug,
       description: input.description,
       visibility: input.visibility,
+      kind: input.kind ?? "personal",
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
@@ -794,8 +798,12 @@ export class MongoRepository implements Repository {
     ownerId: string,
     project: string,
   ): Promise<ReviewRuleset | null> {
-    const d = await this.col(COLLECTIONS.rulesets).findOne({ ownerId, project });
-    return d ? toRuleset(d) : null;
+    // Filtered here rather than in the query: this is the auto-grow upsert key,
+    // and an admin who owns the project ruleset must not have their candidates
+    // land in what the whole project is held to.
+    const docs = await this.col(COLLECTIONS.rulesets).find({ ownerId, project });
+    const d = docs.map(toRuleset).find((r) => r.kind !== "project");
+    return d ?? null;
   }
 
   async listPublicRulesets(): Promise<ReviewRuleset[]> {
@@ -804,6 +812,19 @@ export class MongoRepository implements Repository {
       { sort: { field: "updatedAt", dir: -1 } },
     );
     return docs.map(toRuleset);
+  }
+
+  async listRulesetsForProject(project: string): Promise<ReviewRuleset[]> {
+    const docs = await this.col(COLLECTIONS.rulesets).find(
+      { project },
+      { sort: { field: "updatedAt", dir: -1 } },
+    );
+    return docs.map(toRuleset);
+  }
+
+  async findProjectRuleset(project: string): Promise<ReviewRuleset | null> {
+    const d = await this.col(COLLECTIONS.rulesets).findOne({ project, kind: "project" });
+    return d ? toRuleset(d) : null;
   }
 
   async listAllRulesets(): Promise<ReviewRuleset[]> {

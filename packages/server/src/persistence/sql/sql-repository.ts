@@ -12,6 +12,7 @@ import type {
   ReviewJob,
   ReviewRule,
   ReviewRuleset,
+  RulesetKind,
   RulesetVisibility,
   Severity,
   SkillFinding,
@@ -335,6 +336,7 @@ interface RulesetRow {
   slug: string;
   description: string;
   visibility: string;
+  kind: string | null;
   language: string;
   focus: string;
   instructions: string;
@@ -354,6 +356,8 @@ function toRuleset(r: RulesetRow): ReviewRuleset {
     slug: r.slug,
     description: r.description,
     visibility: r.visibility as RulesetVisibility,
+    // Rows predating the project-level kind read back as personal.
+    kind: (r.kind as RulesetKind) || "personal",
     language: r.language,
     focus: r.focus,
     instructions: r.instructions,
@@ -1086,6 +1090,7 @@ export class SqlRepository implements Repository {
       slug: input.slug,
       description: input.description,
       visibility: input.visibility,
+      kind: input.kind ?? "personal",
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
@@ -1095,9 +1100,9 @@ export class SqlRepository implements Repository {
     };
     await this.client.run(
       `INSERT INTO rulesets
-         (id, owner_id, owner_email, owner_handle, project, project_label, name, slug, description, visibility, language, focus, instructions, rules, created_at, updated_at)
-       VALUES (${placeholderList(this.client.dialect, 16)})`,
-      [r.id, r.ownerId, r.ownerEmail, r.ownerHandle, r.project, r.projectLabel, r.name, r.slug, r.description, r.visibility, r.language, r.focus, r.instructions, JSON.stringify(r.rules), r.createdAt, r.updatedAt],
+         (id, owner_id, owner_email, owner_handle, project, project_label, name, slug, description, visibility, kind, language, focus, instructions, rules, created_at, updated_at)
+       VALUES (${placeholderList(this.client.dialect, 17)})`,
+      [r.id, r.ownerId, r.ownerEmail, r.ownerHandle, r.project, r.projectLabel, r.name, r.slug, r.description, r.visibility, r.kind, r.language, r.focus, r.instructions, JSON.stringify(r.rules), r.createdAt, r.updatedAt],
     );
     return r;
   }
@@ -1122,9 +1127,13 @@ export class SqlRepository implements Repository {
     ownerId: string,
     project: string,
   ): Promise<ReviewRuleset | null> {
+    // Never the project-level ruleset: this is the auto-grow upsert key, and an
+    // admin who owns the project ruleset must not have their candidates land in
+    // what the whole project is held to.
     const row = await this.client.get<RulesetRow>(
-      `SELECT * FROM rulesets WHERE owner_id = ${this.ph(1)} AND project = ${this.ph(2)} ORDER BY updated_at DESC`,
-      [ownerId, project],
+      `SELECT * FROM rulesets WHERE owner_id = ${this.ph(1)} AND project = ${this.ph(2)}
+         AND kind <> ${this.ph(3)} ORDER BY updated_at DESC`,
+      [ownerId, project, "project"],
     );
     return row ? toRuleset(row) : null;
   }
@@ -1135,6 +1144,22 @@ export class SqlRepository implements Repository {
       ["public"],
     );
     return rows.map(toRuleset);
+  }
+
+  async listRulesetsForProject(project: string): Promise<ReviewRuleset[]> {
+    const rows = await this.client.all<RulesetRow>(
+      `SELECT * FROM rulesets WHERE project = ${this.ph(1)} ORDER BY updated_at DESC`,
+      [project],
+    );
+    return rows.map(toRuleset);
+  }
+
+  async findProjectRuleset(project: string): Promise<ReviewRuleset | null> {
+    const row = await this.client.get<RulesetRow>(
+      `SELECT * FROM rulesets WHERE project = ${this.ph(1)} AND kind = ${this.ph(2)} ORDER BY updated_at DESC`,
+      [project, "project"],
+    );
+    return row ? toRuleset(row) : null;
   }
 
   async listAllRulesets(): Promise<ReviewRuleset[]> {

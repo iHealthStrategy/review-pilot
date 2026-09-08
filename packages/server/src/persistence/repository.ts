@@ -13,6 +13,7 @@ import type {
   ReviewJob,
   ReviewRule,
   ReviewRuleset,
+  RulesetKind,
   RulesetVisibility,
   Severity,
   SkillFinding,
@@ -198,6 +199,8 @@ export interface CreateRulesetInput {
   slug: string;
   description: string;
   visibility: RulesetVisibility;
+  /** Defaults to "personal"; "project" is the per-project mandatory ruleset. */
+  kind?: RulesetKind;
   language: string;
   focus: string;
   instructions: string;
@@ -328,6 +331,18 @@ export interface Repository {
     project: string,
   ): Promise<ReviewRuleset | null>;
   listPublicRulesets(): Promise<ReviewRuleset[]>;
+  /**
+   * Every ruleset governing one project key, whatever its owner or visibility —
+   * how a review picks up a TEAMMATE's rules for the project at hand. Matches
+   * `project` exactly, so it excludes "any project" rulesets; callers that also
+   * want those merge them in themselves.
+   */
+  listRulesetsForProject(project: string): Promise<ReviewRuleset[]>;
+  /**
+   * The one project-level (`kind: "project"`) ruleset for a project key, or
+   * null. Its rules are mandatory for everyone reviewing that project.
+   */
+  findProjectRuleset(project: string): Promise<ReviewRuleset | null>;
   /**
    * EVERY ruleset, newest-updated first — the admin overview of what rules each
    * person has grown. This is the only read that returns other people's PRIVATE

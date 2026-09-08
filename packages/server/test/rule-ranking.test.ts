@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RULE_LOAD_POLICY, type ReviewRule } from "../src/domain/entities.js";
-import { applyRuleHits, isRuleInEffect, rankRules } from "../src/review/rule-ranking.js";
+import {
+  applyRuleHits,
+  isRuleInEffect,
+  rankLayered,
+  rankRules,
+  type RuleLayer,
+} from "../src/review/rule-ranking.js";
 
 const NOW = Date.parse("2026-08-07T00:00:00.000Z");
 const daysAgo = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
@@ -244,6 +250,99 @@ test("rankRules: never exceeds the hard ceiling, whatever the caller asks", () =
   );
   const out = rankRules(many, { limit: 10_000, now: NOW });
   assert.equal(out.rules.length, RULE_LOAD_POLICY.maxLimit);
+});
+
+// --- rankLayered: one budget shared by project / own / others ---
+
+type Layered = ReviewRule & { layer: RuleLayer };
+const layered = (layer: RuleLayer, p: Partial<ReviewRule> & { title: string }): Layered => ({
+  ...rule(p),
+  layer,
+});
+const many = (layer: RuleLayer, n: number, hits: number): Layered[] =>
+  Array.from({ length: n }, (_, i) =>
+    layered(layer, { title: `${layer}-${i}`, hits: hits + i, createdAt: daysAgo(400) }),
+  );
+const byLayer = (rules: readonly Layered[]) => {
+  const out: Record<string, number> = {};
+  for (const r of rules) out[r.layer] = (out[r.layer] ?? 0) + 1;
+  return out;
+};
+
+test("rankLayered: every layer gets its floor, so none can crowd out another", () => {
+  // A teammate with 100 well-hit rules must not bury the project's mandatory
+  // ones or the caller's own — that is the whole reason layers exist.
+  const out = rankLayered(
+    [...many("project", 40, 1), ...many("own", 40, 1), ...many("others", 100, 500)],
+    { limit: 30, now: NOW },
+  );
+  assert.deepEqual(byLayer(out.rules), { project: 10, own: 10, others: 10 });
+  assert.equal(out.rules.length, 30);
+  assert.equal(out.total, 180);
+  assert.equal(out.omitted, 150);
+});
+
+test("rankLayered: project rules are emitted first, so they are read first", () => {
+  const out = rankLayered(
+    [...many("others", 5, 9), ...many("own", 5, 9), ...many("project", 5, 1)],
+    { limit: 15, now: NOW },
+  );
+  assert.deepEqual(
+    out.rules.map((r) => r.layer),
+    [...Array(5).fill("project"), ...Array(5).fill("own"), ...Array(5).fill("others")],
+  );
+});
+
+test("rankLayered: an absent layer's share goes to the others", () => {
+  // Solo project, nothing promoted yet: the caller still spends the whole
+  // budget on their own rules rather than losing two thirds of it.
+  const out = rankLayered(many("own", 50, 1), { limit: 12, now: NOW });
+  assert.deepEqual(byLayer(out.rules), { own: 12 });
+});
+
+test("rankLayered: a short layer only takes what it has", () => {
+  const out = rankLayered(
+    [...many("project", 2, 1), ...many("own", 3, 1), ...many("others", 50, 1)],
+    { limit: 12, now: NOW },
+  );
+  // project and own are exhausted; the rest goes to the deep layer.
+  assert.deepEqual(byLayer(out.rules), { project: 2, own: 3, others: 7 });
+});
+
+test("rankLayered: hits still decide WHICH rules a layer sends", () => {
+  const out = rankLayered(
+    [
+      layered("own", { title: "own-cold", hits: 0, createdAt: daysAgo(400) }),
+      layered("own", { title: "own-hot", hits: 9, createdAt: daysAgo(400) }),
+      layered("project", { title: "proj-cold", hits: 0, createdAt: daysAgo(400) }),
+      layered("project", { title: "proj-hot", hits: 7, createdAt: daysAgo(400) }),
+    ],
+    { limit: 2, now: NOW },
+  );
+  assert.deepEqual(titles(out.rules), ["proj-hot", "own-hot"]);
+});
+
+test("rankLayered: disabled and legacy pending rules are excluded, layer or not", () => {
+  const out = rankLayered(
+    [
+      layered("project", { title: "off", disabled: true, hits: 99 }),
+      layered("project", { title: "legacy", pending: true, hits: 99 }),
+      layered("own", { title: "live", hits: 1 }),
+    ],
+    { limit: 10, now: NOW },
+  );
+  assert.deepEqual(titles(out.rules), ["live"]);
+  assert.equal(out.total, 1);
+});
+
+test("rankLayered: limit 0 selects nothing but still reports the total", () => {
+  const out = rankLayered([...many("project", 3, 1), ...many("own", 4, 1)], {
+    limit: 0,
+    now: NOW,
+  });
+  assert.deepEqual(out.rules, []);
+  assert.equal(out.total, 7);
+  assert.equal(out.omitted, 7);
 });
 
 test("isRuleInEffect: only non-pending, non-disabled rules apply", () => {

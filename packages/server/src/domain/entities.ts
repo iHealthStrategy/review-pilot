@@ -317,6 +317,25 @@ export interface ReviewRule {
   readonly hits?: number;
   /** ISO time of the most recent hit; breaks ties between equal hit counts. */
   readonly lastHitAt?: string;
+  /**
+   * Set on a COPY an admin promoted into a project-level ruleset: which rule it
+   * was taken from, and who grew it. Kept so the person whose rule became a
+   * project requirement still gets the credit for it — a promotion should be a
+   * reward for sinking knowledge into a rule, not a quiet expropriation. The
+   * copy's own `hits` accumulate separately (it is a different rule, loaded for
+   * everyone on the project now).
+   */
+  readonly promotedFrom?: {
+    readonly ownerId: string;
+    /** Denormalized display name, so history survives an account rename. */
+    readonly ownerName?: string;
+    readonly rulesetId: string;
+    /** The source rule's title, which the source owner may later rename. */
+    readonly title: string;
+    readonly at: string;
+    /** Who promoted it (a user id). */
+    readonly by?: string;
+  };
 }
 
 /**
@@ -332,7 +351,12 @@ export interface ReviewRule {
  * gets loaded can never record a hit and climb.
  */
 export const RULE_LOAD_POLICY = {
-  /** Rules sent per ruleset per review. */
+  /**
+   * Rules sent per review — the budget the WHOLE pool shares (project-level +
+   * your own + your teammates'). Two side routes still rank one ruleset at a
+   * time against this number: unauthenticated public discovery
+   * (`/api/u/:handle/rulesets`) and a single ruleset baked into its own skill.
+   */
   defaultLimit: 40,
   /** Hard ceiling a caller may request via `?limit=`. */
   maxLimit: 200,
@@ -354,7 +378,34 @@ export const RULE_LOAD_POLICY = {
    * per-rule "last loaded" write on an unauthenticated read.
    */
   rotationPeriodMs: 24 * 60 * 60 * 1000,
+  /**
+   * Floor for the project-level MANDATORY rules. They are what the project
+   * requires of everyone, so they cannot be crowded out by whoever happens to
+   * have the most-hit personal rules — but they are still ranked and capped,
+   * because a project ruleset grows like any other and loading all of it would
+   * bring back exactly the slowness the budget exists to prevent.
+   */
+  projectRuleShare: 1 / 3,
+  /**
+   * Floor for the caller's OWN rules, now that teammates' rules share the pool.
+   * Without it, a colleague with a large, well-hit ruleset would push out the
+   * rules you just grew from your own reviews — and yours are the ones tuned to
+   * the code you are actually writing.
+   */
+  ownRuleShare: 1 / 3,
 } as const;
+
+/**
+ * What a ruleset IS, which decides how a review treats it:
+ *   - `personal` — someone's own ruleset (the default, and what auto-grow
+ *     creates). It competes for budget against its owner's other rules and, on
+ *     a shared project, against teammates' rules.
+ *   - `project` — the project-level MANDATORY ruleset an admin curates by
+ *     promoting individual personal rules into it. Exactly one per project key,
+ *     it applies to EVERYONE reviewing that project and holds a reserved share
+ *     of every review's budget (see {@link RULE_LOAD_POLICY.projectRuleShare}).
+ */
+export type RulesetKind = "personal" | "project";
 
 /**
  * A user-authored set of review rules/preferences. The platform turns it into a
@@ -383,6 +434,11 @@ export interface ReviewRuleset {
   readonly slug: string;
   readonly description: string;
   readonly visibility: RulesetVisibility;
+  /**
+   * `personal` (default) or the project-level mandatory ruleset. Rows written
+   * before this field existed read back as `personal`.
+   */
+  readonly kind: RulesetKind;
   /** Output language for findings ("" = follow the user). */
   readonly language: string;
   /** Short review emphasis (prioritised in the skill). */

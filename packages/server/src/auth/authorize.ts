@@ -55,6 +55,12 @@ export function requiredRole(method: string, pathname: string): UserRole | "publ
   if (pathname === "/api/usage/skill/projects" || pathname === "/api/usage/skill/runs") {
     return "admin";
   }
+  // Project-level mandatory rules: anyone authenticated may READ the rules their
+  // reviews are held to; only an admin may promote rules into them or take them
+  // back out. Re-checked in the handlers.
+  if (pathname === "/api/project-rules" || pathname.startsWith("/api/project-rules/")) {
+    return method.toUpperCase() === "GET" ? "viewer" : "admin";
+  }
   if (
     pathname === "/api/auth/me" ||
     pathname === "/api/auth/logout" ||

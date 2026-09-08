@@ -543,6 +543,7 @@ export class MemoryRepository implements Repository {
       slug: input.slug,
       description: input.description,
       visibility: input.visibility,
+      kind: input.kind ?? "personal",
       language: input.language,
       focus: input.focus,
       instructions: input.instructions,
@@ -571,7 +572,10 @@ export class MemoryRepository implements Repository {
   ): Promise<ReviewRuleset | null> {
     return (
       Object.values(this.data.rulesets).find(
-        (r) => r.ownerId === ownerId && r.project === project,
+        // Never the project-level ruleset: this is the auto-grow upsert key, and
+        // an admin who owns the project ruleset must not have their candidates
+        // land in what the whole project is held to.
+        (r) => r.ownerId === ownerId && r.project === project && r.kind !== "project",
       ) ?? null
     );
   }
@@ -580,6 +584,20 @@ export class MemoryRepository implements Repository {
     return Object.values(this.data.rulesets)
       .filter((r) => r.visibility === "public")
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async listRulesetsForProject(project: string): Promise<ReviewRuleset[]> {
+    return Object.values(this.data.rulesets)
+      .filter((r) => r.project === project)
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  }
+
+  async findProjectRuleset(project: string): Promise<ReviewRuleset | null> {
+    return (
+      Object.values(this.data.rulesets).find(
+        (r) => r.kind === "project" && r.project === project,
+      ) ?? null
+    );
   }
 
   async listAllRulesets(): Promise<ReviewRuleset[]> {

@@ -406,6 +406,23 @@ test("GET /api/usage/skill reports the first-pass rate and rule contribution", (
       }),
     });
 
+    // A project-level ruleset the same user happens to own: curated from other
+    // people's promoted rules, so it is NOT their personal contribution.
+    const src = (await (await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${u.token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "seed", visibility: "private", project: "github.com/acme/app",
+        projectLabel: "acme/app",
+        rules: [{ title: "seed", instruction: "x", globs: [], languages: [], topics: [] }],
+      }),
+    })).json()) as any;
+    await fetch(`${base}/api/project-rules/promote`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${u.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ rulesetId: src.id, titles: ["seed"] }),
+    });
+
     const body = (await (
       await fetch(`${base}/api/usage/skill?bucket=month`, { headers: { authorization: `Bearer ${u.token}` } })
     ).json()) as { rows: any[] };
@@ -414,7 +431,11 @@ test("GET /api/usage/skill reports the first-pass rate and rule contribution", (
     assert.equal(r.changesReviewed, 2, "three runs, two changes");
     assert.equal(r.cleanFirstPass, 1);
     assert.equal(r.firstPassRate, 0.5);
-    assert.equal(r.rulesOwned, 2, "disabled rules are not a contribution");
+    assert.equal(
+      r.rulesOwned,
+      3,
+      "two live rules here + the seed rule; the project-level copy is not a contribution",
+    );
     assert.equal(r.rulesHit, 1);
     assert.equal(r.userName, "Dev");
   }));

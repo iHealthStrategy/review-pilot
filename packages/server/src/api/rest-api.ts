@@ -47,7 +47,7 @@ import type { SkillFinding } from "../domain/entities.js";
 import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, ReviewRuleset, RulesetVisibility } from "../domain/entities.js";
 import { RULE_LOAD_POLICY } from "../domain/entities.js";
-import { applyRuleHits, rankRules } from "../review/rule-ranking.js";
+import { applyRuleHits, rankLayered, rankRules, type RuleLayer } from "../review/rule-ranking.js";
 import type { UpdateRulesetPatch } from "../persistence/repository.js";
 import { type EnvAdmin, ENV_ADMIN_ID, envAdminFrom } from "../auth/env-admin.js";
 import type { ReviewTaskInput, TaskService } from "../trigger/trigger-service.js";
@@ -362,6 +362,10 @@ async function ruleContribution(
   for (const userId of userIds) {
     const acc = { rulesOwned: 0, rulesHit: 0 };
     for (const rs of await repo.listRulesetsByOwner(userId)) {
+      // The project-level ruleset is curated, not grown: crediting it to the
+      // admin who happens to own the row would count other people's promoted
+      // rules as that admin's contribution.
+      if (rs.kind === "project") continue;
       for (const rule of rs.rules) {
         if (rule.pending || rule.disabled) continue; // not in effect → not a contribution
         acc.rulesOwned += 1;
@@ -453,6 +457,29 @@ async function principalHandle(
  * auto-grow candidate path, which now stores rules in effect by default.
  */
 /**
+ * Validate an inbound `promotedFrom` blob, or undefined. Trusted only as far as
+ * `hits` is: the UI resends it on every edit, so it has to survive the round
+ * trip, and a forged provenance is a display-level lie, not an access grant.
+ */
+function asPromotion(v: unknown): ReviewRule["promotedFrom"] | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const r = v as Record<string, unknown>;
+  const str = (x: unknown) => (typeof x === "string" ? x.slice(0, 200) : "");
+  const ownerId = str(r.ownerId);
+  const rulesetId = str(r.rulesetId);
+  if (!ownerId || !rulesetId) return undefined;
+  const at = typeof r.at === "string" && Number.isFinite(Date.parse(r.at)) ? r.at : "";
+  return {
+    ownerId,
+    rulesetId,
+    title: str(r.title),
+    at: at || new Date().toISOString(),
+    ...(str(r.ownerName) ? { ownerName: str(r.ownerName) } : {}),
+    ...(str(r.by) ? { by: str(r.by) } : {}),
+  };
+}
+
+/**
  * Parse an inbound rules array.
  *
  * `createdAt`/`hits`/`lastHitAt` are PASSED THROUGH when the payload carries
@@ -487,6 +514,9 @@ function parseRules(
     const hits = asCount(r.hits);
     const lastHitAt = asIso(r.lastHitAt);
     const createdAt = asIso(r.createdAt) ?? stampCreatedAt;
+    // Same reason as `hits`: editing a project-level ruleset resends the whole
+    // array, and dropping this would erase who grew each promoted rule.
+    const promotedFrom = asPromotion(r.promotedFrom);
     rules.push({
       title: title || "Rule",
       instruction,
@@ -498,6 +528,7 @@ function parseRules(
       ...(createdAt ? { createdAt } : {}),
       ...(hits === undefined ? {} : { hits }),
       ...(lastHitAt ? { lastHitAt } : {}),
+      ...(promotedFrom ? { promotedFrom } : {}),
     });
   }
   return rules;
@@ -894,7 +925,9 @@ const ROUTES: Route[] = [
         requireAdmin(principal);
         const names = await displayNames(repo);
         return ok(
-          (await repo.listAllRulesets()).map((r) => ({
+          // Personal rulesets only: the project-level ones are not "someone's
+          // rules" and are managed through /api/project-rules.
+          (await repo.listAllRulesets()).filter((r) => r.kind !== "project").map((r) => ({
             ...r,
             ownerName: names.get(r.ownerId) || r.ownerHandle || r.ownerEmail || "",
           })),
@@ -914,7 +947,10 @@ const ROUTES: Route[] = [
           })),
         );
       }
-      return ok(await repo.listRulesetsByOwner(p.userId));
+      // The project-level ruleset is managed under /api/project-rules, not here:
+      // it belongs to the project, and the admin who happens to own the row
+      // should not be offered a 删除 button for what the whole team is held to.
+      return ok((await repo.listRulesetsByOwner(p.userId)).filter((r) => r.kind !== "project"));
     },
   },
   {
@@ -1020,6 +1056,146 @@ const ROUTES: Route[] = [
     },
   },
   {
+    // The project-level MANDATORY rules. Readable by any authenticated user —
+    // you are held to these, so you get to read them, and someone who has not
+    // grown a single rule of their own is exactly who needs to read them first.
+    // Promoting and demoting are admin-only (gated in `requiredRole` too).
+    //
+    // With `?project=`: that project's ruleset (or null). Without: every
+    // project's, so a client can show them without first knowing which projects
+    // exist (the project list is already viewer-readable via /api/projects).
+    method: "GET",
+    pattern: /^\/api\/project-rules$/,
+    handler: async ({ principal, query }, repo) => {
+      requirePrincipal(principal);
+      const project = normalizeProjectKey(query.get("project") ?? "");
+      if (!project) {
+        const all = (await repo.listAllRulesets()).filter((r) => r.kind === "project");
+        return ok({ rulesets: all });
+      }
+      return ok({ project, ruleset: await repo.findProjectRuleset(project) });
+    },
+  },
+  {
+    // Promote personal rules into the project's mandatory ruleset.
+    //
+    // A COPY is taken, not a reference: the project must keep applying the rule
+    // even if its author edits, disables or deletes their own copy, and the
+    // admin needs to be able to reword it for a team audience. `promotedFrom`
+    // records who grew it, so promotion credits the author instead of quietly
+    // absorbing their work. The copy's ranking starts fresh — it is a new rule
+    // for everyone else on the project, so it gets a new-rule trial slot rather
+    // than inheriting hits earned in one person's reviews.
+    method: "POST",
+    pattern: /^\/api\/project-rules\/promote$/,
+    handler: async ({ principal, body, auth }, repo) => {
+      const p = requireAdmin(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const source = await repo.getRuleset(asString(b.rulesetId, "rulesetId"));
+      if (!source) throw new HttpError(404, "ruleset not found");
+      const project = normalizeProjectKey(
+        typeof b.project === "string" && b.project ? b.project : source.project,
+      );
+      // A mandatory rule has to be mandatory FOR something: an "any project"
+      // source ruleset carries no project key, so the caller must name one.
+      if (!project) throw new HttpError(400, "field 'project' is required for an 'any project' ruleset");
+      const wanted = new Set(
+        (Array.isArray(b.titles) ? b.titles : [])
+          .filter((t): t is string => typeof t === "string")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean),
+      );
+      if (!wanted.size) throw new HttpError(400, "field 'titles' must contain at least one rule title");
+      // Only rules IN EFFECT can be promoted: making the project depend on a
+      // rule its author has switched off would be a rule nobody is running.
+      const picked = source.rules.filter(
+        (r) => wanted.has(r.title.trim().toLowerCase()) && !r.pending && !r.disabled,
+      );
+      if (!picked.length) throw new HttpError(400, "none of those rules are in effect on that ruleset");
+
+      const now = new Date().toISOString();
+      const names = await displayNames(repo);
+      const copies: ReviewRule[] = picked.map((r) => {
+        const { hits: _hits, lastHitAt: _lastHitAt, pending: _p, disabled: _d, ...rule } = r;
+        return {
+          ...rule,
+          createdAt: now,
+          promotedFrom: {
+            ownerId: source.ownerId,
+            ...(names.get(source.ownerId) ? { ownerName: names.get(source.ownerId)! } : {}),
+            rulesetId: source.id,
+            title: r.title,
+            at: now,
+            by: p.userId,
+          },
+        };
+      });
+
+      const projectLabel =
+        typeof b.projectLabel === "string" && b.projectLabel
+          ? b.projectLabel
+          : source.project === project
+            ? source.projectLabel || project
+            : project;
+      const existing = await repo.findProjectRuleset(project);
+      if (existing) {
+        // De-duplicate on (title, instruction): re-promoting the same rule from
+        // two people's rulesets should not double it in every review.
+        const seen = new Set(existing.rules.map((r) => `${r.title}\0${r.instruction}`));
+        const fresh = copies.filter((r) => !seen.has(`${r.title}\0${r.instruction}`));
+        const updated = await repo.updateRuleset(existing.id, existing.ownerId, {
+          rules: [...existing.rules, ...fresh],
+        });
+        return ok({ ruleset: updated, added: fresh.length, skipped: copies.length - fresh.length });
+      }
+      const name = `${projectLabel} 项目必选规则`;
+      const created = await repo.createRuleset({
+        ownerId: p.userId,
+        ownerEmail: await principalEmail(p, repo, auth),
+        ownerHandle: await principalHandle(p, repo, auth),
+        project,
+        projectLabel,
+        name,
+        slug: slugify(name),
+        description: "管理员从个人规则中提升的项目级必选规则",
+        // Never public: this is not a community ruleset to install or fork, and
+        // reviews reach it through the project layer, not through discovery.
+        visibility: "private",
+        kind: "project",
+        language: "",
+        focus: "",
+        instructions: "",
+        rules: copies,
+      });
+      return ok({ ruleset: created, added: copies.length, skipped: 0 }, 201);
+    },
+  },
+  {
+    // Take rules back out of the project's mandatory ruleset. Titles, not ids,
+    // because that is what the UI (and the rule-hit report) works in.
+    method: "POST",
+    pattern: /^\/api\/project-rules\/demote$/,
+    handler: async ({ principal, body }, repo) => {
+      requireAdmin(principal);
+      const b = (body ?? {}) as Record<string, unknown>;
+      const project = normalizeProjectKey(asString(b.project, "project"));
+      const ruleset = await repo.findProjectRuleset(project);
+      if (!ruleset) throw new HttpError(404, "no project-level ruleset for that project");
+      const wanted = new Set(
+        (Array.isArray(b.titles) ? b.titles : [])
+          .filter((t): t is string => typeof t === "string")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean),
+      );
+      if (!wanted.size) throw new HttpError(400, "field 'titles' must contain at least one rule title");
+      const rules = ruleset.rules.filter((r) => !wanted.has(r.title.trim().toLowerCase()));
+      const removed = ruleset.rules.length - rules.length;
+      if (!removed) return ok({ ruleset, removed: 0 });
+      const updated = await repo.updateRuleset(ruleset.id, ruleset.ownerId, { rules });
+      return ok({ ruleset: updated, removed });
+    },
+  },
+  {
     // A review reports which rules actually CAUGHT something, so the ranking can
     // float them up next time. Allowed for the owner and for any PUBLIC ruleset:
     // a shared ruleset only improves if the people using it feed hits back.
@@ -1098,15 +1274,16 @@ const ROUTES: Route[] = [
     },
   },
   {
-    // The rules a review should actually apply, merged and ranked as ONE pool.
+    // The rules a review should actually apply, merged and ranked as ONE budget
+    // split across three layers (project-level / own / other people's).
     //
     // The skill used to have only the unauthenticated public-discovery endpoint,
     // so a user's OWN auto-grown rules — created private by default — were never
     // loaded at all, and only applied if they manually published the ruleset and
     // named themselves as the reviewer. This endpoint authenticates, so it can
-    // include them, and merges them with a named reviewer's PUBLIC rules into a
-    // single ranked selection sharing one budget: own rules and borrowed rules
-    // compete on equal terms, by the same hit-count ranking.
+    // include them, and pools them with the rules of everyone else working on
+    // the SAME project plus any named reviewer's public ones — with a floor per
+    // layer, so no single person's ruleset can take the whole prompt.
     //
     // Each returned rule carries `rulesetId` so hits can be reported back to the
     // ruleset that owns it (rules from different rulesets can share a title).
@@ -1120,8 +1297,27 @@ const ROUTES: Route[] = [
       const governs = (r: ReviewRuleset): boolean =>
         !project || r.project === "" || r.project === project;
 
-      // Own rulesets — including PRIVATE ones, which is the whole point.
-      const own = (await repo.listRulesetsByOwner(p.userId)).filter(governs);
+      // Own rulesets — including PRIVATE ones, which is the whole point. The
+      // project-level ruleset is excluded here even when the caller happens to
+      // own it: it is its own layer below, with its own reserved budget.
+      const own = (await repo.listRulesetsByOwner(p.userId))
+        .filter(governs)
+        .filter((r) => r.kind !== "project");
+      // The project's MANDATORY ruleset: an admin curates it by promoting
+      // personal rules into it, and it applies to everyone reviewing the
+      // project — the caller does not opt in and cannot opt out.
+      const mandatory = project ? await repo.findProjectRuleset(project) : null;
+      // TEAMMATES' rules for this same project, whatever their visibility.
+      // Reviewing with a colleague's accumulated rules is the whole point of
+      // pooling them: they hit the same pitfalls in the same code, and their
+      // auto-grown ruleset is private by default, so nothing would be shared if
+      // this waited for people to publish. Requires an explicit project key —
+      // without one this would pull in every ruleset on the server.
+      const teammates = project
+        ? (await repo.listRulesetsForProject(project)).filter(
+            (r) => r.ownerId !== p.userId && r.kind !== "project",
+          )
+        : [];
       // A named reviewer contributes only their PUBLIC rulesets, never private.
       // The caller may name them however they know them — display name, handle,
       // or email local part — so resolve to the canonical handle here rather
@@ -1131,11 +1327,19 @@ const ROUTES: Route[] = [
         ? await resolveReviewerHandle(repo, rawReviewer)
         : { handle: "", name: "", ambiguous: false };
       const reviewer = resolved.handle;
-      const borrowed = reviewer
+      const borrowedRaw = reviewer
         ? (await repo.listPublicRulesets()).filter(
-            (r) => r.ownerHandle === reviewer && r.ownerId !== p.userId && governs(r),
+            (r) =>
+              r.ownerHandle === reviewer &&
+              r.ownerId !== p.userId &&
+              r.kind !== "project" &&
+              governs(r),
           )
         : [];
+      // A named reviewer working on this same project is already in `teammates`;
+      // naming them adds their "any project" rulesets, not a second copy.
+      const teammateIds = new Set(teammates.map((r) => r.id));
+      const borrowed = borrowedRaw.filter((r) => !teammateIds.has(r.id));
 
       const rawLimit = query.get("limit");
       const parsedLimit = rawLimit === null || rawLimit === "" ? NaN : Number(rawLimit);
@@ -1143,31 +1347,48 @@ const ROUTES: Route[] = [
         ? Math.min(Math.floor(parsedLimit), RULE_LOAD_POLICY.maxLimit)
         : RULE_LOAD_POLICY.defaultLimit;
 
-      // One pool, one budget: merge every contributing ruleset's rules, tag each
-      // with its origin, then rank the lot together.
-      const pool = [...own, ...borrowed].flatMap((rs) =>
-        rs.rules.map((rule) => ({ ...rule, rulesetId: rs.id })),
+      // One budget, three LAYERS. Ranking the pool flat would let whoever has
+      // the most-hit rules take the whole prompt: a big-ruleset teammate would
+      // bury the rules you just grew, and a personal favourite would bury what
+      // the project requires. So each layer has a floor and is ranked inside it.
+      const layerOf = (rs: ReviewRuleset): RuleLayer =>
+        rs.kind === "project" ? "project" : rs.ownerId === p.userId ? "own" : "others";
+      const contributors = [...(mandatory ? [mandatory] : []), ...own, ...teammates, ...borrowed];
+      const pool = contributors.flatMap((rs) =>
+        rs.rules.map((rule) => ({ ...rule, rulesetId: rs.id, layer: layerOf(rs) })),
       );
-      const ranked = rankRules(pool, { limit });
+      const ranked = rankLayered(pool, { limit });
 
       // Freeform focus/instructions always apply and are NOT part of the rule
       // budget — they are per-ruleset prose, not selector-matched rules. Only
       // describe sources that actually contributed a selected rule, plus any
       // whose prose applies, so the skill isn't told about irrelevant rulesets.
       const contributing = new Set(ranked.rules.map((r) => r.rulesetId));
-      const sources = [...own, ...borrowed]
+      const names = await displayNames(repo);
+      const sources = contributors
         .filter((rs) => contributing.has(rs.id) || rs.focus.trim() || rs.instructions.trim())
-        .map((rs) => ({
-          rulesetId: rs.id,
-          name: rs.name,
-          origin: rs.ownerId === p.userId ? ("self" as const) : ("borrowed" as const),
-          ownerHandle: rs.ownerHandle,
-          project: rs.project,
-          focus: rs.focus,
-          instructions: rs.instructions,
-          language: rs.language,
-          rulesSelected: ranked.rules.filter((r) => r.rulesetId === rs.id).length,
-        }));
+        .map((rs) => {
+          const layer = layerOf(rs);
+          return {
+            rulesetId: rs.id,
+            name: rs.name,
+            // `project` is the new one: rules the project imposes on everyone.
+            // `self` is yours; `others` is a teammate's or a named reviewer's.
+            origin: layer === "own" ? ("self" as const) : layer,
+            // Whose rules these are, in a form worth showing a human — a review
+            // says "applied N rules from <person>", and a handle can be a
+            // 64-char subject.
+            ownerHandle: rs.ownerHandle,
+            ownerName: layer === "project" ? "" : names.get(rs.ownerId) || rs.ownerHandle,
+            /** Project-level rules are not optional: apply every one that matches. */
+            mandatory: layer === "project",
+            project: rs.project,
+            focus: rs.focus,
+            instructions: rs.instructions,
+            language: rs.language,
+            rulesSelected: ranked.rules.filter((r) => r.rulesetId === rs.id).length,
+          };
+        });
 
       return ok({
         ...(project ? { project } : {}),

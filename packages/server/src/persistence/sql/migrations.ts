@@ -235,6 +235,17 @@ export const MIGRATIONS: readonly Migration[] = [
       ALTER TABLE skill_usage ADD COLUMN change_key TEXT;
     `,
   },
+  {
+    // Project-level rulesets: one per project key, curated by an admin from
+    // promoted personal rules, mandatory for everyone reviewing that project.
+    // Existing rows are personal — the default keeps them that way without a
+    // backfill.
+    id: "0013_ruleset_kind",
+    up: () => `
+      ALTER TABLE rulesets ADD COLUMN kind TEXT NOT NULL DEFAULT 'personal';
+      CREATE INDEX IF NOT EXISTS idx_rulesets_project_kind ON rulesets (project, kind);
+    `,
+  },
 ];
 
 /**
