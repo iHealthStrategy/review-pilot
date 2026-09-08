@@ -582,6 +582,12 @@ export class MemoryRepository implements Repository {
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
   }
 
+  async listAllRulesets(): Promise<ReviewRuleset[]> {
+    return Object.values(this.data.rulesets).sort((a, b) =>
+      a.updatedAt < b.updatedAt ? 1 : -1,
+    );
+  }
+
   async updateRuleset(
     id: string,
     ownerId: string,

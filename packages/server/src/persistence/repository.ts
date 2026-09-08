@@ -328,6 +328,12 @@ export interface Repository {
     project: string,
   ): Promise<ReviewRuleset | null>;
   listPublicRulesets(): Promise<ReviewRuleset[]>;
+  /**
+   * EVERY ruleset, newest-updated first — the admin overview of what rules each
+   * person has grown. This is the only read that returns other people's PRIVATE
+   * rulesets, so every caller must gate it on the admin role.
+   */
+  listAllRulesets(): Promise<ReviewRuleset[]>;
   /** Update is owner-scoped: a non-owner edit throws EntityNotFoundError. */
   updateRuleset(id: string, ownerId: string, patch: UpdateRulesetPatch): Promise<ReviewRuleset>;
   deleteRuleset(id: string, ownerId: string): Promise<void>;

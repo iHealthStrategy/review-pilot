@@ -1137,6 +1137,13 @@ export class SqlRepository implements Repository {
     return rows.map(toRuleset);
   }
 
+  async listAllRulesets(): Promise<ReviewRuleset[]> {
+    const rows = await this.client.all<RulesetRow>(
+      `SELECT * FROM rulesets ORDER BY updated_at DESC`,
+    );
+    return rows.map(toRuleset);
+  }
+
   async updateRuleset(
     id: string,
     ownerId: string,

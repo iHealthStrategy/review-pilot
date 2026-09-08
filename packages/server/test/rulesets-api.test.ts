@@ -159,6 +159,43 @@ test("rulesets: anyone may read a public one in full; an admin may edit someone 
     assert.equal(adminOwn.length, 0);
   }));
 
+test("rulesets: ?scope=all is the admin overview — everyone's rulesets, private included", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    const root = await register(repo, "root@x.com", "admin");
+    await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: auth(alice),
+      body: JSON.stringify({
+        name: "Alice Private",
+        visibility: "private",
+        instructions: "secret",
+        rules: [{ title: "SQL", instruction: "no injection", globs: ["**/*.sql"] }],
+      }),
+    });
+    await fetch(`${base}/api/rulesets`, {
+      method: "POST",
+      headers: auth(bob),
+      body: JSON.stringify({ name: "Bob Public", visibility: "public", instructions: "x" }),
+    });
+
+    const all = (await (await fetch(`${base}/api/rulesets?scope=all`, { headers: auth(root) })).json()) as any[];
+    assert.deepEqual(all.map((r) => r.name).sort(), ["Alice Private", "Bob Public"]);
+    // The overview must carry the rules themselves and a readable owner name —
+    // it is what an admin reads instead of opening each ruleset one by one.
+    const priv = all.find((r) => r.name === "Alice Private")!;
+    assert.equal(priv.rules[0].title, "SQL");
+    assert.equal(priv.ownerName, "alice@x.com");
+
+    // A non-admin gets 403 rather than a silently narrowed list: a member who
+    // asked for everyone's rules must not mistake their own for the whole set.
+    assert.equal((await fetch(`${base}/api/rulesets?scope=all`, { headers: auth(bob) })).status, 403);
+    // …and their own listing is unaffected.
+    const bobOwn = (await (await fetch(`${base}/api/rulesets`, { headers: auth(bob) })).json()) as any[];
+    assert.deepEqual(bobOwn.map((r) => r.name), ["Bob Public"]);
+  }));
+
 test("rulesets: register assigns a handle; public discovery by handle is unauthenticated", () =>
   withApi(async (base, repo) => {
     // Two users share an email local-part → handles must stay unique.

@@ -51,6 +51,13 @@ test("web build emits a static index.html artifact", async () => {
   }
   assert.match(html, /近 7 天/);
   assert.doesNotMatch(html, /data-bucket=/, "the granularity control is gone");
+  // Admin overview of everyone's rulesets (private ones included), grouped by
+  // user, with a filter — and the usage table's 规则贡献 cell links into it.
+  assert.match(html, /\/api\/rulesets\?scope=all/);
+  assert.match(html, /全部用户规则集/);
+  assert.match(html, /id="rs-admin-filter"/);
+  assert.match(html, /id="rs-admin-list"/);
+  assert.match(html, /data-rules-of=/);
 });
 
 test("the embedded app script is syntactically valid JS", async () => {
