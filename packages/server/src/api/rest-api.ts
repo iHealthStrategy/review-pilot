@@ -1214,9 +1214,19 @@ const ROUTES: Route[] = [
         : [];
       const ruleset = await repo.getRuleset(params.id!);
       if (!ruleset) throw new HttpError(404, "ruleset not found");
+      // Whoever could have been HANDED the rule may report that it caught
+      // something — otherwise a rule that reaches people through the project
+      // pool can never record a hit, so can never climb its own ranking, and
+      // the project's mandatory rules would sit at zero for everyone but the
+      // admin who owns the row. That means: the owner, any PUBLIC ruleset
+      // (anyone may borrow it), and any ruleset carrying a PROJECT key —
+      // personal or mandatory, those are loaded for everyone reviewing that
+      // project. An "any project" private ruleset stays owner-only: nobody
+      // else is ever sent its rules.
       const mayReport =
         ruleset.ownerId === p.userId ||
         ruleset.visibility === "public" ||
+        ruleset.project !== "" ||
         roleAtLeast(p.role, "admin");
       if (!mayReport) throw new HttpError(403, "cannot report hits on a private ruleset you do not own");
       if (!titles.length) return ok({ matched: 0, updated: false });

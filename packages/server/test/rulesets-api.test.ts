@@ -485,11 +485,40 @@ test("rule hits: anyone may report on a PUBLIC ruleset; a private one only its o
 
     // A shared ruleset only improves if its users feed hits back.
     assert.equal((await report(pub.id, stranger)).status, 200);
-    // A private ruleset must not be rankable by outsiders.
+    // An "any project" private ruleset must not be rankable by outsiders — its
+    // rules are never sent to anyone else, so nobody else has a hit to report.
     assert.equal((await report(priv.id, stranger)).status, 403);
     assert.equal((await report(priv.id, owner)).status, 200);
     // Reporting is never anonymous.
     assert.equal((await report(pub.id)).status, 401);
+  }));
+
+test("rule hits: a teammate may report on a PROJECT-scoped ruleset, private or mandatory", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    const root = await register(repo, "root@x.com", "admin");
+    // Alice's private rules for this project are loaded for Bob too, so Bob has
+    // to be able to report that one of them caught something — a rule he cannot
+    // report on can never climb out of the untried pool.
+    const hers = await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P, rules: [mkRule("hers")],
+    });
+    const report = (id: string, token: string, titles: string[]) =>
+      fetch(`${base}/api/rulesets/${id}/rule-hits`, {
+        method: "POST", headers: auth(token), body: JSON.stringify({ titles }),
+      });
+    assert.equal((await report(hers.id, bob, ["hers"])).status, 200);
+    assert.equal((await repo.getRuleset(hers.id))!.rules[0]!.hits, 1);
+
+    // Same for the project's MANDATORY ruleset, which is private and owned by
+    // the admin who promoted into it: without this its rules stay at zero hits
+    // for everyone, and the ranking inside the project layer learns nothing.
+    const { ruleset: mandatory } = (await (await promote(base, root, {
+      rulesetId: hers.id, titles: ["hers"],
+    })).json()) as any;
+    assert.equal((await report(mandatory.id, bob, ["hers"])).status, 200);
+    assert.equal((await repo.getRuleset(mandatory.id))!.rules[0]!.hits, 1);
   }));
 
 test("rule hits survive an owner edit that resends the whole rules array", () =>
