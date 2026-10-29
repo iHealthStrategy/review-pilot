@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ReviewRuleset } from "../domain/entities.js";
 import { FINDING_SCHEMA_FIELDS, REVIEW_DIMENSIONS } from "../review/prompt.js";
 import { rankRules } from "../review/rule-ranking.js";
@@ -223,6 +224,12 @@ const SKILL_ALLOWED_TOOLS =
   "Bash(curl *) Bash(code-review-graph*) Read Edit Write";
 
 /**
+ * The orchestrator additionally runs the self-update script it downloads (step
+ * 3b). Only that one file name is pre-authorized, not `sh` in general.
+ */
+const ORCHESTRATOR_ALLOWED_TOOLS = `${SKILL_ALLOWED_TOOLS} Bash(sh *update.sh)`;
+
+/**
  * A confirmation banner the skill must emit as its first output line, so the
  * user can tell at a glance that THIS skill actually ran (vs a generic review).
  * Shared by both skills.
@@ -297,6 +304,42 @@ export function buildOrchestratorSkill(
   token = "",
   platform: SkillPlatform = "claude",
 ): string {
+  return renderOrchestrator(baseUrl, token, platform, skillBuildVersion(platform));
+}
+
+/**
+ * The version a skill build carries: a hash of the build's own TEMPLATE (no
+ * server URL, no token), so it changes exactly when the skill text changes and
+ * nobody has to remember to bump a number. Baked into the skill as a marker and
+ * sent back on every rules request (`sv`), which is how the server knows a
+ * given install is behind.
+ */
+function skillBuildVersion(platform: SkillPlatform): string {
+  return createHash("sha256")
+    .update(renderOrchestrator("", "", platform, ""))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+let currentSkillVersions: Set<string> | undefined;
+
+/**
+ * True when `sv` — the version a skill reported — is NOT one of the builds the
+ * server hands out today. An absent `sv` is never outdated: skills that predate
+ * self-update do not send it, and must see exactly the response they always did.
+ */
+export function skillIsOutdated(sv: string | null | undefined): boolean {
+  if (!sv) return false;
+  currentSkillVersions ??= new Set(SKILL_PLATFORMS.map(skillBuildVersion));
+  return !currentSkillVersions.has(sv);
+}
+
+function renderOrchestrator(
+  baseUrl: string,
+  token: string,
+  platform: SkillPlatform,
+  version: string,
+): string {
   const spec = PLATFORMS[platform];
   const base = baseUrl.replace(/\/+$/, "");
   // Resolve to a shell expression: prefer the baked origin, else an env var.
@@ -324,7 +367,8 @@ description: >-
   push → open PR). Covers the working-tree diff, a branch diff, or a checked-out PR.
   Reports only must-fix (major/critical) by default; adjust in natural language
   ("也看次要的" / "显示全部").
-${spec.allowedTools ? `allowed-tools: ${SKILL_ALLOWED_TOOLS}\n` : ""}---
+${spec.allowedTools ? `allowed-tools: ${ORCHESTRATOR_ALLOWED_TOOLS}\n` : ""}---
+<!-- reviewpilot-skill-version: ${version} -->
 
 # ReviewPilot — local code review (orchestrator)
 
@@ -404,7 +448,7 @@ CACHE="$HOME/.reviewpilot/cache"
 mkdir -p "$CACHE"
 if [ -n "$BASE" ] && [ -n "$TOKEN" ]; then
   curl -fsS -H "Authorization: Bearer $TOKEN" \\
-    "$BASE/api/review-rules?project=$PROJECT&reviewer=$HANDLE" -o "$CACHE/rules.json" \\
+    "$BASE/api/review-rules?project=$PROJECT&reviewer=$HANDLE&sv=${version}" -o "$CACHE/rules.json" \\
     || echo "(offline — using cached $CACHE/rules.json if present)"
 elif [ -n "$BASE" ] && [ -n "$HANDLE" ]; then
   # No token: fall back to public-only discovery for the named reviewer.
@@ -454,6 +498,24 @@ a rotating handful of untried ones. Work with exactly what you were sent:
 
 If the fetch fails and there is no cache, say so and continue as a generic review
 rather than stopping.
+
+### 3b. Keep this skill current (only when the response asks for it)
+If — and only if — the JSON from step 3 has \`"skillUpdate": true\`, the server has
+a newer build of this skill. Install it now, with this one command (the new text
+takes effect from the NEXT review: keep following THIS file for the rest of the
+run, do not re-read it or switch mid-review):
+
+\`\`\`sh
+BASE=${urlExpr}
+TOKEN=${tokenExpr}
+CACHE="$HOME/.reviewpilot/cache"
+curl -fsS -H "Authorization: Bearer $TOKEN" "$BASE/skill/${platform}/update.sh${token ? "" : "?bake=0"}" -o "$CACHE/update.sh" && sh "$CACHE/update.sh"
+\`\`\`
+
+Then add one line to the report: "ReviewPilot skill 已自动更新,下次评审生效". If
+the command fails for any reason, say nothing and carry on — an update problem
+must never get in the way of a review. When there is no \`skillUpdate\` field, do
+nothing here.
 
 ## 4. Select ONLY the relevant rules (locally — code never leaves this machine)
 First get the changed file paths for the chosen scope (see step 5). Then decide
@@ -1045,5 +1107,44 @@ fi
 
 ${hintBlock}
 echo "  Tip: export REVIEWPILOT_TOKEN=rpat_…  to auto-grow your project's rules (account page)"
+`;
+}
+
+/**
+ * The script a self-updating skill runs (step 3b). Unlike the installer it is
+ * non-interactive and touches nothing but SKILL.md: no MCP registration, no
+ * prompts. The new text is staged beside the old file, checked for its version
+ * marker, the old one is kept as `SKILL.md.bak`, and only then moved into place
+ * — the move is the LAST command, so a download cut short leaves the installed
+ * skill exactly as it was.
+ */
+export function buildUpdateScript(
+  skillMd: string,
+  dirName: string = SKILL_NAME,
+  platform: SkillPlatform = "claude",
+): string {
+  const spec = PLATFORMS[platform];
+  const [primary, ...mirrors] = spec.dirs(dirName);
+  const marker = /reviewpilot-skill-version: ([0-9a-f]+)/.exec(skillMd)?.[1] ?? "";
+  // Mirrors (Codex reads two locations) are copied from the staged file and are
+  // never fatal: the primary install is what counts.
+  const mirrorBlock = mirrors
+    .map(
+      (d) => `if mkdir -p "${d}" && cp "$DIR/SKILL.md.new" "${d}/SKILL.md.tmp"; then
+  if [ -f "${d}/SKILL.md" ]; then cp "${d}/SKILL.md" "${d}/SKILL.md.bak"; fi
+  mv "${d}/SKILL.md.tmp" "${d}/SKILL.md"
+fi`,
+    )
+    .join("\n");
+  return `#!/bin/sh
+set -e
+DIR="${primary}"
+mkdir -p "$DIR"
+cat > "$DIR/SKILL.md.new" <<'REVIEWPILOT_SKILL_EOF'
+${skillMd}REVIEWPILOT_SKILL_EOF
+grep -q "reviewpilot-skill-version: ${marker}" "$DIR/SKILL.md.new"
+${mirrorBlock ? mirrorBlock + "\n" : ""}if [ -f "$DIR/SKILL.md" ]; then cp "$DIR/SKILL.md" "$DIR/SKILL.md.bak"; fi
+mv "$DIR/SKILL.md.new" "$DIR/SKILL.md"
+echo "✓ ReviewPilot skill updated → $DIR/SKILL.md"
 `;
 }

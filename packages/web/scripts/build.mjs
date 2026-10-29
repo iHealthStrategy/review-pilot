@@ -537,7 +537,8 @@ const html = `<!doctype html>
         <form id="promote-form">
           <div class="field">
             <label>目标项目</label>
-            <input name="project" placeholder="github.com/acme/app" required />
+            <input name="project" placeholder="github.com/acme/app" />
+            <label style="display:flex;gap:.4rem;align-items:center;margin-top:.4rem"><input type="checkbox" name="global" style="width:auto" />提升为<b>全局必选</b>(所有项目的每次 review 都检查,无需填项目)</label>
           </div>
           <div class="field">
             <label>选择要提升的规则</label>
@@ -1360,9 +1361,10 @@ const html = `<!doctype html>
         document.getElementById("promote-result").textContent = "";
         f.dataset.rulesetId = rs.id;
         f.project.value = rs.project || "";
+        f.global.checked = false;
         document.getElementById("promote-note").innerHTML =
           \`来源规则集:<b>\${esc(rs.name)}</b> · 作者 \${esc(rs.ownerName || rs.ownerHandle || "—")}\` +
-          (rs.project ? "" : " · 该规则集适用所有项目,请填写要提升到哪个项目");
+          (rs.project ? "" : " · 该规则集适用所有项目,请填写要提升到哪个项目,或勾选全局必选");
         const live = (rs.rules || []).filter((r) => !r.pending && !r.disabled);
         box.innerHTML = live.length
           ? live.map((r, i) => \`<label class="promote-row">
@@ -1381,13 +1383,17 @@ const html = `<!doctype html>
           .filter((c) => c.checked)
           .map((c) => c.getAttribute("data-promote-title"));
         if (!titles.length) { out.textContent = "✗ 请至少勾选一条规则"; return; }
+        const isGlobal = f.global.checked;
+        if (!isGlobal && !f.project.value.trim()) { out.textContent = "✗ 请填写目标项目,或勾选全局必选"; return; }
         const btn = f.querySelector('button[type="submit"]');
         btn.disabled = true; out.textContent = "";
         try {
           const res = await api("/api/project-rules/promote", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rulesetId: f.dataset.rulesetId, project: f.project.value, titles }),
+            body: JSON.stringify(isGlobal
+              ? { rulesetId: f.dataset.rulesetId, global: true, titles }
+              : { rulesetId: f.dataset.rulesetId, project: f.project.value, titles }),
           });
           closeModal("promote-modal");
           // Say what was skipped: re-promoting an existing rule is a no-op, and
@@ -1531,12 +1537,17 @@ const html = `<!doctype html>
         document.querySelectorAll("#rulesets [data-demote-project]").forEach((b) =>
           (b.onclick = async () => {
             const title = b.getAttribute("data-demote-title");
-            if (!confirm(\`把「\${title}」移出该项目的必选规则?此后该项目的评审不再强制加载它。\`)) return;
+            const projectKey = b.getAttribute("data-demote-project");
+            if (!confirm(projectKey
+              ? \`把「\${title}」移出该项目的必选规则?此后该项目的评审不再强制加载它。\`
+              : \`把「\${title}」移出全局必选规则?此后所有项目的评审都不再强制加载它。\`)) return;
             try {
               await api("/api/project-rules/demote", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ project: b.getAttribute("data-demote-project"), titles: [title] }),
+                body: JSON.stringify(projectKey
+                  ? { project: projectKey, titles: [title] }
+                  : { global: true, titles: [title] }),
               });
               renderRulesets();
             } catch (e) { alert(e.message); }

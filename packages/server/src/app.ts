@@ -28,6 +28,7 @@ import {
   buildInstallScript,
   buildOrchestratorSkill,
   buildReviewSkill,
+  buildUpdateScript,
   rulesetSkillName,
 } from "./skill/review-skill.js";
 import type { SkillPlatform } from "./skill/review-skill.js";
@@ -217,6 +218,27 @@ export function createAppHandler(deps: AppDeps) {
         res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8" });
         res.end(md);
       }
+      return;
+    }
+    // Self-update for an installed orchestrator skill: the same SKILL.md as the
+    // installer, as a script that only rewrites that one file. Unlike the
+    // download above it REQUIRES the caller's token — the script bakes it into
+    // the new text, and answering a tokenless caller would overwrite a configured
+    // skill with an unconfigured one. `?bake=0` is for skills that read their
+    // token from REVIEWPILOT_TOKEN: the new text keeps reading it from there
+    // instead of having the token written into the file.
+    const update = /^\/skill(?:\/(claude|codex|cursor))?\/update\.sh$/.exec(path);
+    if (update) {
+      if (!installToken) {
+        res.writeHead(401, { "Content-Type": "application/json", "WWW-Authenticate": "Bearer" });
+        res.end(JSON.stringify({ error: "unauthorized: updating the skill requires your token" }));
+        return;
+      }
+      const platform = (update[1] ?? "claude") as SkillPlatform;
+      const bake = new URL(req.url ?? "/", "http://x").searchParams.get("bake") !== "0";
+      const md = buildOrchestratorSkill(baseUrl, bake ? installToken : "", platform);
+      res.writeHead(200, { "Content-Type": "text/x-shellscript; charset=utf-8" });
+      res.end(buildUpdateScript(md, SKILL_NAME, platform));
       return;
     }
     // Per-ruleset skill: public → open; private → requires the owner's token.

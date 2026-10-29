@@ -44,7 +44,7 @@ import {
 } from "../usage/aggregate.js";
 import { SKILL_FINDING_LIMITS } from "../domain/entities.js";
 import type { SkillFinding } from "../domain/entities.js";
-import { normalizeProjectKey, slugify } from "../skill/review-skill.js";
+import { normalizeProjectKey, skillIsOutdated, slugify } from "../skill/review-skill.js";
 import type { ReviewRule, ReviewRuleset, RulesetVisibility } from "../domain/entities.js";
 import { RULE_LOAD_POLICY } from "../domain/entities.js";
 import { applyRuleHits, rankLayered, rankRules, type RuleLayer } from "../review/rule-ranking.js";
@@ -1068,6 +1068,12 @@ const ROUTES: Route[] = [
     pattern: /^\/api\/project-rules$/,
     handler: async ({ principal, query }, repo) => {
       requirePrincipal(principal);
+      // `?global=1` is the ruleset every project is held to, stored as a project
+      // ruleset whose key is "". Asked for explicitly, never by omission: an empty
+      // `project` already means "list everything".
+      if (query.get("global") === "1") {
+        return ok({ global: true, ruleset: await repo.findProjectRuleset("") });
+      }
       const project = normalizeProjectKey(query.get("project") ?? "");
       if (!project) {
         const all = (await repo.listAllRulesets()).filter((r) => r.kind === "project");
@@ -1093,12 +1099,20 @@ const ROUTES: Route[] = [
       const b = (body ?? {}) as Record<string, unknown>;
       const source = await repo.getRuleset(asString(b.rulesetId, "rulesetId"));
       if (!source) throw new HttpError(404, "ruleset not found");
-      const project = normalizeProjectKey(
-        typeof b.project === "string" && b.project ? b.project : source.project,
-      );
+      // `global: true` promotes into the ruleset EVERY project's reviews load.
+      // It has to be asked for in so many words: a missing `project` stays an
+      // error, so a slip never makes a rule mandatory everywhere.
+      const isGlobal = b.global === true;
+      const project = isGlobal
+        ? ""
+        : normalizeProjectKey(
+            typeof b.project === "string" && b.project ? b.project : source.project,
+          );
       // A mandatory rule has to be mandatory FOR something: an "any project"
       // source ruleset carries no project key, so the caller must name one.
-      if (!project) throw new HttpError(400, "field 'project' is required for an 'any project' ruleset");
+      if (!project && !isGlobal) {
+        throw new HttpError(400, "field 'project' is required for an 'any project' ruleset");
+      }
       const wanted = new Set(
         (Array.isArray(b.titles) ? b.titles : [])
           .filter((t): t is string => typeof t === "string")
@@ -1131,8 +1145,9 @@ const ROUTES: Route[] = [
         };
       });
 
-      const projectLabel =
-        typeof b.projectLabel === "string" && b.projectLabel
+      const projectLabel = isGlobal
+        ? "全局"
+        : typeof b.projectLabel === "string" && b.projectLabel
           ? b.projectLabel
           : source.project === project
             ? source.projectLabel || project
@@ -1148,7 +1163,7 @@ const ROUTES: Route[] = [
         });
         return ok({ ruleset: updated, added: fresh.length, skipped: copies.length - fresh.length });
       }
-      const name = `${projectLabel} 项目必选规则`;
+      const name = isGlobal ? "全局必选规则" : `${projectLabel} 项目必选规则`;
       const created = await repo.createRuleset({
         ownerId: p.userId,
         ownerEmail: await principalEmail(p, repo, auth),
@@ -1157,7 +1172,9 @@ const ROUTES: Route[] = [
         projectLabel,
         name,
         slug: slugify(name),
-        description: "管理员从个人规则中提升的项目级必选规则",
+        description: isGlobal
+          ? "管理员从个人规则中提升的全局必选规则，所有项目的每次 review 都会加载"
+          : "管理员从个人规则中提升的项目级必选规则",
         // Never public: this is not a community ruleset to install or fork, and
         // reviews reach it through the project layer, not through discovery.
         visibility: "private",
@@ -1178,7 +1195,7 @@ const ROUTES: Route[] = [
     handler: async ({ principal, body }, repo) => {
       requireAdmin(principal);
       const b = (body ?? {}) as Record<string, unknown>;
-      const project = normalizeProjectKey(asString(b.project, "project"));
+      const project = b.global === true ? "" : normalizeProjectKey(asString(b.project, "project"));
       const ruleset = await repo.findProjectRuleset(project);
       if (!ruleset) throw new HttpError(404, "no project-level ruleset for that project");
       const wanted = new Set(
@@ -1317,6 +1334,11 @@ const ROUTES: Route[] = [
       // personal rules into it, and it applies to everyone reviewing the
       // project — the caller does not opt in and cannot opt out.
       const mandatory = project ? await repo.findProjectRuleset(project) : null;
+      // The GLOBAL mandatory ruleset: what every project is held to, whatever its
+      // key — and even when the caller has no project key at all (a repo with no
+      // remote still gets reviewed against it). It rides the same `project`
+      // layer, so a skill that predates "global" already treats it as mandatory.
+      const globalMandatory = await repo.findProjectRuleset("");
       // TEAMMATES' rules for this same project, whatever their visibility.
       // Reviewing with a colleague's accumulated rules is the whole point of
       // pooling them: they hit the same pitfalls in the same code, and their
@@ -1363,7 +1385,13 @@ const ROUTES: Route[] = [
       // the project requires. So each layer has a floor and is ranked inside it.
       const layerOf = (rs: ReviewRuleset): RuleLayer =>
         rs.kind === "project" ? "project" : rs.ownerId === p.userId ? "own" : "others";
-      const contributors = [...(mandatory ? [mandatory] : []), ...own, ...teammates, ...borrowed];
+      const contributors = [
+        ...(globalMandatory ? [globalMandatory] : []),
+        ...(mandatory ? [mandatory] : []),
+        ...own,
+        ...teammates,
+        ...borrowed,
+      ];
       const pool = contributors.flatMap((rs) =>
         rs.rules.map((rule) => ({ ...rule, rulesetId: rs.id, layer: layerOf(rs) })),
       );
@@ -1392,6 +1420,8 @@ const ROUTES: Route[] = [
             ownerName: layer === "project" ? "" : names.get(rs.ownerId) || rs.ownerHandle,
             /** Project-level rules are not optional: apply every one that matches. */
             mandatory: layer === "project",
+            /** True for the ruleset that applies to every project. */
+            global: layer === "project" && rs.project === "",
             project: rs.project,
             focus: rs.focus,
             instructions: rs.instructions,
@@ -1408,6 +1438,10 @@ const ROUTES: Route[] = [
         ...(rawReviewer && !reviewer
           ? { reviewerInput: rawReviewer, reviewerUnknown: true, reviewerAmbiguous: resolved.ambiguous }
           : {}),
+        // A skill reports the version it was built from (`sv`); only when that is
+        // not a current build do we say so. Skills that predate this send no `sv`
+        // and so never see the field — the response is unchanged for them.
+        ...(skillIsOutdated(query.get("sv")) ? { skillUpdate: true } : {}),
         ruleLimit: limit,
         ruleTotal: ranked.total,
         ruleOmitted: ranked.omitted,

@@ -6,6 +6,7 @@ import type { Platform } from "../src/domain/entities.js";
 import { MemoryRepository } from "../src/persistence/memory-repository.js";
 import type { Repository } from "../src/persistence/repository.js";
 import { TaskService } from "../src/trigger/trigger-service.js";
+import { buildOrchestratorSkill } from "../src/skill/review-skill.js";
 import { fixedClock, seqIdGen } from "./repository-contract.js";
 import { SpyProvider } from "./spy-provider.js";
 import { provisionUser } from "../src/auth/provision.js";
@@ -931,4 +932,78 @@ test("review-rules: hits reported via rulesetId feed straight back into the rank
     const after = await reviewRules(base, me, "?project=github.com/acme/app");
     assert.equal(after.rules[0].title, "useful", "the rule that caught something now leads");
     assert.equal(after.rules[0].hits, 1);
+  }));
+
+test("project-rules: a GLOBAL mandatory rule reaches every project, and even a review with no project", () =>
+  withApi(async (base, repo) => {
+    const alice = await register(repo, "alice@x.com");
+    const bob = await register(repo, "bob@x.com");
+    const root = await register(repo, "root@x.com", "admin");
+    const src = await mkSet(base, alice, {
+      name: "alice any", visibility: "private", project: "", rules: [mkRule("auth first")],
+    });
+
+    // Not by omission: an "any project" source with no `project` and no `global`
+    // is still an error, so a slip never makes a rule mandatory everywhere.
+    assert.equal((await promote(base, root, { rulesetId: src.id, titles: ["auth first"] })).status, 400);
+    // Only an admin decides what every project is held to.
+    assert.equal(
+      (await promote(base, bob, { rulesetId: src.id, titles: ["auth first"], global: true })).status,
+      403,
+    );
+    const res = await promote(base, root, { rulesetId: src.id, titles: ["auth first"], global: true });
+    assert.equal(res.status, 201);
+    const { ruleset } = (await res.json()) as any;
+    assert.equal(ruleset.kind, "project");
+    assert.equal(ruleset.project, "");
+
+    // Two unrelated projects, plus a review that could name none.
+    for (const qs of [`?project=${P}`, "?project=github.com/other/thing", ""]) {
+      const got = await reviewRules(base, bob, qs);
+      assert.equal(got.rules.find((r: any) => r.title === "auth first")?.layer, "project", qs);
+      const source = got.sources.find((s: any) => s.rulesetId === ruleset.id);
+      assert.equal(source.mandatory, true, qs);
+      assert.equal(source.global, true, qs);
+    }
+
+    // It rides the same layer as the project's own mandatory rules, and the two coexist.
+    const projSrc = await mkSet(base, alice, {
+      name: "alice on app", visibility: "private", project: P, rules: [mkRule("no raw SQL")],
+    });
+    await promote(base, root, { rulesetId: projSrc.id, titles: ["no raw SQL"] });
+    const both = await reviewRules(base, bob, `?project=${P}`);
+    assert.deepEqual(
+      both.rules.filter((r: any) => r.layer === "project").map((r: any) => r.title).sort(),
+      ["auth first", "no raw SQL"],
+    );
+    assert.equal(
+      (await reviewRules(base, bob, "?project=github.com/other/thing")).rules.some(
+        (r: any) => r.title === "no raw SQL",
+      ),
+      false,
+      "the project's own rule stays with its project",
+    );
+
+    // Readable by anyone held to it; demotable only by an admin, by `global`.
+    assert.equal((await projectRules(base, bob, "?global=1")).ruleset.id, ruleset.id);
+    const demote = (token: string) =>
+      fetch(`${base}/api/project-rules/demote`, {
+        method: "POST", headers: auth(token), body: JSON.stringify({ global: true, titles: ["auth first"] }),
+      });
+    assert.equal((await demote(bob)).status, 403);
+    assert.equal(((await (await demote(root)).json()) as any).removed, 1);
+    assert.equal(
+      (await reviewRules(base, bob, "")).rules.some((r: any) => r.title === "auth first"),
+      false,
+    );
+  }));
+
+test("review-rules: skillUpdate appears only for a skill that reports an old version", () =>
+  withApi(async (base, repo) => {
+    const bob = await register(repo, "bob@x.com");
+    // A skill from before self-update sends no `sv`: its response is unchanged.
+    assert.equal("skillUpdate" in (await reviewRules(base, bob, `?project=${P}`)), false);
+    assert.equal((await reviewRules(base, bob, `?project=${P}&sv=deadbeef0000`)).skillUpdate, true);
+    const current = /reviewpilot-skill-version: ([0-9a-f]+)/.exec(buildOrchestratorSkill("", "", "claude"))![1];
+    assert.equal("skillUpdate" in (await reviewRules(base, bob, `?project=${P}&sv=${current}`)), false);
   }));
