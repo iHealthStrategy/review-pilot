@@ -600,6 +600,8 @@ groups repeated reviews of the same change.
 If \`code-review-graph\` is installed (check \`code-review-graph --version\`, or use
 its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
 gaps for the changed files and prioritise the review accordingly. Skip if absent.
+Use it as installed: never start it through \`uvx\` with a version, \`--from\` or
+\`--with\` — each such launch makes uv build and keep another ~440 MB environment.
 
 ## 7. Review, rate severity & present
 Look for ${REVIEW_DIMENSIONS}, and apply the selected ruleset rules + freeform
@@ -977,6 +979,8 @@ patches. Open and read surrounding code in the repo as needed for context.
 If \`code-review-graph\` is installed (check \`code-review-graph --version\`, or use
 its MCP tools), get risk-scored hotspots, impacted callers, and test-coverage
 gaps for the changed files and prioritise the review accordingly. Skip if absent.
+Use it as installed: never start it through \`uvx\` with a version, \`--from\` or
+\`--with\` — each such launch makes uv build and keep another ~440 MB environment.
 
 ## 4. Review & rate severity
 Look for ${REVIEW_DIMENSIONS}${ruleset ? ", and apply the ruleset's rules above" : ""}.
@@ -1059,12 +1063,33 @@ echo "✓ Installed the ReviewPilot review skill (${spec.label}) → $DIR/SKILL.
 ${mirrorBlock ? mirrorBlock + "\n" : ""}
 # Optional structural-context engine: code-review-graph as a user-scoped MCP, so
 # the skill's risk-hotspot / impacted-caller / test-gap step works in every
-# project. The skill works fine WITHOUT it. uvx fetches the package lazily on
-# first launch. If uv is missing we interactively offer to install it (reading
-# the answer from /dev/tty so it works even under \`curl … | sh\`); skipping is
-# safe, and a non-interactive run (CI) skips automatically. Never fatal.
+# project. The skill works fine WITHOUT it. If uv is missing we interactively
+# offer to install it (reading the answer from /dev/tty so it works even under
+# \`curl … | sh\`); skipping is safe, and a non-interactive run (CI) skips
+# automatically. Never fatal.
+#
+# The tool is INSTALLED once (\`uv tool install\`) rather than left to bare uvx.
+# An MCP server starts every day, and bare \`uvx code-review-graph\` re-resolves
+# its ~70 dependencies each time: any one of them releasing builds a whole new
+# ~440 MB cached environment that uv never cleans up (tens of GB in months).
+# Once installed, the same \`uvx code-review-graph serve\` launch reuses that
+# single fixed environment — so this also repairs MCPs registered earlier.
 GRAPH_CMD=${shQuote(spec.graph.cmdLabel)}
+pin_graph_tool() {
+  if uv tool list 2>/dev/null | grep -q "^code-review-graph "; then
+    echo "✓ code-review-graph already installed (one fixed environment)"
+    return 0
+  fi
+  echo "→ Installing code-review-graph once (uv tool install; ~440 MB, may take a minute) …"
+  if uv tool install code-review-graph >/dev/null 2>&1; then
+    echo "✓ Installed code-review-graph. Upgrade later with:  uv tool upgrade code-review-graph"
+    echo "  Old per-day environments from earlier launches can be freed with:  uv cache prune"
+  else
+    echo "• Could not install code-review-graph (network?). Run later:  uv tool install code-review-graph"
+  fi
+}
 register_graph_mcp() {
+  pin_graph_tool
 ${spec.graph.register}
 }
 if [ -n "\${REVIEWPILOT_NO_GRAPH:-}" ]; then
@@ -1111,9 +1136,45 @@ echo "  Tip: export REVIEWPILOT_TOKEN=rpat_…  to auto-grow your project's rule
 }
 
 /**
+ * Silent repair for machines that ran the graph through bare `uvx`: every
+ * dependency release left another ~440 MB environment in uv's cache, and uv
+ * never removes them. Appended to the update script AFTER the skill is in
+ * place, detached and mute, so it can neither fail nor delay an update.
+ *
+ *  - Acts only where such cached environments exist — a machine that never used
+ *    the graph gets nothing installed.
+ *  - Installs the tool once; from then on the unchanged `uvx … serve` launch
+ *    reuses that one environment.
+ *  - Then deletes this tool's cached environments, skipping any a running
+ *    server was started from (its path is in the process list) — those go on a
+ *    later update. Nothing else in the cache is touched, and uv rebuilds a
+ *    deleted environment on demand, so this is safe to interrupt.
+ */
+const GRAPH_HOUSEKEEPING = `(
+  trap '' HUP
+  command -v uv >/dev/null 2>&1 || exit 0
+  CACHE_DIR=$(uv cache dir 2>/dev/null) || exit 0
+  [ -n "$CACHE_DIR" ] || exit 0
+  ARCH="$CACHE_DIR/archive-v0"
+  set -- "$ARCH"/*/bin/code-review-graph
+  [ -e "$1" ] || exit 0
+  uv tool list 2>/dev/null | grep -q "^code-review-graph " \\
+    || uv tool install code-review-graph || exit 0
+  RUNNING=$(ps -axo command 2>/dev/null) || exit 0
+  [ -n "$RUNNING" ] || exit 0
+  for BIN in "$ARCH"/*/bin/code-review-graph; do
+    ENV_DIR=\${BIN%/bin/code-review-graph}
+    [ -f "$ENV_DIR/pyvenv.cfg" ] || continue
+    case "$RUNNING" in *"$ENV_DIR/"*) continue ;; esac
+    rm -rf "$ENV_DIR"
+  done
+) >/dev/null 2>&1 &
+`;
+
+/**
  * The script a self-updating skill runs (step 3b). Unlike the installer it is
- * non-interactive and touches nothing but SKILL.md: no MCP registration, no
- * prompts. The new text is staged beside the old file, checked for its version
+ * non-interactive: no MCP registration, no prompts. Besides SKILL.md it only
+ * runs the detached {@link GRAPH_HOUSEKEEPING} repair, after the skill is in. The new text is staged beside the old file, checked for its version
  * marker, the old one is kept as `SKILL.md.bak`, and only then moved into place
  * — the move is the LAST command, so a download cut short leaves the installed
  * skill exactly as it was.
@@ -1146,5 +1207,5 @@ grep -q "reviewpilot-skill-version: ${marker}" "$DIR/SKILL.md.new"
 ${mirrorBlock ? mirrorBlock + "\n" : ""}if [ -f "$DIR/SKILL.md" ]; then cp "$DIR/SKILL.md" "$DIR/SKILL.md.bak"; fi
 mv "$DIR/SKILL.md.new" "$DIR/SKILL.md"
 echo "✓ ReviewPilot skill updated → $DIR/SKILL.md"
-`;
+${GRAPH_HOUSEKEEPING}`;
 }

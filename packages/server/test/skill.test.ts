@@ -10,6 +10,7 @@ import {
   SKILL_NAME,
   SKILL_PLATFORMS,
   buildInstallScript,
+  buildUpdateScript,
   buildOrchestratorSkill,
   buildReviewSkill,
   normalizeProjectKey,
@@ -211,10 +212,33 @@ test("buildInstallScript: best-effort registers the code-review-graph MCP (guard
   assert.match(sh, /command -v uvx/);    // and uvx is present
   assert.match(sh, /REVIEWPILOT_NO_GRAPH/); // opt-out
   assert.match(sh, /claude mcp list .* grep -q "code-review-graph"/); // idempotent
+  // Installed once, so the daily `uvx … serve` launch reuses ONE environment
+  // instead of caching a fresh ~440 MB one whenever a dependency releases.
+  assert.match(sh, /uv tool install code-review-graph/);
+  assert.match(sh, /uv tool list .* grep -q "\^code-review-graph "/); // idempotent
+  assert.match(sh, /register_graph_mcp\(\) \{\n  pin_graph_tool\n/); // before every registration
   // Interactive uv install offer: prompt read from /dev/tty (works under curl|sh),
   // installs via the official script, skippable.
   assert.match(sh, /read ans < \/dev\/tty/);
   assert.match(sh, /astral\.sh\/uv\/install\.sh/);
+});
+
+test("buildUpdateScript: silently pins the graph tool and frees its stale cached envs", () => {
+  for (const p of SKILL_PLATFORMS) {
+    const sh = buildUpdateScript(buildOrchestratorSkill("https://x.example.com", "", p), SKILL_NAME, p);
+    // Strictly AFTER the skill is in place, detached and mute: it can neither
+    // fail nor delay the update itself.
+    const repair = sh.slice(sh.indexOf('mv "$DIR/SKILL.md.new" "$DIR/SKILL.md"'));
+    assert.match(repair, /^\) >\/dev\/null 2>&1 &$/m);
+    // Only on machines that actually ran it through bare uvx.
+    assert.match(repair, /\[ -e "\$1" \] \|\| exit 0/);
+    assert.match(repair, /uv tool install code-review-graph \|\| exit 0/);
+    // Never an environment a running server was started from, never a blanket
+    // cache wipe — only this tool's own venvs.
+    assert.match(repair, /case "\$RUNNING" in \*"\$ENV_DIR\/"\*\) continue ;; esac/);
+    assert.match(repair, /\[ -f "\$ENV_DIR\/pyvenv\.cfg" \] \|\| continue/);
+    assert.doesNotMatch(sh, /uv cache (prune|clean)/);
+  }
 });
 
 test("buildInstallScript: writes the skill into ~/.claude/skills via a heredoc", () => {
